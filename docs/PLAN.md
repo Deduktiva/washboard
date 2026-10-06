@@ -11,6 +11,11 @@ Decisions taken so far:
 | Schema validation | libxml2 XSD validation via FFI against the system libxml2 |
 | WSDL/XSD imports | User supplies all referenced files; they are copied into the project. Unresolved imports are errors. Never fetched. |
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
+| Minimum OS | macOS 27 |
+| Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
+| SOAP | 1.1 only, `document/literal` only. No `rpc/*`, no SOAP 1.2. |
+| Proxies | None. Connections go directly to the configured server. |
+| Expected input size | WSDLs > 500 KB, multiple XSDs imported several levels deep (see §5.1) |
 
 GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII versions in §8.
 
@@ -20,7 +25,8 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 
 ### In scope for v1
 - Projects = folders on disk, one WSDL (plus its supporting XSDs) each.
-- WSDL 1.1, SOAP 1.1 and SOAP 1.2 bindings, `document/literal` (wrapped and bare).
+- WSDL 1.1, SOAP 1.1 bindings, `document/literal` (wrapped and bare). SOAP 1.2 and `rpc`
+  bindings in a WSDL are listed greyed out as unsupported, not hidden.
 - Request CRUD (new / rename / duplicate / delete), auto-naming, stored as `.xml`.
 - Servers per project: name, endpoint URL, "ignore TLS validation errors", auth = none | basic (preemptive).
 - XML editor: syntax highlighting, line numbers, live well-formedness errors,
@@ -30,11 +36,11 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 - Autosave + global "Save All" (⌘S).
 - Multiple projects open at once, reopened on next launch.
 
-### Assumed out of scope for v1 (tell me if any of these is needed)
-- WSDL 2.0, `rpc/encoded`. `rpc/literal` gets templates but only per-part validation (later milestone).
+### Out of scope for v1
+- WSDL 2.0, SOAP 1.2, `rpc/encoded`, `rpc/literal`.
 - WS-Security, WS-Addressing helpers, MTOM/attachments, NTLM/Kerberos, client certificates.
 - Custom per-server HTTP headers.
-- HTTP proxies (see §6 — every proxy is "another host").
+- HTTP proxies (decided: not needed).
 - Following HTTP redirects (disabled: they could leave the configured host).
 
 ---
@@ -169,10 +175,15 @@ from day one so we can enable the App Sandbox later without a migration.
    additional XSD files or a folder.
 2. **Import check** runs immediately (validation thread): parse WSDL, walk every
    `wsdl:import`, `xs:import`, `xs:include`, `xs:redefine`. Each reference is shown as
-   resolved (to which supplied file) or unresolved. Remote `http(s)://` locations are matched by
-   file name against supplied files — never fetched.
+   resolved (to which supplied file) or unresolved. The walk is transitive (XSD → XSD → …),
+   cycle-safe, and resolves relative `schemaLocation`s against the *importing* file, so the
+   supplied folder structure is preserved on copy. Remote `http(s)://` locations are never fetched;
+   they are matched against supplied files by the longest matching path suffix, and an ambiguous
+   match (two `common.xsd` in different folders) is reported, not guessed.
+   The check also reports the facts from §5.1 (namespaces split across files, XSD 1.1 constructs,
+   unsupported bindings) as warnings.
 3. *Create* is enabled when nothing is unresolved and the schema set compiles.
-4. Copy files, create DB, default server pre-filled from `soap:address`/`soap12:address`
+4. Copy files, create DB, default server pre-filled from `soap:address`
    (disabled until the user confirms the URL — no implicit connection).
 
 ### Replace WSDL (Project ▸ Replace WSDL…)
@@ -190,8 +201,9 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
   uses the most recently used server of the project.
 
 ### Editor
-- `NSTextView` on **TextKit 1** (explicit `NSLayoutManager`) — TextKit 2 still has issues with
-  `NSRulerView` line numbers and large documents.
+- `NSTextView`; TextKit 1 (explicit `NSLayoutManager`) vs TextKit 2 is decided in the M0 spike.
+  macOS 27 as the floor makes TextKit 2 more plausible, but line-number rulers and large documents
+  have historically been its weak spots, and we need both.
 - Line-number ruler (`NSRulerView` subclass) with error/warning markers in the gutter.
 - Highlighting: Rust tokenizer, applied as temporary attributes on the layout manager for the
   edited range expanded to the enclosing tag boundaries. Full pass only on load.
@@ -207,7 +219,7 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 
 ### Validation semantics
 1. Must be well-formed.
-2. Root must be `soap:Envelope` of SOAP 1.1 or 1.2 namespace, matching a binding the WSDL has.
+2. Root must be a SOAP 1.1 `soap:Envelope`. A SOAP 1.2 envelope gets a specific error.
 3. Envelope validated against the bundled SOAP envelope XSD (shipped in the app, never fetched).
 4. Each `Body` child is matched to a binding operation by QName; unknown → error.
 5. Body content is validated against the compiled project schema with libxml2
@@ -218,8 +230,8 @@ Errors: list in the issues bar under the editor (click → jump to line), plus g
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
 
 ### Send
-- Toolbar: server popup, Send (⌘↩). Sends to `server.url`; `SOAPAction` header (1.1) or
-  `action=` Content-Type parameter (1.2) taken from the binding operation.
+- Toolbar: server popup, Send (⌘↩). Sends to `server.url` with `Content-Type: text/xml;
+  charset=utf-8` and the `SOAPAction` header from the binding operation.
 - Basic auth: `Authorization` header built up front (preemptive, no 401 round-trip).
 - TLS: platform verification; if the server has "ignore TLS errors", certificate and hostname
   checks are disabled for that request only. The log records whether verification was skipped.
@@ -268,12 +280,36 @@ libxml2 cannot compile a WSDL directly. Steps:
    with `XML_PARSE_NONET` as a second line of defence.
 4. Use `xmlSchemaSetValidStructuredErrors` to collect `(line, col, message)`.
 
+5. **One namespace split across several files.** libxml2 imports each target namespace only once:
+   a second `xs:import` of the same namespace with a different `schemaLocation` is silently
+   skipped, and the types in that file go missing. Mitigation: for every namespace that spans
+   several files, generate a wrapper schema that `xs:include`s all of them, and point every
+   import of that namespace at the wrapper (via the entity loader). Test this first.
+
 Known libxml2 limits: XSD 1.0 only; some edge cases (complex `xs:redefine`, certain identity
 constraints) are buggy. If the system libxml2 turns out too old/buggy, fallback is vendoring
-and statically linking a pinned libxml2 — same FFI, different build script.
+and statically linking a pinned libxml2 — same FFI, different build script. Given the input
+sizes, plan on vendoring unless the M0 spike shows the system copy is fine; it also removes the
+dependency on what Apple ships in future releases.
+
+### 5.1 Large and deeply nested schemas
+Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
+- **Compile once, off the main thread.** Compiled `xmlSchemaPtr` is cached per project, built on
+  open in the background; the window is usable immediately, validation and completion show
+  "Loading schema…" until ready. Target: open-to-ready under 2 s for a 2 MB schema set.
+- **Rust schema model is indexed**, not walked: global elements/types by QName in hash maps, and
+  a lazily built per-type "allowed children" table for completion. Target: completion under 50 ms.
+- **Template generation is bounded**: recursion depth limit (default 6) and a node budget; when
+  cut, a `<!-- … truncated: type Foo -->` comment is emitted instead of silently stopping.
+- **Validation of a request** reuses the compiled schema; cost is proportional to the request,
+  not the schema. Live validation is enabled only if M0 measures it under ~100 ms.
+- **Fixture corpus**: since real WSDLs can't be shared, CI uses public WSDLs of similar shape plus
+  a generator that synthesises large schema sets (N files, depth D, namespaces split across files,
+  recursive types). `washboard-cli inspect` (§7, M1) prints the same structural report locally,
+  without contents, so real WSDLs can be checked against the assumptions here.
 
 ### Template generation
-For an operation's input: emit envelope for the binding's SOAP version, declared headers, and
+For an operation's input: emit a SOAP 1.1 envelope, declared headers, and
 the body element expanded recursively. Required elements emitted, optional ones emitted with
 `<!-- optional -->`, `xs:choice` emits the first branch plus a comment listing alternatives,
 recursion depth-limited, simple-type placeholders by type (`?` for strings, `0` for numerics,
@@ -287,8 +323,7 @@ first enum value, `2026-01-01` for dates).
 - No update checker, analytics, crash reporter, or remote fonts/images. Sparkle etc. excluded.
 - libxml2: custom entity loader + `XML_PARSE_NONET` (§5).
 - Redirects disabled; a 3xx is shown as the response.
-- Proxy: ureq's env proxy detection disabled. A system HTTP proxy is *not* used (a proxy is a
-  different host). If you need proxy support, it would be an explicit per-server setting.
+- Proxy: ureq's env proxy detection disabled; system proxy settings are ignored. No proxy support.
 - DNS lookups for the server host are, of course, still made.
 - CI check: `cargo deny` with a ban list (no `reqwest`, `hyper`, telemetry crates) and a test that
   greps the dependency tree for network-capable crates outside `core::http`.
@@ -302,17 +337,21 @@ first enum value, `2026-01-01` for dates).
 Each milestone ends in something runnable.
 
 **M0 — Spikes (de-risk before committing to structure)**
-- objc2: window + `NSSplitView` + `NSOutlineView` source list + `NSTextView` (TextKit 1) with ruler
+- objc2: window + `NSSplitView` + `NSOutlineView` source list + `NSTextView` (TextKit 1 and 2) with ruler
   and incremental highlighting on a 1 MB XML file. Goal: confirm objc2 ergonomics for
   subclassing (`NSRulerView`, delegates, data sources).
 - libxml2: compile inline schemas from 3–4 real-world WSDLs (with cross imports, external XSDs)
-  using the synthetic-root + custom-loader approach; capture line-numbered errors.
+  using the synthetic-root + custom-loader approach; capture line-numbered errors. Include a
+  synthetic 2 MB set with a namespace split across files and 4+ import levels. Measure compile
+  time and per-request validation time; compare system libxml2 vs a vendored current release.
 - ureq + native-tls: self-signed server, toggle verification; check what we can capture for the log.
 
 **M1 — Core library + CLI**
 Project create/open, DB + migrations, WSDL import & import-check, request CRUD + auto-naming,
 servers, Keychain secrets, template generation, validation, send, history. `washboard-cli`
 exercises all of it. Unit tests + fixture WSDL corpus + local HTTPS test server.
+`washboard-cli inspect <wsdl> [xsd-dir]` prints the structural report from §5.1 (counts, depths,
+flags; no names or contents), so it can be run on WSDLs that can't leave your machine.
 
 **M2 — App shell**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
@@ -415,12 +454,7 @@ Authorization values are masked in the log by default (click to reveal).
 
 ---
 
-## 9. Open questions (non-blocking; defaults in parentheses)
+## 9. Open questions
 
-1. Minimum macOS version? (macOS 13 Ventura)
-2. Distribution: Developer ID + notarization, or Mac App Store? (Developer ID; sandbox-ready)
-3. Is SOAP 1.2 actually needed, or 1.1 only? (both — cheap)
-4. Is `rpc/literal` needed in v1? (no, M5+)
-5. History retention per request? (20)
-6. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
-7. Proxy support needed in corporate environments? (no)
+1. History retention per request? (20)
+2. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
