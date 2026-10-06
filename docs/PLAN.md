@@ -13,9 +13,11 @@ Decisions taken so far:
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
 | Minimum OS | macOS 27 |
 | Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
-| SOAP | 1.1 only, `document/literal` only. No `rpc/*`, no SOAP 1.2. |
+| SOAP | 1.1 only, `document/literal`. No SOAP 1.2. `rpc` pending: one existing WSDL uses it (§9). |
 | Proxies | None. Connections go directly to the configured server. |
-| Expected input size | WSDLs > 500 KB, multiple XSDs imported several levels deep (see §5.1) |
+| Expected input size | WSDLs > 500 KB, < 200 operations, < 10 import levels (see §5.1) |
+| Required schema features | `xsi:type` in requests, abstract elements/types + substitution groups, `xs:any` (see §5.2) |
+| Required WSDL features | `wsdl:import`, `soap:header` (`use="literal"`), `soapAction`, files with a BOM (see §5.3) |
 
 GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII versions in §8.
 
@@ -25,8 +27,9 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 
 ### In scope for v1
 - Projects = folders on disk, one WSDL (plus its supporting XSDs) each.
-- WSDL 1.1, SOAP 1.1 bindings, `document/literal` (wrapped and bare). SOAP 1.2 and `rpc`
-  bindings in a WSDL are listed greyed out as unsupported, not hidden.
+- WSDL 1.1 (multi-file via `wsdl:import`), SOAP 1.1 bindings, `document/literal` (wrapped and
+  bare), literal `soap:header`s. SOAP 1.2 bindings in a WSDL are listed greyed out as
+  unsupported, not hidden.
 - Request CRUD (new / rename / duplicate / delete), auto-naming, stored as `.xml`.
 - Servers per project: name, endpoint URL, "ignore TLS validation errors", auth = none | basic (preemptive).
 - XML editor: syntax highlighting, line numbers, live well-formedness errors,
@@ -265,8 +268,9 @@ Two representations, deliberately:
 - **libxml2** compiles the schemas for **validation** (authoritative).
 - **Our Rust XSD model** (`schema/`) drives **completion and templates**. It needs elements,
   complex/simple types, sequences/choices/all, min/maxOccurs, extensions/restrictions,
-  enumerations, groups, attribute groups, substitution groups (best effort). It can be
-  incomplete without causing wrong validation results — the worst case is a missing completion.
+  enumerations, groups, attribute groups, the type derivation graph, substitution groups and
+  wildcards (§5.2 — these are required, not best effort). It can still be incomplete in exotic
+  corners without causing wrong validation results — the worst case is a missing completion.
 
 libxml2 cannot compile a WSDL directly. Steps:
 1. Extract each `wsdl:types/xs:schema` into a standalone document. **Copy in-scope namespace
@@ -305,15 +309,65 @@ Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
   not the schema. Live validation is enabled only if M0 measures it under ~100 ms.
 - **Fixture corpus**: since real WSDLs can't be shared, CI uses public WSDLs of similar shape plus
   a generator that synthesises large schema sets (N files, depth D, namespaces split across files,
-  recursive types). `washboard-cli inspect` (§7, M1) prints the same structural report locally,
+  recursive types, deep derivation chains, substitution groups across namespaces, `xs:any`,
+  multi-file `wsdl:import`, BOM-prefixed files). `washboard-cli inspect` (§7, M1) prints the same structural report locally,
   without contents, so real WSDLs can be checked against the assumptions here.
+
+### 5.2 `xsi:type`, abstract declarations, `xs:any`
+Validation of all three is libxml2's job and it handles them (derivation checks, `block`/`final`,
+abstract-without-`xsi:type` errors, `processContents`). The work is in the Rust model, which
+needs a project-wide index built once per schema compile:
+- **Derivation graph**: for every complex/simple type, its base and all transitively derived
+  types (extension and restriction), across all files and namespaces.
+- **Substitution groups**: for every element, the transitive set of members, with abstract
+  heads excluded from suggestions.
+
+Behaviour:
+- **Element position whose declared type is abstract or has derived types**: completion offers
+  the element as usual; inside its start tag, `xsi:type="` completes with the concrete derived
+  types (abstract ones excluded, `block` respected). Once `xsi:type` is set, child/attribute
+  completion uses the **derived** type's content model, not the declared one.
+- **QName values**: `xsi:type` values are QNames. Completion inserts the prefix in scope for the
+  type's namespace; if there is none, it adds an `xmlns:nsN` declaration on the element. The
+  model resolves prefixes using the editor's in-scope namespace map at the cursor.
+- **Abstract element head** (`ref` to an abstract element): completion offers the substitution
+  group members instead of the head.
+- **`xs:any`**: completion offers global elements from the namespaces the wildcard allows
+  (`##other`, `##targetNamespace`, explicit lists); for `processContents="skip"` no suggestions,
+  only a hint. `xs:anyAttribute` likewise for attributes.
+- **Hover** shows the effective type ("declared `tns:Party`, actual `tns:Company` via xsi:type").
+- **Validation errors** from libxml2 for these cases are terse (e.g. "The type definition is
+  abstract"); we append the list of allowed concrete types/members from the index.
+
+### 5.3 WSDL-level details
+- **`wsdl:import`**: WSDL files are loaded transitively and merged into one definitions model
+  keyed by QName (messages, portTypes, bindings, services may live in different files). Some
+  real-world WSDLs `wsdl:import` an XSD; that is accepted and treated like `xs:import`. Each
+  file's own `wsdl:types` schemas are extracted as in §5 step 1, with that file's namespaces.
+- **`soap:header message="…" part="…" use="literal"`**: the header part may come from a
+  different message than the body. Headers are emitted in templates and validated (§4,
+  validation step 6). Parts used as headers are excluded from the body; `soap:body parts="…"`
+  is honoured.
+- **Style is per operation**: `soap:operation style` overrides `soap:binding style`; the check
+  is done per operation, so a mostly-document binding with one rpc operation still loads.
+- **`soapAction`**: sent quoted when set; when absent or empty, `SOAPAction: ""` is sent (SOAP 1.1
+  requires the header to be present).
+- **BOM / encodings**: all inputs are decoded through one function that honours a UTF-8/UTF-16
+  BOM and the XML declaration's `encoding`, then hands `&str` to `roxmltree`/`quick-xml`
+  (neither accepts a BOM-prefixed or UTF-16 input as-is). libxml2 gets the original bytes.
+  Copied WSDL/XSD files stay byte-identical. Line/column mapping is char-based, so the BOM does
+  not shift positions. Request files are written as UTF-8 without BOM; a BOM in a file the
+  user edited externally is preserved.
 
 ### Template generation
 For an operation's input: emit a SOAP 1.1 envelope, declared headers, and
 the body element expanded recursively. Required elements emitted, optional ones emitted with
 `<!-- optional -->`, `xs:choice` emits the first branch plus a comment listing alternatives,
 recursion depth-limited, simple-type placeholders by type (`?` for strings, `0` for numerics,
-first enum value, `2026-01-01` for dates).
+first enum value, `2026-01-01` for dates). Abstract element heads are replaced by the first
+concrete substitution member and abstract types get `xsi:type` with the first concrete derived
+type, each followed by a comment listing the alternatives. `xs:any` emits
+`<!-- any element from: … -->`.
 
 ---
 
@@ -456,5 +510,12 @@ Authorization values are masked in the log by default (click to reveal).
 
 ## 9. Open questions
 
-1. History retention per request? (20)
-2. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
+1. The one `style="rpc"` WSDL: is it `use="literal"` or `use="encoded"`, and does it need to work
+   in v1? Until decided, its operations load greyed out.
+   - `rpc/literal` is moderate work: generate a synthetic schema element per operation (wrapper
+     named after the operation in the `soap:body namespace`, one unqualified child per part,
+     typed by the part's type/element) and let libxml2 validate it like any other element.
+   - `rpc/encoded` is a different problem (SOAP encoding, `soapenc:Array`, `href`/multi-ref) and
+     not validatable with XSD alone; would stay out of scope.
+2. History retention per request? (20)
+3. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
