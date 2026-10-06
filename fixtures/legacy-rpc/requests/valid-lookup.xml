@@ -1,0 +1,12 @@
+<!-- expect: valid -->
+<!-- rpc/literal: wrapper named after the operation in the soap:body namespace,
+     parts as unqualified children in message order. -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:leg="urn:example:legacy">
+  <soapenv:Body>
+    <leg:Lookup>
+      <customerNo>42</customerNo>
+      <asOf>2026-01-01</asOf>
+    </leg:Lookup>
+  </soapenv:Body>
+</soapenv:Envelope>

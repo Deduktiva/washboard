@@ -1,0 +1,2 @@
+# Fixture files are byte-exact test inputs (BOMs, line endings). Never normalize them.
+fixtures/** -text

@@ -303,6 +303,10 @@ Reasons to vendor a pinned current release instead:
   `xmlSetExternalEntityLoader` (verify in M0), which removes the single-validation-thread constraint.
 - Same version in CI (Linux) and in the app, so test results carry over.
 
+For faster local builds, `WASHBOARD_LIBXML2=pkg-config` links a Homebrew/distro copy instead;
+release builds and CI always use the vendored one (a Homebrew dylib would not exist on users'
+Macs, and a static Homebrew copy makes releases depend on the build machine).
+
 Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static linking
 is fine). Because upstream maintenance has been thin at times, pick the release in M0 and record
 how we'll watch for advisories.
@@ -542,5 +546,5 @@ Authorization values are masked in the log by default (click to reveal).
 
 ## 9. Open questions
 
-1. History retention per request? (20)
-2. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
+None blocking. Decided: history retention 20 per request, HTTP log keeps 50 exchanges;
+both may become configurable in v2.

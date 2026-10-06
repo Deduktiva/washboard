@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture: entry WSDL. Starts with a UTF-8 BOM. Only contains the service; everything else
+     comes in via wsdl:import. -->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+                  xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/"
+                  xmlns:tns="urn:example:customer:service"
+                  targetNamespace="urn:example:customer:service"
+                  name="CustomerService">
+  <wsdl:import namespace="urn:example:customer:service" location="CustomerBinding.wsdl"/>
+  <wsdl:service name="CustomerService">
+    <wsdl:port name="CustomerPort" binding="tns:CustomerBinding">
+      <soap:address location="https://customer.example.invalid/ws/customer"/>
+    </wsdl:port>
+    <wsdl:port name="CustomerPort12" binding="tns:CustomerBinding12">
+      <soap12:address location="https://customer.example.invalid/ws/customer12"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

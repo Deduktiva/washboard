@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture: element allowed via xs:any ##other lax in cus:Extensions. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="urn:example:audit"
+           elementFormDefault="qualified">
+  <xs:element name="AuditInfo">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="user" type="xs:string"/>
+        <xs:element name="at" type="xs:dateTime"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

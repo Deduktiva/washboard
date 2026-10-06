@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture level 2 (WSDL inline schema is level 1). Imports level 3. -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:cus="urn:example:customer"
+           xmlns:com="urn:example:common"
+           targetNamespace="urn:example:customer"
+           elementFormDefault="qualified">
+  <xs:import namespace="urn:example:common" schemaLocation="common/party.xsd"/>
+  <xs:import namespace="urn:example:audit" schemaLocation="ext/audit.xsd"/>
+
+  <xs:simpleType name="CustomerId">
+    <xs:restriction base="xs:long">
+      <xs:minInclusive value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="Customer" type="cus:Customer"/>
+  <xs:complexType name="Customer">
+    <xs:sequence>
+      <xs:element name="id" type="cus:CustomerId"/>
+      <!-- Abstract type: instances need xsi:type="com:Person" or "com:Company". -->
+      <xs:element name="party" type="com:Party"/>
+      <!-- Abstract element head: use com:Email or com:Phone. -->
+      <xs:element ref="com:ContactMethod" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="extensions" type="cus:Extensions" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="Extensions">
+    <xs:sequence>
+      <!-- lax: known elements (audit:AuditInfo) are validated, unknown ones are accepted. -->
+      <xs:any namespace="##other" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:element name="Order" type="cus:Order"/>
+  <xs:complexType name="Order">
+    <xs:sequence>
+      <xs:element name="line" minOccurs="1" maxOccurs="unbounded">
+        <xs:complexType>
+          <xs:attribute name="sku" type="xs:string" use="required"/>
+          <xs:attribute name="qty" type="xs:positiveInteger" use="required"/>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="status" type="cus:OrderStatus" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:simpleType name="OrderStatus">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="NEW"/>
+      <xs:enumeration value="SHIPPED"/>
+      <xs:enumeration value="CANCELLED"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

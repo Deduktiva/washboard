@@ -1,0 +1,15 @@
+<!-- expect: valid -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:msg="urn:example:customer:messages">
+  <soapenv:Header>
+    <msg:RequestContext>
+      <msg:correlationId>c-0001</msg:correlationId>
+    </msg:RequestContext>
+  </soapenv:Header>
+  <soapenv:Body>
+    <msg:GetCustomer>
+      <msg:customerId>100231</msg:customerId>
+      <msg:includeOrders>true</msg:includeOrders>
+    </msg:GetCustomer>
+  </soapenv:Body>
+</soapenv:Envelope>

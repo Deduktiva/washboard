@@ -1,0 +1,7 @@
+<!-- expect: error line 5: operation -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:msg="urn:example:customer:messages">
+  <soapenv:Body>
+    <msg:DeleteCustomer/>
+  </soapenv:Body>
+</soapenv:Envelope>

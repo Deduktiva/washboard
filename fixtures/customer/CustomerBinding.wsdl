@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture: types, messages, portType and bindings, imported by CustomerService.wsdl.
+     Note: the prefixes `cus` and `msg` used inside the inline schema are declared only on
+     wsdl:definitions, not on xs:schema. Extracting the schema must carry them over. -->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+                  xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/"
+                  xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                  xmlns:tns="urn:example:customer:service"
+                  xmlns:msg="urn:example:customer:messages"
+                  xmlns:cus="urn:example:customer"
+                  targetNamespace="urn:example:customer:service">
+  <wsdl:types>
+    <xs:schema targetNamespace="urn:example:customer:messages" elementFormDefault="qualified">
+      <xs:import namespace="urn:example:customer" schemaLocation="xsd/customer.xsd"/>
+
+      <xs:element name="RequestContext">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="correlationId" type="xs:string"/>
+            <xs:element name="locale" type="xs:language" minOccurs="0"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="GetCustomer">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="customerId" type="cus:CustomerId"/>
+            <xs:element name="includeOrders" type="xs:boolean" minOccurs="0"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="GetCustomerResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element ref="cus:Customer"/>
+            <xs:element ref="cus:Order" minOccurs="0" maxOccurs="unbounded"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="CreateOrder">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element ref="cus:Customer"/>
+            <xs:element ref="cus:Order"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+      <xs:element name="CreateOrderResponse">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="orderId" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+
+      <xs:element name="CustomerFault">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="code" type="xs:int"/>
+            <xs:element name="text" type="xs:string"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>
+  </wsdl:types>
+
+  <wsdl:message name="RequestContextHeader">
+    <wsdl:part name="header" element="msg:RequestContext"/>
+  </wsdl:message>
+  <wsdl:message name="GetCustomerRequest">
+    <wsdl:part name="parameters" element="msg:GetCustomer"/>
+  </wsdl:message>
+  <wsdl:message name="GetCustomerResponse">
+    <wsdl:part name="parameters" element="msg:GetCustomerResponse"/>
+  </wsdl:message>
+  <wsdl:message name="CreateOrderRequest">
+    <wsdl:part name="parameters" element="msg:CreateOrder"/>
+  </wsdl:message>
+  <wsdl:message name="CreateOrderResponse">
+    <wsdl:part name="parameters" element="msg:CreateOrderResponse"/>
+  </wsdl:message>
+  <wsdl:message name="CustomerFault">
+    <wsdl:part name="fault" element="msg:CustomerFault"/>
+  </wsdl:message>
+
+  <wsdl:portType name="CustomerPortType">
+    <wsdl:operation name="GetCustomer">
+      <wsdl:input message="tns:GetCustomerRequest"/>
+      <wsdl:output message="tns:GetCustomerResponse"/>
+      <wsdl:fault name="CustomerFault" message="tns:CustomerFault"/>
+    </wsdl:operation>
+    <wsdl:operation name="CreateOrder">
+      <wsdl:input message="tns:CreateOrderRequest"/>
+      <wsdl:output message="tns:CreateOrderResponse"/>
+      <wsdl:fault name="CustomerFault" message="tns:CustomerFault"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <!-- SOAP 1.1, document/literal. GetCustomer has a soapAction and a literal header;
+       CreateOrder has no soapAction (must be sent as SOAPAction: ""). -->
+  <wsdl:binding name="CustomerBinding" type="tns:CustomerPortType">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="GetCustomer">
+      <soap:operation soapAction="urn:example:customer:service/GetCustomer"/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+        <soap:header message="tns:RequestContextHeader" part="header" use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+      <wsdl:fault name="CustomerFault">
+        <soap:fault name="CustomerFault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+    <wsdl:operation name="CreateOrder">
+      <soap:operation/>
+      <wsdl:input>
+        <soap:body use="literal"/>
+      </wsdl:input>
+      <wsdl:output>
+        <soap:body use="literal"/>
+      </wsdl:output>
+      <wsdl:fault name="CustomerFault">
+        <soap:fault name="CustomerFault" use="literal"/>
+      </wsdl:fault>
+    </wsdl:operation>
+  </wsdl:binding>
+
+  <!-- SOAP 1.2 binding: must be listed as unsupported, not hidden and not an error. -->
+  <wsdl:binding name="CustomerBinding12" type="tns:CustomerPortType">
+    <soap12:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="GetCustomer">
+      <soap12:operation soapAction="urn:example:customer:service/GetCustomer"/>
+      <wsdl:input><soap12:body use="literal"/></wsdl:input>
+      <wsdl:output><soap12:body use="literal"/></wsdl:output>
+    </wsdl:operation>
+  </wsdl:binding>
+</wsdl:definitions>
