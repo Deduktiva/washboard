@@ -8,12 +8,12 @@ Decisions taken so far:
 | Topic | Decision |
 |---|---|
 | UI binding | `objc2` + `objc2-app-kit` / `objc2-foundation`, UI built in code (no nibs) |
-| Schema validation | libxml2 XSD validation via FFI against the system libxml2 |
+| Schema validation | libxml2 XSD validation via FFI, **vendored and statically linked** (system copy is 2.9.13 from 2022, see §5) |
 | WSDL/XSD imports | User supplies all referenced files; they are copied into the project. Unresolved imports are errors. Never fetched. |
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
 | Minimum OS | macOS 27 |
 | Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
-| SOAP | 1.1 only, `document/literal`. No SOAP 1.2. `rpc` pending: one existing WSDL uses it (§9). |
+| SOAP | 1.1 only; `document/literal` and `rpc/literal`. No SOAP 1.2, no `rpc/encoded`. |
 | Proxies | None. Connections go directly to the configured server. |
 | Expected input size | WSDLs > 500 KB, < 200 operations, < 10 import levels (see §5.1) |
 | Required schema features | `xsi:type` in requests, abstract elements/types + substitution groups, `xs:any` (see §5.2) |
@@ -28,7 +28,7 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 ### In scope for v1
 - Projects = folders on disk, one WSDL (plus its supporting XSDs) each.
 - WSDL 1.1 (multi-file via `wsdl:import`), SOAP 1.1 bindings, `document/literal` (wrapped and
-  bare), literal `soap:header`s. SOAP 1.2 bindings in a WSDL are listed greyed out as
+  bare), `rpc/literal` (§5.4), literal `soap:header`s. SOAP 1.2 bindings in a WSDL are listed greyed out as
   unsupported, not hidden.
 - Request CRUD (new / rename / duplicate / delete), auto-naming, stored as `.xml`.
 - Servers per project: name, endpoint URL, "ignore TLS validation errors", auth = none | basic (preemptive).
@@ -40,7 +40,7 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 - Multiple projects open at once, reopened on next launch.
 
 ### Out of scope for v1
-- WSDL 2.0, SOAP 1.2, `rpc/encoded`, `rpc/literal`.
+- WSDL 2.0, SOAP 1.2, `rpc/encoded`.
 - WS-Security, WS-Addressing helpers, MTOM/attachments, NTLM/Kerberos, client certificates.
 - Custom per-server HTTP headers.
 - HTTP proxies (decided: not needed).
@@ -77,7 +77,7 @@ washboard/
 | AppKit | `objc2`, `objc2-foundation`, `objc2-app-kit`, `block2`, `dispatch2` | `define_class!` for delegates/controllers, `MainThreadMarker` everywhere |
 | SQLite | `rusqlite` (`bundled`) | bundled = known version, no surprises from system sqlite |
 | XML parsing (fast, Rust) | `quick-xml` for tokenizing/well-formedness, `roxmltree` for WSDL/XSD model | both give byte offsets → line/col |
-| XSD validation | own `libxml2-sys` linking `/usr/lib/libxml2.dylib` from the SDK | see §5 for the gotchas |
+| XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see §5 for the gotchas |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Verify in M0 that raw-ish header capture is adequate. |
 | Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
 | IDs / time | `uuid`, `time` | |
@@ -87,8 +87,9 @@ No `tokio`. Threads + channels; results are posted to the main queue via `dispat
 
 ### Threading model
 - **Main thread**: all AppKit, all project state mutation (`Rc<RefCell<ProjectState>>` per window).
-- **Validation thread** (one per app): owns all libxml2 schema work. libxml2's external-entity
-  loader is process-global, so serializing all schema compiles on one thread avoids races.
+- **Validation thread** (one per app): owns all libxml2 schema work. If the pinned release only
+  offers the process-global external-entity loader, serializing all schema compiles on one
+  thread avoids races; if it has per-context resource loaders, this can become a small pool.
   Compiled schemas are cached per project and invalidated on WSDL replacement.
 - **HTTP workers**: one short-lived thread per send. "Cancel" detaches and ignores the result
   (blocking ureq can't be interrupted mid-read; a per-server timeout bounds it).
@@ -286,15 +287,28 @@ libxml2 cannot compile a WSDL directly. Steps:
 
 5. **One namespace split across several files.** libxml2 imports each target namespace only once:
    a second `xs:import` of the same namespace with a different `schemaLocation` is silently
-   skipped, and the types in that file go missing. Mitigation: for every namespace that spans
-   several files, generate a wrapper schema that `xs:include`s all of them, and point every
-   import of that namespace at the wrapper (via the entity loader). Test this first.
+   skipped, and the types in that file go missing. Your WSDLs reportedly don't do this, so the
+   import check only *detects* it and warns. The fix (a generated wrapper schema per namespace
+   that `xs:include`s all its files, with every import of that namespace pointed at it) is
+   built only if a real WSDL needs it — or if `rpc/literal` needs it (§5.4).
 
-Known libxml2 limits: XSD 1.0 only; some edge cases (complex `xs:redefine`, certain identity
-constraints) are buggy. If the system libxml2 turns out too old/buggy, fallback is vendoring
-and statically linking a pinned libxml2 — same FFI, different build script. Given the input
-sizes, plan on vendoring unless the M0 spike shows the system copy is fine; it also removes the
-dependency on what Apple ships in future releases.
+### libxml2: vendored, not system
+The system library on current macOS is 2.9.13 (Feb 2022), built with HTTP and FTP support.
+Reasons to vendor a pinned current release instead:
+- Several years of XSD validator fixes and security fixes are missing from 2.9.13, and we cannot
+  control when or whether Apple updates it.
+- A build with HTTP/FTP compiled out makes "no network from the schema loader" a property of the
+  binary, not only of our entity loader and `XML_PARSE_NONET`.
+- Newer releases have per-context resource loaders instead of the process-global
+  `xmlSetExternalEntityLoader` (verify in M0), which removes the single-validation-thread constraint.
+- Same version in CI (Linux) and in the app, so test results carry over.
+
+Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static linking
+is fine). Because upstream maintenance has been thin at times, pick the release in M0 and record
+how we'll watch for advisories.
+
+Known libxml2 limits regardless of version: XSD 1.0 only; some edge cases (complex `xs:redefine`,
+certain identity constraints) remain weak.
 
 ### 5.1 Large and deeply nested schemas
 Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
@@ -359,6 +373,23 @@ Behaviour:
   not shift positions. Request files are written as UTF-8 without BOM; a BOM in a file the
   user edited externally is preserved.
 
+### 5.4 `rpc/literal`
+Handled by turning it into the document case: for every rpc operation we **generate a schema**
+and feed it to both libxml2 and the Rust model, so validation, completion and templates need no
+rpc-specific code paths.
+- Request wrapper: a global element named after the operation, in the `namespace` of the
+  operation's `soap:body`; response wrapper: `<operation>Response`.
+- Content: `xs:sequence` of one **unqualified** local element per message part, in message order
+  (or the order of `soap:body parts="…"`), named after the part and typed by the part's `type`.
+  WS-I requires `type=` parts for rpc; a part declared with `element=` is accepted as a `ref`.
+- Operation dispatch on the request works as for document style: by the wrapper's QName.
+- `soap:header` parts in rpc operations stay document-style (they reference elements).
+- **Gotcha:** if the `soap:body` namespace equals a `targetNamespace` already used by a real
+  schema, the generated schema is a second file for that namespace — the libxml2 import problem
+  from §5 step 5. Then the generated declarations go into a wrapper schema that `xs:include`s
+  the real one. Plan to need this, because services commonly reuse their tns for rpc wrappers.
+- `rpc/encoded` operations still load greyed out as unsupported.
+
 ### Template generation
 For an operation's input: emit a SOAP 1.1 envelope, declared headers, and
 the body element expanded recursively. Required elements emitted, optional ones emitted with
@@ -397,12 +428,13 @@ Each milestone ends in something runnable.
 - libxml2: compile inline schemas from 3–4 real-world WSDLs (with cross imports, external XSDs)
   using the synthetic-root + custom-loader approach; capture line-numbered errors. Include a
   synthetic 2 MB set with a namespace split across files and 4+ import levels. Measure compile
-  time and per-request validation time; compare system libxml2 vs a vendored current release.
+  time and per-request validation time. Build the vendored libxml2 via `build.rs` on macOS and
+  Linux; check whether per-context resource loaders are usable for schema compiles.
 - ureq + native-tls: self-signed server, toggle verification; check what we can capture for the log.
 
 **M1 — Core library + CLI**
 Project create/open, DB + migrations, WSDL import & import-check, request CRUD + auto-naming,
-servers, Keychain secrets, template generation, validation, send, history. `washboard-cli`
+servers, Keychain secrets, template generation, validation (incl. generated rpc/literal schemas), send, history. `washboard-cli`
 exercises all of it. Unit tests + fixture WSDL corpus + local HTTPS test server.
 `washboard-cli inspect <wsdl> [xsd-dir]` prints the structural report from §5.1 (counts, depths,
 flags; no names or contents), so it can be run on WSDLs that can't leave your machine.
@@ -510,12 +542,5 @@ Authorization values are masked in the log by default (click to reveal).
 
 ## 9. Open questions
 
-1. The one `style="rpc"` WSDL: is it `use="literal"` or `use="encoded"`, and does it need to work
-   in v1? Until decided, its operations load greyed out.
-   - `rpc/literal` is moderate work: generate a synthetic schema element per operation (wrapper
-     named after the operation in the `soap:body namespace`, one unqualified child per part,
-     typed by the part's type/element) and let libxml2 validate it like any other element.
-   - `rpc/encoded` is a different problem (SOAP encoding, `soapenc:Array`, `href`/multi-ref) and
-     not validatable with XSD alone; would stay out of scope.
-2. History retention per request? (20)
-3. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
+1. History retention per request? (20)
+2. HTTP log: strictly last exchange, or the in-memory list of 50? (list)
