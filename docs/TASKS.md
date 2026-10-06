@@ -119,7 +119,7 @@ Owns: `crates/washboard-core/src/http/**` except `exchange.rs` (contract).
   off → success), basic auth header present without a 401, redirect not followed.
   Add a `cargo deny` config banning other HTTP stacks.
 
-### WP-APP-SHELL — AppKit skeleton (macOS; cloud agents can only type-check)
+### WP-APP-SHELL — AppKit skeleton (macOS; not started in the cloud — see `docs/handoff/APP-SHELL.md`)
 Owns: `crates/washboard-app/**`.
 - App delegate via `define_class!`, main menu (File/Edit/View/Project/Window/Help with the
   shortcuts from the plan), welcome window, project window with toolbar, split view, sidebar
