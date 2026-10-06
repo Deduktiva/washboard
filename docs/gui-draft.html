@@ -1,0 +1,550 @@
+<meta charset="utf-8">
+<title>Washboard GUI Draft</title>
+<style>
+/* Layout: a neutral desk surface holding one macOS window mock at a time, chosen by a segmented control; numbered notes beside it map to callouts in the window. */
+:root {
+  --desk: #e7e9ee;
+  --fg: #1d1f24;
+  --muted: #6b7079;
+  --win: #ffffff;
+  --chrome: #ececef;
+  --sidebar: #f2f2f5;
+  --line: #d6d7dc;
+  --sel: #0a63d8;
+  --sel-soft: #d6e5fb;
+  --accent: #0a63d8;
+  --err: #d23a2f;
+  --warn: #b7791f;
+  --ok: #2b8a3e;
+  --code-bg: #ffffff;
+  --tok-tag: #9b2393;
+  --tok-attr: #836c28;
+  --tok-str: #c41a16;
+  --tok-ns: #3900a0;
+  --tok-com: #6b7a88;
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --desk: #15171b; --fg: #e6e7ea; --muted: #9a9ea8; --win: #1f2024; --chrome: #2a2b30;
+  --sidebar: #26272c; --line: #3a3b41; --sel: #2f7cf6; --sel-soft: #24395c; --accent: #4a8ff8;
+  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --code-bg: #1b1c20;
+  --tok-tag: #fc5fa3; --tok-attr: #d0a8ff; --tok-str: #fc6a5d; --tok-ns: #a3b1ff; --tok-com: #7f8c98;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --desk: #15171b; --fg: #e6e7ea; --muted: #9a9ea8; --win: #1f2024; --chrome: #2a2b30;
+  --sidebar: #26272c; --line: #3a3b41; --sel: #2f7cf6; --sel-soft: #24395c; --accent: #4a8ff8;
+  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --code-bg: #1b1c20;
+  --tok-tag: #fc5fa3; --tok-attr: #d0a8ff; --tok-str: #fc6a5d; --tok-ns: #a3b1ff; --tok-com: #7f8c98;
+  color-scheme: dark }
+
+html, body { background: var(--desk); color: var(--fg); font: 13px/1.45 var(--ui); }
+body { padding: 28px 20px 48px; }
+.page { max-width: 1320px; margin: 0 auto; display: grid; gap: 20px; }
+header h1 { font-size: 22px; margin: 0 0 4px; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 70ch; }
+
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--chrome); border: 1px solid var(--line); border-radius: 7px; padding: 2px; gap: 2px; }
+.seg button { font: inherit; color: var(--fg); background: transparent; border: 0; border-radius: 5px; padding: 4px 12px; cursor: pointer; }
+.seg button[aria-selected="true"] { background: var(--win); box-shadow: 0 1px 2px rgba(0,0,0,.15); font-weight: 600; }
+.seg button:focus-visible, .btn:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
+@media (max-width: 1000px) { .stage { grid-template-columns: minmax(0,1fr); } }
+.scroller { overflow-x: auto; padding-bottom: 6px; }
+.notes { display: grid; gap: 10px; font-size: 12.5px; }
+.notes h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0; }
+.notes ol { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; counter-reset: n; }
+.notes li { display: grid; grid-template-columns: 20px 1fr; gap: 8px; }
+.notes li::before { counter-increment: n; content: counter(n); }
+.notes li::before, .pin { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700; display: inline-grid; place-items: center; }
+
+/* window chrome */
+.win { background: var(--win); border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 18px 50px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08); overflow: hidden; position: relative; }
+.win.main { width: 1000px; height: 640px; display: grid; grid-template-rows: 46px 1fr; }
+.titlebar { display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--chrome); border-bottom: 1px solid var(--line); }
+.lights { display: flex; gap: 8px; margin-right: 6px; }
+.lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+.wtitle { font-weight: 600; }
+.wsub { color: var(--muted); font-size: 11.5px; }
+.spacer { flex: 1; }
+.btn { font: inherit; font-size: 12px; color: var(--fg); background: var(--win); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; white-space: nowrap; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.icon { padding: 3px 7px; }
+.popup::after { content: "⌃"; transform: rotate(180deg); display: inline-block; font-size: 10px; color: var(--muted); }
+.lbl { color: var(--muted); font-size: 12px; }
+
+.body { display: grid; grid-template-columns: 230px 1fr; min-height: 0; }
+.side { background: var(--sidebar); border-right: 1px solid var(--line); display: grid; grid-template-rows: 1fr auto; min-height: 0; }
+.side .scroll { overflow: auto; padding: 8px 8px; }
+.sect { font-size: 11px; font-weight: 600; color: var(--muted); padding: 10px 8px 4px; display: flex; justify-content: space-between; }
+.row { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 5px; cursor: default; white-space: nowrap; }
+.row.req { cursor: pointer; }
+.row.sel { background: var(--sel); color: #fff; }
+.row .doc { width: 12px; height: 14px; border: 1.3px solid currentColor; border-radius: 2px; opacity: .6; flex: none; }
+.row .badge { margin-left: auto; font-size: 11px; }
+.row .dirty { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: .55; margin-left: auto; }
+.warnmark { color: var(--warn); }
+.row.sel .warnmark { color: #fff; }
+.indent1 { padding-left: 20px; } .indent2 { padding-left: 34px; }
+.disc { font-size: 9px; color: var(--muted); width: 10px; }
+.sidefoot { border-top: 1px solid var(--line); padding: 6px 8px; display: flex; gap: 4px; }
+
+.content { display: grid; grid-template-rows: 32px minmax(0, 1fr) auto 1fr; min-height: 0; min-width: 0; }
+.reqbar { display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.reqbar b { font-weight: 600; }
+.chip { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
+
+.editor { display: grid; grid-template-columns: 44px 1fr; font: 12px/18px var(--mono); background: var(--code-bg); overflow: auto; min-height: 0; }
+.gutter { color: var(--muted); text-align: right; padding: 6px 8px 6px 0; border-right: 1px solid var(--line); user-select: none; background: var(--sidebar); }
+.gutter div.e { color: var(--err); font-weight: 700; }
+.gutter div.e::before { content: "●"; font-size: 8px; margin-right: 4px; vertical-align: 1px; }
+.code { padding: 6px 10px; white-space: pre; min-width: 0; }
+.t { color: var(--tok-tag); } .a { color: var(--tok-attr); } .s { color: var(--tok-str); } .n { color: var(--tok-ns); } .c { color: var(--tok-com); font-style: italic; }
+.squig { text-decoration: underline wavy var(--err); text-underline-offset: 3px; }
+.complete { position: absolute; background: var(--win); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 8px 22px rgba(0,0,0,.2); font: 12px/1 var(--mono); padding: 4px; display: grid; min-width: 210px; }
+.complete div { padding: 5px 8px; border-radius: 4px; display: flex; justify-content: space-between; gap: 14px; }
+.complete div span { color: var(--muted); font-family: var(--ui); font-size: 11px; }
+.complete .on { background: var(--sel); color: #fff; } .complete .on span { color: #fff; opacity: .8; }
+
+.issues { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--sidebar); padding: 6px 12px; font-size: 12px; display: grid; gap: 3px; }
+.issues .head { display: flex; gap: 10px; align-items: center; }
+.issues .err { color: var(--err); font-weight: 600; }
+.issues a { color: var(--fg); text-decoration: none; cursor: pointer; }
+.issues a code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: 6px; }
+.issues.ok .head span { color: var(--ok); font-weight: 600; }
+
+.resp { display: grid; grid-template-rows: 30px 1fr; min-height: 0; }
+.resphead { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.status { font-weight: 650; color: var(--ok); font-variant-numeric: tabular-nums; }
+.tabs { display: flex; gap: 2px; margin-left: auto; }
+.tabs button { font: inherit; font-size: 12px; background: none; border: 0; color: var(--muted); padding: 3px 8px; border-radius: 5px; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--chrome); color: var(--fg); font-weight: 600; }
+.respbody { overflow: auto; font: 12px/18px var(--mono); padding: 6px 12px; white-space: pre; background: var(--code-bg); min-height: 0; }
+.hist { font: 12px/1.5 var(--ui); white-space: normal; padding: 0; }
+.hist table, .log table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hist td, .hist th, .log td, .log th { text-align: left; padding: 4px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.hist th, .log th { font-weight: 600; color: var(--muted); font-size: 11px; }
+.hist tr.on td, .log tr.on td { background: var(--sel-soft); }
+.c500 { color: var(--err); font-weight: 600; } .c200 { color: var(--ok); font-weight: 600; }
+
+[hidden] { display: none !important; }
+.pin { position: absolute; z-index: 5; box-shadow: 0 0 0 2px var(--win); }
+
+/* sheets */
+.sheetwrap { width: 1000px; height: 560px; background: color-mix(in srgb, var(--win) 60%, var(--desk)); border: 1px solid var(--line); border-radius: 11px; position: relative; display: grid; justify-items: center; align-items: start; overflow: hidden; }
+.sheetwrap .titlebar { position: absolute; inset: 0 0 auto 0; height: 46px; opacity: .7; }
+.sheet { margin-top: 46px; width: 560px; background: var(--win); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; box-shadow: 0 14px 34px rgba(0,0,0,.25); padding: 18px 20px; display: grid; gap: 12px; position: relative; }
+.sheet h3 { margin: 0; font-size: 13px; }
+.form { display: grid; grid-template-columns: 90px 1fr auto; gap: 8px 10px; align-items: center; }
+.form label { text-align: right; color: var(--muted); }
+.field { border: 1px solid var(--line); border-radius: 5px; padding: 3px 7px; background: var(--code-bg); min-height: 22px; }
+.field.dim { color: var(--muted); }
+.refs { border: 1px solid var(--line); border-radius: 6px; font: 12px/1.6 var(--mono); padding: 6px 10px; background: var(--code-bg); }
+.refs .ok { color: var(--ok); } .refs .bad { color: var(--err); }
+.actions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+.hint { color: var(--muted); font-size: 12px; }
+
+.settings { width: 720px; }
+.settings .split { display: grid; grid-template-columns: 180px 1fr; gap: 16px; }
+.list { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; display: grid; align-content: start; background: var(--code-bg); }
+.list .row { border-radius: 0; }
+.radio { display: inline-flex; gap: 14px; }
+.check { display: inline-flex; gap: 6px; align-items: center; }
+.box { width: 14px; height: 14px; border: 1px solid var(--line); border-radius: 3px; display: inline-grid; place-items: center; font-size: 10px; background: var(--code-bg); }
+.box.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); display: inline-block; vertical-align: -3px; margin-right: 4px; background: var(--code-bg); }
+.dot.on { border: 4px solid var(--accent); }
+.seg2 { display: flex; justify-content: center; }
+
+.win.log { width: 1000px; height: 560px; display: grid; grid-template-rows: 38px 150px 1fr; }
+.log .panes { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; border-top: 1px solid var(--line); }
+.log .pane { overflow: auto; font: 12px/18px var(--mono); padding: 8px 12px; white-space: pre; background: var(--code-bg); min-width: 0; }
+.log .pane + .pane { border-left: 1px solid var(--line); }
+.log .ptitle { font: 600 11px var(--ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); display: block; margin-bottom: 4px; }
+.log .listwrap { overflow: auto; }
+.mask { background: var(--chrome); border-radius: 3px; padding: 0 4px; color: var(--muted); }
+.tlswarn { color: var(--warn); font-weight: 600; }
+
+.win.welcome { width: 640px; height: 400px; display: grid; grid-template-columns: 250px 1fr; }
+.welcome .left { display: grid; place-content: center; justify-items: center; gap: 10px; padding: 20px; text-align: center; }
+.appicon { width: 84px; height: 84px; border-radius: 20px; background: linear-gradient(160deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #000)); display: grid; place-items: center; color: #fff; font: 700 30px var(--mono); }
+.welcome .right { background: var(--sidebar); border-left: 1px solid var(--line); padding: 10px; display: grid; align-content: start; gap: 2px; }
+.welcome .right .row { display: grid; gap: 0; padding: 6px 10px; }
+.welcome .right .row small { color: var(--muted); font-size: 11px; }
+.welcome .right .row.sel small { color: #fff; opacity: .8; }
+
+@media (prefers-reduced-motion: no-preference) { .seg button, .tabs button { transition: background .12s; } }
+</style>
+
+<div class="page">
+  <header>
+    <h1>Washboard — GUI draft</h1>
+    <p>Static mock of the native AppKit windows described in <code>docs/PLAN.md</code>. Pick a screen below. In the project window, requests in the sidebar, the Validate button and the response tabs respond to clicks. Data shown is example data.</p>
+  </header>
+
+  <div class="seg" role="tablist" aria-label="Screens">
+    <button role="tab" aria-selected="true" data-screen="main">Project window</button>
+    <button role="tab" aria-selected="false" data-screen="newproj">New project</button>
+    <button role="tab" aria-selected="false" data-screen="settings">Servers</button>
+    <button role="tab" aria-selected="false" data-screen="log">HTTP log</button>
+    <button role="tab" aria-selected="false" data-screen="welcome">Welcome</button>
+  </div>
+
+  <!-- PROJECT WINDOW -->
+  <section class="stage" data-panel="main">
+    <div class="scroller">
+      <div class="win main">
+        <div class="titlebar">
+          <div class="lights"><i></i><i></i><i></i></div>
+          <button class="btn icon" title="Toggle sidebar">▥</button>
+          <div><div class="wtitle">Customer API</div><div class="wsub">~/Projects/soap/Customer API — Edited</div></div>
+          <div class="spacer"></div>
+          <span class="lbl">Server</span>
+          <button class="btn popup" id="serverBtn">Staging</button>
+          <button class="btn" id="validateBtn">✓ Validate</button>
+          <button class="btn primary" id="sendBtn">▶ Send</button>
+          <span style="width:8px"></span>
+          <button class="btn icon" title="Save All (⌘S)">⤓</button>
+          <button class="btn icon" title="HTTP Log (⌥⌘L)">≣</button>
+        </div>
+        <div class="body">
+          <aside class="side">
+            <div class="scroll">
+              <div class="sect"><span>Requests</span><span>4</span></div>
+              <div class="row req sel" tabindex="0" data-req="0"><span class="doc"></span>GetCustomer 1</div>
+              <div class="row req" tabindex="0" data-req="1"><span class="doc"></span>GetCustomer 2<span class="dirty" title="Unsaved"></span></div>
+              <div class="row req" tabindex="0" data-req="2"><span class="doc"></span>CreateOrder 1<span class="badge warnmark" title="Fails validation">⚠</span></div>
+              <div class="row req" tabindex="0" data-req="3"><span class="doc"></span>ListOrders – March</div>
+              <div class="sect"><span>Operations</span></div>
+              <div class="row"><span class="disc">▼</span>CustomerService</div>
+              <div class="row indent1"><span class="disc">▼</span>CustomerPort <span class="chip" style="margin-left:4px">1.1</span></div>
+              <div class="row indent2">GetCustomer</div>
+              <div class="row indent2">CreateOrder</div>
+              <div class="row indent2">ListOrders</div>
+              <div class="row indent2">DeleteCustomer</div>
+              <div class="row indent1"><span class="disc">▶</span>CustomerPort12 <span class="chip" style="margin-left:4px">1.2</span></div>
+            </div>
+            <div class="sidefoot"><button class="btn icon" title="New request (⌘N)">+</button><button class="btn icon" title="Delete">−</button><button class="btn icon" title="Rename, Duplicate…">⋯</button></div>
+          </aside>
+          <div class="content">
+            <div class="reqbar"><b id="reqName">GetCustomer 1</b><span class="chip" id="reqOp">SOAP 1.1 · GetCustomer</span><span class="spacer"></span><span class="lbl" id="xmlState" style="color:var(--ok)">Well-formed</span></div>
+            <div class="editor" id="editor"></div>
+            <div class="issues" id="issues" hidden></div>
+            <div class="resp">
+              <div class="resphead">
+                <span class="status" id="respStatus">200 OK</span>
+                <span class="lbl" id="respMeta">143 ms · 1.2 KB · Staging · 14:03:12</span>
+                <div class="tabs" role="tablist">
+                  <button aria-selected="true" data-rt="body">Response</button>
+                  <button aria-selected="false" data-rt="headers">Headers</button>
+                  <button aria-selected="false" data-rt="history">History (7)</button>
+                </div>
+              </div>
+              <div class="respbody" id="respBody"></div>
+            </div>
+          </div>
+        </div>
+        <span class="pin" style="left:84px;top:62px">1</span>
+        <span class="pin" style="left:683px;top:37px">2</span>
+        <span class="pin" style="left:815px;top:37px">3</span>
+        <span class="pin" style="left:931px;top:37px">4</span>
+        <span class="pin" style="left:972px;top:90px">5</span>
+        <span class="pin" style="left:206px;top:220px">6</span>
+        <span class="pin" style="left:972px;top:430px">7</span>
+      </div>
+    </div>
+    <aside class="notes">
+      <h2>Notes</h2>
+      <ol>
+        <li><span>Requests list (<code>NSOutlineView</code>, source-list style). Dot = unsaved buffer, ⚠ = last validation failed. Return renames inline; ⌘D duplicates; ⌘⌫ deletes.</span></li>
+        <li><span>Server popup. Defaults to this request's last-used server; changing it is stored immediately.</span></li>
+        <li><span>Validate (⌘B) runs XSD validation; Send (⌘↩) validates first and refuses to send on errors.</span></li>
+        <li><span>Save All (⌘S) flushes every open project. Autosave runs 1 s after typing stops anyway.</span></li>
+        <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
+        <li><span>Operations from the WSDL, grouped service › port. Double-click creates a request named <code>&lt;Operation&gt; &lt;n&gt;</code> from the generated template.</span></li>
+        <li><span>Response pane, split below the editor. History lists past exchanges for this request, kept on disk (last 20).</span></li>
+      </ol>
+    </aside>
+  </section>
+
+  <!-- NEW PROJECT -->
+  <section class="stage" data-panel="newproj" hidden>
+    <div class="scroller">
+      <div class="sheetwrap">
+        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle">Washboard</div></div>
+        <div class="sheet">
+          <h3>New Project</h3>
+          <div class="form">
+            <label>Name</label><div class="field">Customer API</div><span></span>
+            <label>Location</label><div class="field dim">~/Projects/soap</div><button class="btn">Choose…</button>
+            <label>WSDL</label><div class="field">CustomerService.wsdl</div><button class="btn">Choose…</button>
+            <label>XSD files</label><div class="field">common/types.xsd, faults.xsd</div><button class="btn">Add…</button>
+          </div>
+          <div class="hint">References found in the WSDL. Nothing is downloaded: supply every referenced file.</div>
+          <div class="refs">
+<div><span class="ok">✓</span> xs:import  urn:example:common  → common/types.xsd</div><div><span class="ok">✓</span> xs:import  urn:example:faults  → faults.xsd</div><div><span class="ok">✓</span> xs:import  inline schema #2    → (inline)</div><div><span class="bad">✗</span> xs:include addresses.xsd       — not supplied</div></div>
+          <div class="hint">Files are copied to <code>Customer API/wsdl/</code>. Default server will be pre-filled from <code>soap:address</code> but stays disabled until you confirm it.</div>
+          <div class="actions"><button class="btn">Cancel</button><button class="btn primary" disabled title="Resolve all references first">Create</button></div>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h2>Notes</h2>
+      <ol>
+        <li><span>Sheet on the welcome window or File ▸ New Project… (⇧⌘N). The project folder is <em>Location / Name</em>.</span></li>
+        <li><span>The reference check runs as soon as the WSDL is picked and again when XSDs are added. Remote <code>schemaLocation</code> URLs are matched by file name only.</span></li>
+        <li><span>Create stays disabled while any reference is unresolved or the schema set fails to compile.</span></li>
+        <li><span>Project ▸ Replace WSDL… reuses this sheet and ends with a report of added/removed operations and requests that no longer validate.</span></li>
+      </ol>
+    </aside>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="stage" data-panel="settings" hidden>
+    <div class="scroller">
+      <div class="sheetwrap">
+        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle">Customer API</div></div>
+        <div class="sheet settings">
+          <div class="seg2"><div class="seg"><button aria-selected="false">General</button><button aria-selected="true">Servers</button></div></div>
+          <div class="split">
+            <div>
+              <div class="list">
+                <div class="row">Production</div>
+                <div class="row sel">Staging</div>
+                <div class="row">Local mock</div>
+              </div>
+              <div style="display:flex;gap:4px;margin-top:6px"><button class="btn icon">+</button><button class="btn icon">−</button></div>
+            </div>
+            <div class="form" style="grid-template-columns: 80px 1fr">
+              <label>Name</label><div class="field">Staging</div>
+              <label>URL</label><div class="field">https://stg.example.com/ws/customer</div>
+              <label>TLS</label><span class="check"><span class="box on">✓</span>Ignore certificate errors</span>
+              <label>Auth</label><span class="radio"><span><span class="dot"></span>None</span><span><span class="dot on"></span>Basic</span></span>
+              <label>User</label><div class="field">svc-tester</div>
+              <label>Password</label><div class="field">••••••••••</div>
+              <label>Timeout</label><div class="field" style="width:60px">60 s</div>
+              <span></span><span class="hint">Password is stored in the macOS Keychain. Basic credentials are sent with the first request, without waiting for a 401.</span>
+            </div>
+          </div>
+          <div class="actions"><button class="btn primary">Done</button></div>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h2>Notes</h2>
+      <ol>
+        <li><span>Project ▸ Settings… (⌘,  while a project window is key). General tab: name, WSDL info, Replace WSDL…, history limit.</span></li>
+        <li><span>Changes save immediately; there is no Apply button.</span></li>
+        <li><span>Ignoring certificate errors disables both chain and hostname checks for this server only. The HTTP log marks such exchanges.</span></li>
+        <li><span>Deleting a server clears it as "last server" on requests that used it.</span></li>
+      </ol>
+    </aside>
+  </section>
+
+  <!-- HTTP LOG -->
+  <section class="stage" data-panel="log" hidden>
+    <div class="scroller">
+      <div class="win log">
+        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle">HTTP Log</div><div class="spacer"></div><button class="btn">Clear</button></div>
+        <div class="listwrap">
+          <table>
+            <tr><th>Time</th><th>Project</th><th>Request</th><th>Host</th><th>Status</th><th>Duration</th><th>Size</th></tr>
+            <tr class="on"><td>14:03:12</td><td>Customer API</td><td>GetCustomer 1</td><td>stg.example.com</td><td class="c200">200</td><td>143 ms</td><td>1.2 KB</td></tr>
+            <tr><td>14:01:55</td><td>Customer API</td><td>CreateOrder 1</td><td>stg.example.com</td><td class="c500">500</td><td>98 ms</td><td>0.6 KB</td></tr>
+            <tr><td>13:58:40</td><td>Billing</td><td>GetInvoice 3</td><td>billing.internal</td><td class="c200">200</td><td>412 ms</td><td>18.4 KB</td></tr>
+          </table>
+        </div>
+        <div class="panes">
+          <div class="pane"><span class="ptitle">Request</span>POST /ws/customer HTTP/1.1
+Host: stg.example.com
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "urn:example:customer/GetCustomer"
+Authorization: <span class="mask">Basic ••••• (click to reveal)</span>
+Content-Length: 412
+
+<span class="t">&lt;soapenv:Envelope</span> <span class="a">xmlns:soapenv</span>=<span class="s">"http://schemas.xmlsoap.org/soap/envelope/"</span>
+                  <span class="a">xmlns:cus</span>=<span class="s">"urn:example:customer"</span><span class="t">&gt;</span>
+  <span class="t">&lt;soapenv:Body&gt;</span>
+    <span class="t">&lt;cus:GetCustomer&gt;</span>
+      <span class="t">&lt;cus:customerId&gt;</span>100231<span class="t">&lt;/cus:customerId&gt;</span>
+    <span class="t">&lt;/cus:GetCustomer&gt;</span>
+  <span class="t">&lt;/soapenv:Body&gt;</span>
+<span class="t">&lt;/soapenv:Envelope&gt;</span>
+
+<span class="tlswarn">TLS 1.3 · certificate verification SKIPPED (server setting)</span></div>
+          <div class="pane"><span class="ptitle">Response</span>HTTP/1.1 200 OK
+Content-Type: text/xml; charset=utf-8
+Content-Length: 1234
+Date: Tue, 06 Oct 2026 14:03:12 GMT
+
+<span class="t">&lt;soap:Envelope</span> <span class="a">xmlns:soap</span>=<span class="s">"http://schemas.xmlsoap.org/soap/envelope/"</span><span class="t">&gt;</span>
+  <span class="t">&lt;soap:Body&gt;</span>
+    <span class="t">&lt;GetCustomerResponse</span> <span class="a">xmlns</span>=<span class="s">"urn:example:customer"</span><span class="t">&gt;</span>
+      <span class="t">&lt;customer&gt;</span>
+        <span class="t">&lt;id&gt;</span>100231<span class="t">&lt;/id&gt;</span>
+        <span class="t">&lt;name&gt;</span>Huber Logistik GmbH<span class="t">&lt;/name&gt;</span>
+        <span class="t">&lt;country&gt;</span>AT<span class="t">&lt;/country&gt;</span>
+      <span class="t">&lt;/customer&gt;</span>
+    <span class="t">&lt;/GetCustomerResponse&gt;</span>
+  <span class="t">&lt;/soap:Body&gt;</span>
+<span class="t">&lt;/soap:Envelope&gt;</span></div>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h2>Notes</h2>
+      <ol>
+        <li><span>Window ▸ HTTP Log (⌥⌘L). One panel for the whole app, across projects.</span></li>
+        <li><span>The newest exchange is selected automatically. The list holds the last 50 in memory; nothing is written to disk.</span></li>
+        <li><span>Authorization headers are masked by default.</span></li>
+        <li><span>TLS line shows protocol and whether verification was skipped.</span></li>
+      </ol>
+    </aside>
+  </section>
+
+  <!-- WELCOME -->
+  <section class="stage" data-panel="welcome" hidden>
+    <div class="scroller">
+      <div class="win welcome">
+        <div class="left">
+          <div class="appicon">&lt;/&gt;</div>
+          <div style="font-size:20px;font-weight:650">Washboard</div>
+          <div class="lbl">Version 0.1</div>
+          <div style="display:grid;gap:6px;margin-top:10px;width:190px">
+            <button class="btn">New Project…</button>
+            <button class="btn">Open Project…</button>
+          </div>
+        </div>
+        <div class="right">
+          <div class="row sel"><span>Customer API</span><small>~/Projects/soap/Customer API</small></div>
+          <div class="row"><span>Billing</span><small>~/Projects/soap/Billing</small></div>
+          <div class="row"><span>Legacy ERP</span><small>~/Work/erp-soap</small></div>
+        </div>
+      </div>
+    </div>
+    <aside class="notes">
+      <h2>Notes</h2>
+      <ol>
+        <li><span>Shown only when no project window is open (first launch, or after closing all).</span></li>
+        <li><span>On normal launch, the projects open at quit are reopened directly and this window is skipped.</span></li>
+        <li><span>Open Project… accepts any folder containing <code>washboard.sqlite</code>.</span></li>
+      </ol>
+    </aside>
+  </section>
+</div>
+
+<script>
+(function () {
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // tiny XML highlighter for the mock only
+  function hl(src) {
+    return esc(src)
+      .replace(/([\w:.-]+)="([^"]*)"/g, '<span class="a">$1</span>=<span class="s">"$2"</span>')
+      .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="c">$1</span>')
+      .replace(/(&lt;\/?)([\w:.-]+)/g, (m, a, b) => `<span class="t">${a}${b}</span>`)
+      .replace(/(?<!--)(\/?&gt;)/g, '<span class="t">$1</span>');
+  }
+  const ENV = 'xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"\n                  xmlns:cus="urn:example:customer"';
+  const reqs = [
+    { name: "GetCustomer 1", op: "SOAP 1.1 · GetCustomer", wf: true,
+      xml: `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:GetCustomer>\n      <cus:customerId>?</cus:customerId>\n      <!-- optional -->\n      <cus:includeOrders>false</cus:includeOrders>\n    </cus:GetCustomer>\n  </soapenv:Body>\n</soapenv:Envelope>`,
+      errors: [{ line: 6, msg: "Element '{urn:example:customer}customerId': '?' is not a valid value of the atomic type 'xs:long'." }] },
+    { name: "GetCustomer 2", op: "SOAP 1.1 · GetCustomer", wf: true, complete: true,
+      xml: `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:GetCustomer>\n      <cus:customerId>100231</cus:customerId>\n      <cus:\n    </cus:GetCustomer>\n  </soapenv:Body>\n</soapenv:Envelope>`,
+      errors: [] },
+    { name: "CreateOrder 1", op: "SOAP 1.1 · CreateOrder", wf: false, wfLine: 9,
+      xml: `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:CreateOrder>\n      <cus:customerId>100231</cus:customerId>\n      <cus:lines>\n        <cus:line sku="A-1009" qty="3"/>\n        <cus:line sku="B-2200" qty="1">\n      </cus:lines>\n    </cus:CreateOrder>\n  </soapenv:Body>\n</soapenv:Envelope>`,
+      errors: [{ line: 9, msg: "Not well-formed: expected </cus:line>, found </cus:lines>." }] },
+    { name: "ListOrders – March", op: "SOAP 1.1 · ListOrders", wf: true,
+      xml: `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:ListOrders>\n      <cus:customerId>100231</cus:customerId>\n      <cus:from>2026-03-01</cus:from>\n      <cus:to>2026-03-31</cus:to>\n      <!-- choice: status | statusGroup -->\n      <cus:status>SHIPPED</cus:status>\n    </cus:ListOrders>\n  </soapenv:Body>\n</soapenv:Envelope>`,
+      errors: [] }
+  ];
+  const RESP = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n  <soap:Body>\n    <GetCustomerResponse xmlns="urn:example:customer">\n      <customer>\n        <id>100231</id>\n        <name>Huber Logistik GmbH</name>\n        <country>AT</country>\n        <vatId>ATU12345678</vatId>\n      </customer>\n    </GetCustomerResponse>\n  </soap:Body>\n</soap:Envelope>`;
+  const HEADERS = "HTTP/1.1 200 OK\nContent-Type: text/xml; charset=utf-8\nContent-Length: 1234\nDate: Tue, 06 Oct 2026 14:03:12 GMT\nServer: Apache-Coyote/1.1";
+  const HISTORY = `<table><tr><th>Sent</th><th>Server</th><th>Status</th><th>Duration</th><th></th></tr>
+    <tr class="on"><td>Today 14:03:12</td><td>Staging</td><td class="c200">200</td><td>143 ms</td><td></td></tr>
+    <tr><td>Today 13:51:07</td><td>Staging</td><td class="c500">500 · Fault</td><td>88 ms</td><td></td></tr>
+    <tr><td>Today 11:20:44</td><td>Local mock</td><td class="c200">200</td><td>4 ms</td><td></td></tr>
+    <tr><td>Yesterday 17:02:10</td><td>Production</td><td class="c200">200</td><td>201 ms</td><td></td></tr>
+    <tr><td colspan="5" class="lbl" style="white-space:normal">Select an entry to view it here. "Restore request" copies the request as sent back into the editor.</td></tr></table>`;
+
+  let cur = 0;
+  const $ = id => document.getElementById(id);
+  function render() {
+    const r = reqs[cur];
+    const lines = r.xml.split("\n");
+    const errLines = new Set(r.errors.map(e => e.line));
+    let codeHtml = lines.map((l, i) => {
+      let h = hl(l);
+      if (!r.wf && i + 1 === r.wfLine) h = `<span class="squig">${h}</span>`;
+      return h || " ";
+    }).join("\n");
+    const gutter = lines.map((_, i) => `<div class="${(!r.wf && i + 1 === r.wfLine) ? "e" : ""}">${i + 1}</div>`).join("");
+    $("editor").innerHTML = `<div class="gutter">${gutter}</div><div class="code" style="position:relative">${codeHtml}${r.complete ? completeBox() : ""}</div>`;
+    $("reqName").textContent = r.name;
+    $("reqOp").textContent = r.op;
+    const st = $("xmlState");
+    st.textContent = r.wf ? "Well-formed" : "XML error, line " + r.wfLine;
+    st.style.color = r.wf ? "var(--ok)" : "var(--err)";
+    const iss = $("issues");
+    if (!r.wf) showIssues(r.errors, "XML error"); else iss.hidden = true;
+    document.querySelectorAll(".row.req").forEach(el => el.classList.toggle("sel", +el.dataset.req === cur));
+  }
+  function completeBox() {
+    return `<div class="complete" style="left:72px;top:114px">
+      <div class="on">cus:includeOrders <span>xs:boolean · 0..1</span></div>
+      <div>cus:asOf <span>xs:date · 0..1</span></div>
+      <div>cus:fields <span>FieldList · 0..1</span></div></div>`;
+  }
+  function showIssues(errs, kind) {
+    const iss = $("issues");
+    iss.classList.toggle("ok", errs.length === 0);
+    if (errs.length === 0) {
+      iss.innerHTML = `<div class="head"><span>✓ Valid against CustomerService.wsdl</span></div>`;
+    } else {
+      iss.innerHTML = `<div class="head"><span class="err">⚠ ${errs.length} ${kind}${errs.length > 1 ? "s" : ""}</span><span class="lbl">Send is blocked until this is fixed.</span></div>` +
+        errs.map(e => `<a><code>line ${e.line}</code>${esc(e.msg)}</a>`).join("");
+    }
+    iss.hidden = false;
+  }
+  function validate() {
+    const r = reqs[cur];
+    if (!r.wf) return showIssues(r.errors, "XML error");
+    showIssues(r.errors, "validation error");
+    document.querySelectorAll("#editor .gutter div").forEach((d, i) => d.classList.toggle("e", r.errors.some(e => e.line === i + 1)));
+  }
+  function setResp(tab) {
+    document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.rt === tab));
+    const body = $("respBody");
+    body.classList.toggle("hist", tab === "history");
+    body.innerHTML = tab === "body" ? hl(RESP) : tab === "headers" ? esc(HEADERS) : HISTORY;
+  }
+
+  document.querySelectorAll(".row.req").forEach(el => {
+    const go = () => { cur = +el.dataset.req; render(); };
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+  $("validateBtn").addEventListener("click", validate);
+  $("sendBtn").addEventListener("click", () => {
+    const r = reqs[cur];
+    if (!r.wf || r.errors.length) { validate(); return; }
+    $("issues").hidden = true;
+    const now = new Date();
+    $("respMeta").textContent = `${120 + Math.floor(Math.random() * 60)} ms · 1.2 KB · Staging · ${now.toTimeString().slice(0, 8)}`;
+    setResp("body");
+  });
+  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setResp(b.dataset.rt)));
+
+  document.querySelectorAll('[data-screen]').forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll('[data-screen]').forEach(x => x.setAttribute("aria-selected", x === b));
+    document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.screen);
+  }));
+
+  render();
+  setResp("body");
+})();
+</script>
