@@ -1,0 +1,56 @@
+# cargo-deny configuration: `cargo deny check bans` (docs/PLAN.md §6).
+#
+# The only network stack is ureq + native-tls inside `washboard_core::http`. Everything below
+# keeps other HTTP clients/servers, async runtimes that would come with them, and telemetry or
+# crash-reporting crates out of the dependency tree, including transitively.
+
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # Other HTTP clients and servers.
+    { crate = "reqwest", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "hyper", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "hyper-util", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "h2", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "h3", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "quinn", reason = "only ureq in washboard_core::http may open connections" },
+    { crate = "isahc", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "curl", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "curl-sys", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "surf", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "attohttpc", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "minreq", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "http-req", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "awc", reason = "only ureq in washboard_core::http may do HTTP" },
+    { crate = "tiny_http", reason = "no HTTP servers in the app" },
+    { crate = "actix-web", reason = "no HTTP servers in the app" },
+    { crate = "axum", reason = "no HTTP servers in the app" },
+    { crate = "warp", reason = "no HTTP servers in the app" },
+    { crate = "rocket", reason = "no HTTP servers in the app" },
+    { crate = "websocket", reason = "no other network protocols" },
+    { crate = "tungstenite", reason = "no other network protocols" },
+    { crate = "socks", reason = "no proxy support (ureq socks-proxy feature)" },
+    # PLAN §2: no tokio, no async runtimes.
+    { crate = "tokio", reason = "threads + channels only; no async runtime" },
+    { crate = "async-std", reason = "threads + channels only; no async runtime" },
+    { crate = "smol", reason = "threads + channels only; no async runtime" },
+    # Telemetry, crash reporting, update checks.
+    { crate = "sentry", reason = "no telemetry or crash reporting" },
+    { crate = "sentry-core", reason = "no telemetry or crash reporting" },
+    { crate = "opentelemetry", reason = "no telemetry" },
+    { crate = "opentelemetry-otlp", reason = "no telemetry" },
+    { crate = "tracing-opentelemetry", reason = "no telemetry" },
+    { crate = "datadog-apm", reason = "no telemetry" },
+    { crate = "segment", reason = "no telemetry" },
+    { crate = "posthog-rs", reason = "no telemetry" },
+    { crate = "rudderanalytics", reason = "no telemetry" },
+    { crate = "bugsnag", reason = "no crash reporting" },
+    { crate = "self_update", reason = "no update checks" },
+    { crate = "update-informer", reason = "no update checks" },
+    { crate = "check-latest", reason = "no update checks" },
+]
