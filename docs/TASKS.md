@@ -22,10 +22,13 @@ Renaming or removing anything in a contract: don't — report the need instead.
 
 ## Status
 
-Wave 1 merged into `claude/vigilant-meitner-hrthuh`: WP-LIBXML2, WP-WSDL, WP-SCHEMA, WP-XML,
-WP-PROJECT, WP-HTTP. `crates/washboard-core/tests/pipeline.rs` checks WSDL → bundle →
-libxml2 against the fixture expectations. WP-APP-SHELL is handed off for a Mac
-(`docs/handoff/APP-SHELL.md`). Wave 2 not started.
+Wave 1 merged: WP-LIBXML2, WP-WSDL, WP-SCHEMA, WP-XML, WP-PROJECT, WP-HTTP. WP-APP-SHELL is
+handed off for a Mac (`docs/handoff/APP-SHELL.md`).
+
+Wave 2: WP-CLI and WP-VALIDATE are done. `crates/washboard-core/tests/pipeline.rs` runs the
+real pipeline (WSDL → bundle → libxml2 → `validate::validate_request`) over every fixture
+request and its expectation, the same ground truth as the lxml oracle. WP-UI-MODEL,
+WP-APP-INTEGRATION and WP-DIST are not started.
 
 ## Wave 1 — independent, start in parallel
 
@@ -142,7 +145,7 @@ Owns: `crates/washboard-app/**`.
 
 | Package | Depends on | Scope |
 |---|---|---|
-| WP-VALIDATE | LIBXML2, WSDL, XML | Full pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 envelope → dispatch → header/body block validation, positions mapped to the request file. Must reproduce every fixture expectation. |
+| WP-VALIDATE | LIBXML2, WSDL, XML | Done; see the WP-VALIDATE section below. |
 | WP-CLI | all core | Done; see the WP-CLI section below. `request validate` and validation before `request send` are wired after WP-VALIDATE (one call site: `crates/washboard-cli/src/validation.rs`). |
 | WP-UI-MODEL | core, VALIDATE | New crate `washboard-ui-model` (PLAN §2.1): app/window state, commands, editor buffers, autosave, background jobs, events to the front end; front-end traits (`MainThread`, `Timers`, `Dialogs`). Tested on Linux with a fake front end. No toolkit dependency. |
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
@@ -157,9 +160,8 @@ Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-co
   `project new|replace-wsdl|show`, `operation list|template <op> [--save]`,
   `request list|new|show|rename|duplicate|delete|validate|send [--server NAME]|history`,
   `server list|add|edit|remove`. `request send` records history and prints status line and body.
-- `validate` and the validation step before `send` call WP-VALIDATE's pipeline, which does not
-  exist yet: `validate` exits with "not available yet", and `send` refuses without
-  `--skip-validation` (flag removed once WP-VALIDATE lands).
+- `validate` and the validation step before `send` call WP-VALIDATE's pipeline; an invalid
+  request exits 1 and is not sent.
 - Locking: read-only commands (`inspect`, `project show`, `operation list|template` without
   `--save`, `request list|show|history`, `server list`) open the project without the lock, so they work while the app
   has it open. Commands that write take the lock and fail with a clear message if it is held.
@@ -171,3 +173,18 @@ Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-co
 - Integration tests run the binary against copies of `fixtures/` in temp dirs (`assert_cmd`
   or plain `std::process::Command`); `send` tested against a local plain-HTTP server.
 
+### WP-VALIDATE — the request validation pipeline (done)
+Owns: `crates/washboard-core/src/validate/request.rs`; the call site in
+`crates/washboard-cli/src/validation.rs`.
+- `validate::validate_request(wsdl, schema, text, hint) -> Validation`: the six steps of PLAN
+  §4 "Validation semantics", each stopping when the next would be meaningless. `Validation`
+  carries the diagnostics and the `Dispatch` of every `Body` child, so `send` takes its
+  `SOAPAction` from the same result.
+- The envelope's shape is checked in Rust, not against the bundled SOAP envelope XSD (PLAN §4
+  step 3 records why). Header blocks the binding does not declare are a warning, not an error.
+- Positions are positions in the request file: a block is cut out with its preceding text
+  replaced by newlines and spaces. Columns on a block's start-tag line shift by the length of
+  the namespace declarations added to it; element positions, which point at the `<`, do not.
+- Not done here: appending the allowed concrete types to libxml2's terse abstract-type errors
+  (PLAN §5.2). It needs the Rust schema model and a path for the failing element, and fits
+  better once the UI model decides how errors are presented.

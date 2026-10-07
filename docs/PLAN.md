@@ -276,11 +276,21 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 ### Validation semantics
 1. Must be well-formed.
 2. Root must be a SOAP 1.1 `soap:Envelope`. A SOAP 1.2 envelope gets a specific error.
-3. Envelope validated against the bundled SOAP envelope XSD (shipped in the app, never fetched).
-4. Each `Body` child is matched to a binding operation by QName; unknown → error.
+3. The envelope's own shape — an optional `Header` before exactly one `Body`, nothing else
+   from the SOAP namespace, namespace-qualified header blocks — is checked in Rust rather
+   than against the bundled SOAP envelope XSD. Same content model, but the messages name
+   what is wrong instead of reading like a content-model violation, the positions come
+   straight from the request text, and no second schema has to be compiled and shipped.
+4. Each `Body` child is matched to a binding operation by QName; unknown → error. An empty
+   `Body` is an error: there is nothing to send.
 5. Body content is validated against the compiled project schema with libxml2
    (`xmlSchemaValidateDoc` on a sub-document); line numbers mapped back to the editor.
-6. Header blocks declared in the binding (`soap:header`) are validated the same way.
+   Each block is cut out as a standalone document whose preceding text is replaced by
+   newlines and spaces, so line *and* column match the request file, with the namespaces it
+   inherited added to its start tag.
+6. Header blocks declared in the binding (`soap:header`) are validated the same way. Blocks
+   the binding does not declare (WS-Security and friends) are not in the project schema;
+   they are reported as a warning and left unvalidated, so they do not block sending.
 
 Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
