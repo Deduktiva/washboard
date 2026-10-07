@@ -143,6 +143,30 @@ Owns: `crates/washboard-app/**`.
 | Package | Depends on | Scope |
 |---|---|---|
 | WP-VALIDATE | LIBXML2, WSDL, XML | Full pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 envelope → dispatch → header/body block validation, positions mapped to the request file. Must reproduce every fixture expectation. |
-| WP-CLI | all core | Implement the `washboard` subcommands. |
+| WP-CLI | all core | In progress; see the WP-CLI section below. `validate` and validation before `send` are wired after WP-VALIDATE. |
 | WP-APP-INTEGRATION | APP-SHELL + core | Wire project, editor, completion, validation, send, history, log, autosave. |
 | WP-DIST | APP-SHELL | Codesign, notarize, DMG via `xtask`. |
+
+### WP-CLI — `washboard` command-line tool (started after wave 1)
+Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-core/src/project/`.
+- Same project folders as the app, through `washboard_core::project` and `wsdl` — no separate
+  formats or logic in the CLI.
+- Commands: `inspect <wsdl> [--xsd-dir …]` (structural report, no names), `new-project`,
+  `replace-wsdl`, `list` (operations incl. unsupported ones, requests with last server),
+  `template <operation>` (print, or `--save` as a new request with the auto name),
+  `request new|rename|duplicate|delete|show`, `server add|list|edit|remove`, `history <request>`,
+  `send <request> [--server NAME]` (records history, prints status line and body).
+- `validate` and the validation step before `send` call WP-VALIDATE's pipeline, which does not
+  exist yet: `validate` exits with "not available yet", and `send` refuses without
+  `--skip-validation` (flag removed once WP-VALIDATE lands).
+- Locking: read-only commands (`inspect`, `list`, `template` without `--save`, `history`,
+  `request show`, `server list`) open the project without the lock, so they work while the app
+  has it open. Commands that write take the lock and fail with a clear message if it is held.
+- Passwords: `KeychainSecretStore` on macOS; elsewhere `WASHBOARD_PASSWORD` or an interactive
+  prompt with no echo. `server add/edit --password-stdin` for scripts.
+- Output for humans by default; `--json` on `inspect`, `list`, `history`. Exit codes:
+  0 ok, 1 command-level failure (send transport error, SOAP fault with `--fail-on-fault`),
+  2 usage/IO/project errors.
+- Integration tests run the binary against copies of `fixtures/` in temp dirs (`assert_cmd`
+  or plain `std::process::Command`); `send` tested against a local plain-HTTP server.
+
