@@ -150,9 +150,6 @@ enum RequestCommand {
         /// Server name; defaults to the request's last server.
         #[arg(long)]
         server: Option<String>,
-        /// Send without validating first (required until validation is available).
-        #[arg(long)]
-        skip_validation: bool,
         /// Exit with 1 when the response is a SOAP fault.
         #[arg(long)]
         fail_on_fault: bool,
@@ -278,15 +275,8 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
             RequestCommand::Send {
                 name,
                 server,
-                skip_validation,
                 fail_on_fault,
-            } => send::run(
-                dir,
-                &name,
-                server.as_deref(),
-                skip_validation,
-                fail_on_fault,
-            ),
+            } => send::run(dir, &name, server.as_deref(), fail_on_fault),
             RequestCommand::History { name, json, show } => history::run(dir, &name, json, show),
         },
         Command::Server(cmd) => match cmd {

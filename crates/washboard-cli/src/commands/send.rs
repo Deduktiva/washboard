@@ -19,19 +19,20 @@ pub fn run(
     dir: &Path,
     name: &str,
     server_name: Option<&str>,
-    skip_validation: bool,
     fail_on_fault: bool,
 ) -> anyhow::Result<ExitCode> {
     let mut project = support::open_write(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let wsdl = support::load_project_wsdl(&project)?;
-    if skip_validation {
-        eprintln!("note: sending without validation");
-    } else {
-        validation::check(&project, &wsdl, &request, &text).map_err(|e| {
-            e.context("not sent; pass --skip-validation to send without validating")
-        })?;
+    let validation = validation::check(&wsdl, &request, &text)?;
+    let errors = validation::error_count(&validation);
+    if errors > 0 {
+        eprintln!(
+            "not sent: the request has {errors} error{}",
+            if errors == 1 { "" } else { "s" }
+        );
+        return Ok(ExitCode::from(1));
     }
     let server = choose_server(&project, &request, server_name)?;
     let password = match &server.auth {

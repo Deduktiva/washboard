@@ -1,15 +1,15 @@
-//! Cross-package check: WSDL loading (WP-WSDL) → schema bundle → libxml2 compile and
-//! validate (WP-LIBXML2), against the expectations written into the fixture requests.
+//! The whole pipeline over the fixtures: WSDL loading (WP-WSDL) → schema bundle → libxml2
+//! compile (WP-LIBXML2) → request validation (WP-VALIDATE), checked against the expectations
+//! written into the fixture requests (`fixtures/README.md`).
 //!
-//! This is a stand-in until WP-VALIDATE builds the real pipeline. It covers the schema-level
-//! fixtures; well-formedness and SOAP envelope checks belong to WP-VALIDATE.
+//! The same ground truth the lxml oracle (`fixtures/check_fixtures.py`) runs on.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use washboard_core::model::QName;
-use washboard_core::soap::SOAP11_ENV_NS;
+use washboard_core::diag::Severity;
 use washboard_core::validate::xsd::CompiledSchema;
+use washboard_core::validate::{self, Validation};
 use washboard_core::{wsdl, xml};
 
 fn fixtures() -> PathBuf {
@@ -19,37 +19,26 @@ fn fixtures() -> PathBuf {
 /// Parses `<!-- expect: valid -->` / `<!-- expect: error line N: text -->`.
 fn expectation(text: &str) -> Option<(u32, String)> {
     let first = text.lines().next().unwrap_or_default();
-    let rest = first.strip_prefix("<!-- expect: ")?.strip_suffix(" -->")?;
+    let rest = first
+        .strip_prefix("<!-- expect: ")
+        .and_then(|r| r.strip_suffix(" -->"))
+        .unwrap_or_else(|| panic!("missing expect comment: {first:?}"));
     if rest == "valid" {
         return None;
     }
-    let rest = rest.strip_prefix("error line ")?;
-    let (line, needle) = rest.split_once(": ")?;
-    Some((line.parse().ok()?, needle.to_lowercase()))
+    let (line, needle) = rest
+        .strip_prefix("error line ")
+        .and_then(|r| r.split_once(": "))
+        .unwrap_or_else(|| panic!("malformed expect comment: {first:?}"));
+    Some((line.parse().expect("line number"), needle.to_lowercase()))
 }
 
-/// Cuts `node` out as a standalone document whose lines match the original file: the text is
-/// prefixed with newlines, and the in-scope namespace declarations are added to its start tag.
-fn standalone(text: &str, node: roxmltree::Node<'_, '_>) -> String {
-    let range = node.range();
-    let line = text[..range.start].matches('\n').count();
-    let mut decls = String::new();
-    for ns in node.namespaces() {
-        match ns.name() {
-            Some(p) => decls.push_str(&format!(" xmlns:{p}=\"{}\"", ns.uri())),
-            None => decls.push_str(&format!(" xmlns=\"{}\"", ns.uri())),
-        }
-    }
-    let elem = &text[range];
-    let name_end = elem
-        .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
-        .unwrap_or(elem.len());
-    format!(
-        "{}{}{decls}{}",
-        "\n".repeat(line),
-        &elem[..name_end],
-        &elem[name_end..]
-    )
+fn errors(v: &Validation) -> Vec<(u32, &str)> {
+    v.diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Error)
+        .map(|d| (d.pos.map_or(0, |p| p.line), d.message.as_str()))
+        .collect()
 }
 
 fn check_project(dir: &str, entry: &str, extras: &[&str]) {
@@ -75,50 +64,26 @@ fn check_project(dir: &str, entry: &str, extras: &[&str]) {
             .into_owned();
         let bytes = fs::read(&path).expect("read request");
         let text = xml::decode(&bytes).expect("decode").text;
-        let expect = expectation(&text);
-        let Ok(doc) = roxmltree::Document::parse(&text) else {
-            continue; // not well-formed: WP-VALIDATE
-        };
-        let env = doc.root_element();
-        if env.tag_name().namespace() != Some(SOAP11_ENV_NS) {
-            continue; // SOAP 1.2 envelope: WP-VALIDATE
-        }
+        let v = validate::validate_request(&loaded, &schema, &text, None);
+        let found = errors(&v);
 
-        let mut errors = Vec::new();
-        let mut blocks = Vec::new();
-        for part in env.children().filter(|n| n.is_element()) {
-            let is_body = part.tag_name().name() == "Body";
-            for child in part.children().filter(|n| n.is_element()) {
-                if is_body {
-                    let qn = QName::new(
-                        child.tag_name().namespace().unwrap_or_default(),
-                        child.tag_name().name(),
-                    );
-                    if loaded.dispatch(&qn, None).is_none() {
-                        let line = text[..child.range().start].matches('\n').count() as u32 + 1;
-                        errors.push((line, format!("no operation for {qn}")));
-                        continue;
-                    }
-                }
-                blocks.push(child);
+        match expectation(&text) {
+            None => {
+                assert!(
+                    found.is_empty(),
+                    "{dir}/{name}: expected valid, got {found:#?}"
+                );
+                assert!(
+                    v.operation().is_some(),
+                    "{dir}/{name}: a valid request dispatches to an operation"
+                );
             }
-        }
-        for block in blocks {
-            for d in schema.validate(standalone(&text, block).as_bytes()) {
-                errors.push((d.pos.map_or(0, |p| p.line), d.message));
-            }
-        }
-
-        match &expect {
-            None => assert!(
-                errors.is_empty(),
-                "{dir}/{name}: expected valid, got {errors:#?}"
-            ),
             Some((line, needle)) => assert!(
-                errors
+                found
                     .iter()
-                    .any(|(l, m)| l == line && m.to_lowercase().contains(needle.as_str())),
-                "{dir}/{name}: expected error on line {line} containing {needle:?}, got {errors:#?}"
+                    .any(|(l, m)| *l == line && m.to_lowercase().contains(needle.as_str())),
+                "{dir}/{name}: expected an error on line {line} containing {needle:?}, \
+                 got {found:#?}"
             ),
         }
         checked += 1;
