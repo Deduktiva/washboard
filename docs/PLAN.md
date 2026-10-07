@@ -70,7 +70,7 @@ washboard/
 │  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs (§2.1)
 │  ├─ washboard-cli/          command-line tool on the same project folders, drives core without UI
 │  └─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; bundle, assets
-└─ xtask/                     build .app bundle, codesign, (later) notarize, DMG
+└─ packaging                  `cargo-packager` config (.app, DMG) + `rcodesign` for signing/notarizing
 ```
 
 ### Key crates
@@ -116,6 +116,10 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
   completion and hover requests answered from `schema::SchemaModel`.
+- **Not undo/redo.** The native text widget owns undo (`NSTextView`'s undo manager, later
+  `GtkSourceView`'s or the Windows control's); the model only receives the resulting edits
+  like any other edit. Programmatic changes the model makes (format XML, insert template,
+  completion) are applied through the widget so they land on its undo stack too.
 - Commands: new/rename/duplicate/delete request, validate, send (validate first, refuse on
   errors), save all, new project / replace WSDL with the import check, server CRUD.
 - Background jobs: schema compile per project, validation, sends; cancellation and
@@ -276,11 +280,19 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 ### Validation semantics
 1. Must be well-formed.
 2. Root must be a SOAP 1.1 `soap:Envelope`. A SOAP 1.2 envelope gets a specific error.
-3. Envelope validated against the bundled SOAP envelope XSD (shipped in the app, never fetched).
-4. Each `Body` child is matched to a binding operation by QName; unknown → error.
-5. Body content is validated against the compiled project schema with libxml2
-   (`xmlSchemaValidateDoc` on a sub-document); line numbers mapped back to the editor.
-6. Header blocks declared in the binding (`soap:header`) are validated the same way.
+3. Each `Body` child is matched to a binding operation by QName; unknown → error. (Schema
+   validation alone would not catch this: the envelope schema allows any `Body` content.)
+4. **One libxml2 pass over the whole document** validates envelope, headers and body together.
+   The bundle includes a SOAP 1.1 envelope schema (shipped in the app, never fetched) whose
+   `Header` and `Body` contain `xs:any processContents="lax"`: every block with a global
+   declaration in the project schema is validated fully, and positions refer directly to the
+   user's document. Blocks are never cut out, so there is no namespace re-declaration and no
+   line mapping beyond the start-tag adjustment in `validate::xsd`.
+   Verified with libxml2 2.14 against all schema-level fixtures, including `xsi:type`, abstract
+   elements, substitution groups, `xs:any` and rpc/literal wrappers.
+5. Header blocks the binding declares (`soap:header`) but that are missing → warning; header
+   blocks the binding doesn't declare are validated if the schema knows them (lax), otherwise
+   left alone, as SOAP intends.
 
 Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
@@ -510,7 +522,8 @@ Completion, hover docs, gutter markers, issues bar, format XML, live validation 
 
 **M5 — Polish & distribution**
 Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, accessibility pass
-(VoiceOver labels on toolbar/sidebar), app icon, `xtask bundle`, codesign, notarization, DMG.
+(VoiceOver labels on toolbar/sidebar), app icon; `.app`, DMG, codesign and notarization from
+`cargo-packager` configuration plus `rcodesign` (no hand-written bundling or signing scripts).
 
 ### CI
 - Linux: fmt, clippy, tests for every crate except the AppKit front end (including
