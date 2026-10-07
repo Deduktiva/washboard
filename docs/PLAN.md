@@ -548,3 +548,12 @@ Authorization values are masked in the log by default (click to reveal).
 
 None blocking. Decided: history retention 20 per request, HTTP log keeps 50 exchanges;
 both may become configurable in v2.
+
+## 10. Planned for v2
+
+- **Order-aware completion.** v1 offers every child element the content model allows at the
+  cursor, regardless of siblings already present. v2 passes the preceding siblings from the
+  cursor context (`xml::cursor_context`) to the schema model, which walks the content model
+  (sequence position, `maxOccurs` already reached, chosen `xs:choice` branch) and offers only
+  what may legally come next, ranking required elements first.
+- **Configurable retention:** history entries per request (v1: 20) and HTTP log size (v1: 50).
