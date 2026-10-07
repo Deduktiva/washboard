@@ -33,11 +33,13 @@ Every `requests/*.xml` starts with exactly one of:
 An `error` expectation is met if validation yields at least one error on line `N` whose message
 contains `substring` (case-insensitive). Line `N` is the line of the element's start tag.
 All start tags carrying a checked error are on a single line, because libxml2 reports the line
-where a start tag *ends* (see WP-VALIDATE in `docs/TASKS.md`).
+where a start tag *ends* (see WP-LIBXML2 in `docs/TASKS.md`).
 
 ## Oracle
 
-`check_fixtures.py` validates every request with lxml/libxml2 using the pipeline from the plan
-(inline schema extraction with namespace carry-over, rpc wrapper generation with `xs:include`,
-dispatch by body QName). Run `uv run --script fixtures/check_fixtures.py [-v]` after changing a
+`check_fixtures.py` validates every request with lxml/libxml2: inline schema extraction with
+namespace carry-over, rpc wrapper generation with `xs:include`, dispatch by body QName. Unlike
+the product (PLAN §4), it validates each header and body block on its own instead of the whole
+envelope in one pass; the verdicts are the same, and `crates/washboard-core/tests/pipeline.rs`
+checks the product against the same expectations. Run `uv run --script fixtures/check_fixtures.py [-v]` after changing a
 fixture. It is a reference for behaviour, not product code.

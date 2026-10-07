@@ -10,7 +10,7 @@ separately and change only additively unless coordinated.
 |---|---|---|
 | IDs, `QName`, `OperationRef`, `Server`, `Auth`, `RequestMeta`, `HistoryEntry` | `crates/washboard-core/src/model.rs` | all |
 | `SchemaBundle`, `SchemaDoc`, `SchemaOrigin` | `crates/washboard-core/src/model.rs` | WSDL → LIBXML2, SCHEMA |
-| `Diagnostic`, `TextPos`, `pos_at_byte` | `crates/washboard-core/src/diag.rs` | XML, LIBXML2, VALIDATE, WSDL, APP |
+| `Diagnostic`, `TextPos`, `pos_at_byte`, `has_errors`, `error_count` | `crates/washboard-core/src/diag.rs` | XML, LIBXML2, VALIDATE, WSDL, APP |
 | `SendRequest`, `Exchange`, `RawMessage`, `TlsInfo` | `crates/washboard-core/src/http/exchange.rs` | HTTP, PROJECT (history), APP |
 | `SecretStore`, `MemorySecretStore` | `crates/washboard-core/src/secrets.rs` | PROJECT, HTTP callers |
 | `xml::decode`, `xml::encode_utf8` | `crates/washboard-core/src/xml.rs` | everything that reads XML |
@@ -144,7 +144,7 @@ Owns: `crates/washboard-app/**`.
 
 | Package | Depends on | Scope |
 |---|---|---|
-| WP-VALIDATE | LIBXML2, WSDL, XML | Done. Pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 root → dispatch of `Body` children → **one** libxml2 pass over the whole document against the bundle plus a shipped SOAP 1.1 envelope schema with lax `Header`/`Body` wildcards (no block extraction). Must reproduce every fixture expectation; replaces `tests/pipeline.rs`. Wires `request validate` and validation before `request send` in the CLI. |
+| WP-VALIDATE | LIBXML2, WSDL, XML | Done. Pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 root → dispatch of `Body` children → **one** libxml2 pass over the whole document against the bundle plus a shipped SOAP 1.1 envelope schema with lax `Header`/`Body` wildcards (no block extraction). Reproduces every fixture expectation, checked by `tests/pipeline.rs`. Wires `request validate` and validation before `request send` in the CLI. |
 | WP-CLI | all core | Done; see the WP-CLI section below. `request validate` and validation before `request send` are wired after WP-VALIDATE (one call site: `crates/washboard-cli/src/validation.rs`). |
 | WP-UI-MODEL | core, VALIDATE | New crate `washboard-ui-model` (PLAN §2.1): app/window state, commands, editor buffers, autosave, background jobs, events to the front end; front-end traits (`MainThread`, `Timers`, `Dialogs`). Tested on Linux with a fake front end. No toolkit dependency. |
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
