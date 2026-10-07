@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::model::QName;
+
 /// A position in a text document as the editor shows it.
 ///
 /// Both fields are 1-based. `column` counts Unicode scalar values (chars), not bytes,
@@ -10,6 +12,14 @@ use std::fmt;
 pub struct TextPos {
     pub line: u32,
     pub column: u32,
+}
+
+/// A range in a text document, in [`TextPos`] coordinates. `end` is exclusive: the span
+/// `1:5..1:8` covers columns 5, 6 and 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TextSpan {
+    pub start: TextPos,
+    pub end: TextPos,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -31,6 +41,19 @@ pub enum DiagSource {
     Import,
 }
 
+/// What libxml2 said about a schema error, as data rather than message text (PLAN §5.2
+/// "Validation errors"), so later stages can act on the kind of error and the node it is about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagDetail {
+    /// libxml2's `xmlParserErrors` code, e.g. 1876 (`XML_SCHEMAV_CVC_TYPE_2`, abstract type).
+    pub code: i32,
+    /// Document-order index, from 0, of the element the error refers to among all elements of
+    /// the validated document. Content of entity references is not counted.
+    pub element_index: Option<usize>,
+    /// For attribute errors, the attribute (namespace URI, local name).
+    pub attribute: Option<QName>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub severity: Severity,
@@ -38,6 +61,13 @@ pub struct Diagnostic {
     /// `None` when the problem has no meaningful location (e.g. "no operation matches").
     pub pos: Option<TextPos>,
     pub message: String,
+    /// The exact text the problem is about, for underlining: an attribute, an element's text,
+    /// a start tag. `None` means only `pos` is known. It need not start at `pos`: schema errors
+    /// keep `pos` at the element's `<` while an attribute error's span covers the attribute.
+    pub span: Option<TextSpan>,
+    /// Set on libxml2 schema validation errors.
+    /// Boxed: most diagnostics have none, and `Result<_, Diagnostic>` should stay small.
+    pub detail: Option<Box<DiagDetail>>,
 }
 
 impl Diagnostic {
@@ -47,6 +77,8 @@ impl Diagnostic {
             source,
             pos,
             message: message.into(),
+            span: None,
+            detail: None,
         }
     }
 
@@ -56,6 +88,8 @@ impl Diagnostic {
             source,
             pos,
             message: message.into(),
+            span: None,
+            detail: None,
         }
     }
 }
@@ -74,6 +108,16 @@ impl fmt::Display for Diagnostic {
 }
 
 impl Diagnostic {
+    pub fn with_span(mut self, span: TextSpan) -> Self {
+        self.span = Some(span);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: DiagDetail) -> Self {
+        self.detail = Some(Box::new(detail));
+        self
+    }
+
     /// Errors block (sending, project creation); warnings never do.
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
