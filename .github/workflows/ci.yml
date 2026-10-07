@@ -24,6 +24,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
       - name: Type-check the macOS app
+        # No macOS SDK on Linux: bundled C libraries can't be compiled for the Apple target.
+        # rusqlite's `bundled` build is switched to pkg-config for this type-check only;
+        # libxml2-sys skips its C build by itself when cross-checking for macOS.
+        env:
+          LIBSQLITE3_SYS_USE_PKG_CONFIG: "1"
         run: cargo clippy -p washboard-app --target aarch64-apple-darwin
 
   fixtures:

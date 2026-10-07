@@ -24,12 +24,14 @@ fixtures/               WSDL/XSD/request fixtures + lxml oracle
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo clippy -p washboard-app --target aarch64-apple-darwin -- -D warnings   # macOS type-check from Linux
+LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --target aarch64-apple-darwin -- -D warnings   # macOS type-check from Linux
 python3 -I fixtures/check_fixtures.py                                        # after changing fixtures
 ```
 
 Run all of the first four before every commit; CI runs them with `-D warnings`.
-Linking the app needs a Mac; from Linux only type-check it. The toolchain and the
+Linking the app needs a Mac; from Linux only type-check it. The env var is needed because no
+macOS SDK is available to compile bundled C code (SQLite) for the Apple target; C code you add
+must likewise skip its build when cross-checking for macOS from another host (see `libxml2-sys`). The toolchain and the
 `aarch64-apple-darwin` target come from `rust-toolchain.toml`.
 
 ## Rules
