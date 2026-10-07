@@ -1,6 +1,7 @@
 //! Synthetic schema sets shared by the performance tests (PLAN §5.1 "Fixture corpus").
 
 use std::fmt::Write as _;
+use std::time::{Duration, Instant};
 
 use washboard_core::model::{SchemaBundle, SchemaDoc, SchemaOrigin};
 
@@ -17,6 +18,54 @@ pub struct Shape {
     pub namespaces: usize,
     pub files: usize,
     pub types: usize,
+}
+
+/// The ~2 MB set the PLAN §5.1 targets refer to.
+pub const LARGE: Shape = Shape {
+    namespaces: 8,
+    files: 5,
+    types: 220,
+};
+
+/// ` xmlns:p0="…" xmlns:p1="…" …`: prefix `p{n}` for every namespace of `shape`, the prefixes
+/// the generated schemas and the tests' instance documents use.
+pub fn prefix_decls(shape: &Shape) -> String {
+    (0..shape.namespaces)
+        .map(|m| format!(r#" xmlns:p{m}="{}""#, ns(m)))
+        .collect()
+}
+
+/// Prints the size of `bundle` and checks that it is at least the 2 MB the targets are for.
+pub fn check_size(bundle: &SchemaBundle) {
+    let bytes: usize = bundle.docs.iter().map(|d| d.text.len()).sum();
+    println!(
+        "bundle: {} documents, {:.2} MB",
+        bundle.docs.len(),
+        bytes as f64 / 1e6
+    );
+    assert!(
+        bytes >= 2_000_000,
+        "bundle should be at least 2 MB: {bytes}"
+    );
+}
+
+/// Runs `f` `runs` times and returns its last result and the median duration.
+pub fn timed<T>(runs: usize, mut f: impl FnMut() -> T) -> (T, Duration) {
+    let mut times = Vec::with_capacity(runs);
+    let mut last = None;
+    for _ in 0..runs {
+        let start = Instant::now();
+        last = Some(f());
+        times.push(start.elapsed());
+    }
+    times.sort();
+    (last.expect("runs > 0"), times[runs / 2])
+}
+
+/// One aligned line of timing output; `note` follows the time.
+pub fn print_time(label: &str, d: Duration, note: &str) {
+    let line = format!("{label:<48} {:>9.2} ms  {note}", d.as_secs_f64() * 1000.0);
+    println!("{}", line.trim_end());
 }
 
 /// Generates a bundle with the features that make real schemas expensive: namespaces split
@@ -126,9 +175,7 @@ pub fn generate(shape: &Shape) -> SchemaBundle {
             }
             let _ = write!(doc, r#"<xs:element name="E{i}" type="p{n}:T{i}"/>"#);
         }
-        let decls: String = (0..shape.namespaces)
-            .map(|m| format!(r#" xmlns:p{m}="{}""#, ns(m)))
-            .collect();
+        let decls = prefix_decls(shape);
         for (f, body) in files.into_iter().enumerate() {
             let uri = if f == 0 {
                 format!("ns{n}/main.xsd")

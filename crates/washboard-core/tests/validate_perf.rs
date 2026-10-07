@@ -7,20 +7,15 @@
 //! builds, since debug builds of this crate are unoptimized.
 
 use std::fmt::Write as _;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use washboard_core::model::SchemaOrigin;
 use washboard_core::validate::{self, RequestSchema};
 use washboard_core::wsdl::{self, SourceFile, Sources};
 
 mod common;
-use common::{Shape, generate, ns};
+use common::{LARGE as SHAPE, check_size, generate, ns, prefix_decls, print_time, timed};
 
-const SHAPE: Shape = Shape {
-    namespaces: 8,
-    files: 5,
-    types: 220,
-};
 /// Body element of the one operation; T104 extends a 4-level chain, so its content model is
 /// the longest kind.
 const BODY_TYPE: usize = 104;
@@ -36,9 +31,7 @@ fn sources() -> Sources {
         .into_iter()
         .filter(|d| d.origin != SchemaOrigin::Generated)
         .map(|d| SourceFile::new(d.uri, d.text));
-    let decls: String = (0..SHAPE.namespaces)
-        .map(|m| format!(r#" xmlns:p{m}="{}""#, ns(m)))
-        .collect();
+    let decls = prefix_decls(&SHAPE);
     let imports: String = (0..SHAPE.namespaces)
         .map(|m| {
             format!(
@@ -137,9 +130,7 @@ impl Instance {
     }
 
     fn request(depth: usize, members: usize, invalid: bool) -> String {
-        let decls: String = (0..SHAPE.namespaces)
-            .map(|m| format!(r#" xmlns:p{m}="{}""#, ns(m)))
-            .collect();
+        let decls = prefix_decls(&SHAPE);
         let mut inst = Instance {
             members,
             invalid,
@@ -156,23 +147,6 @@ impl Instance {
     }
 }
 
-fn ms(d: Duration) -> f64 {
-    d.as_secs_f64() * 1000.0
-}
-
-/// Median of [`RUNS`] runs of `f`, and its last result.
-fn median<T>(mut f: impl FnMut() -> T) -> (T, Duration) {
-    let mut times = Vec::with_capacity(RUNS);
-    let mut last = None;
-    for _ in 0..RUNS {
-        let start = Instant::now();
-        last = Some(f());
-        times.push(start.elapsed());
-    }
-    times.sort();
-    (last.expect("RUNS > 0"), times[RUNS / 2])
-}
-
 #[test]
 fn compile_and_validate_requests() {
     let release = !cfg!(debug_assertions);
@@ -182,22 +156,13 @@ fn compile_and_validate_requests() {
         "synthetic WSDL loads: {:#?}",
         loaded.check.diagnostics
     );
-    let bytes: usize = loaded.bundle.docs.iter().map(|d| d.text.len()).sum();
-    println!(
-        "bundle: {} documents, {:.2} MB",
-        loaded.bundle.docs.len(),
-        bytes as f64 / 1e6
-    );
-    assert!(
-        bytes >= 2_000_000,
-        "bundle should be at least 2 MB: {bytes}"
-    );
+    check_size(&loaded.bundle);
 
     // Compile: once per project open, on a background thread. A fresh compile each run, as on
     // every open; the schema of the last run is kept.
-    let (schema, compile) = median(|| RequestSchema::compile(&loaded.bundle));
+    let (schema, compile) = timed(RUNS, || RequestSchema::compile(&loaded.bundle));
     let schema = schema.unwrap_or_else(|d| panic!("bundle compiles: {d:#?}"));
-    println!("{:<48} {:>9.2} ms", "compile (RequestSchema)", ms(compile));
+    print_time("compile (RequestSchema)", compile, "");
 
     let cases = [
         // (label, depth, members, invalid)
@@ -211,14 +176,18 @@ fn compile_and_validate_requests() {
     let mut timings = Vec::new();
     for (label, depth, members, invalid) in cases {
         let text = Instance::request(depth, members, invalid);
-        let (v, t) = median(|| validate::validate_request(&loaded, &schema, &text, None));
+        let (v, t) = timed(RUNS, || {
+            validate::validate_request(&loaded, &schema, &text, None)
+        });
         let errors = v.diagnostics.iter().filter(|d| d.is_error()).count();
-        println!(
-            "{:<48} {:>9.2} ms  ({:.0} KB, {} lines, {errors} errors)",
-            format!("validate_request ({label})"),
-            ms(t),
-            text.len() as f64 / 1e3,
-            text.lines().count(),
+        print_time(
+            &format!("validate_request ({label})"),
+            t,
+            &format!(
+                "({:.0} KB, {} lines, {errors} errors)",
+                text.len() as f64 / 1e3,
+                text.lines().count()
+            ),
         );
         assert_eq!(
             v.operation().map(|o| o.operation.as_str()),

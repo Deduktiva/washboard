@@ -4,40 +4,25 @@
 //! (`cargo test --release --test schema_perf -- --nocapture`) and asserted only in release
 //! builds, since debug builds of this crate are unoptimized.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use washboard_core::model::QName;
 use washboard_core::schema::{PathStep, SchemaModel, TemplateOptions};
 
 mod common;
-use common::{Shape, generate, ns};
+use common::{LARGE, check_size, generate, ns, print_time, timed};
 
-fn time<T>(label: &str, f: impl FnOnce() -> T) -> (T, Duration) {
-    let start = Instant::now();
-    let v = f();
-    let d = start.elapsed();
-    println!("{label:<40} {:>8.2} ms", d.as_secs_f64() * 1000.0);
+fn time<T>(label: &str, f: impl FnMut() -> T) -> (T, Duration) {
+    let (v, d) = timed(1, f);
+    print_time(label, d, "");
     (v, d)
 }
 
 #[test]
 fn large_bundle_build_and_queries() {
-    let shape = Shape {
-        namespaces: 8,
-        files: 5,
-        types: 220,
-    };
+    let shape = LARGE;
     let bundle = generate(&shape);
-    let bytes: usize = bundle.docs.iter().map(|d| d.text.len()).sum();
-    println!(
-        "synthetic bundle: {} documents, {:.2} MB",
-        bundle.docs.len(),
-        bytes as f64 / 1e6
-    );
-    assert!(
-        bytes >= 2_000_000,
-        "generator should produce at least 2 MB, got {bytes}"
-    );
+    check_size(&bundle);
 
     let release = !cfg!(debug_assertions);
     let (m, build) = time("build", || SchemaModel::build(&bundle));
