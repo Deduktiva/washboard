@@ -11,7 +11,7 @@ env:
 
 jobs:
   linux:
-    name: Linux (core, cli, macOS type-check)
+    name: Linux (fmt, clippy, tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,13 +23,6 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
-      - name: Type-check the macOS app
-        # No macOS SDK on Linux: bundled C libraries can't be compiled for the Apple target.
-        # rusqlite's `bundled` build is switched to pkg-config for this type-check only;
-        # libxml2-sys skips its C build by itself when cross-checking for macOS.
-        env:
-          LIBSQLITE3_SYS_USE_PKG_CONFIG: "1"
-        run: cargo clippy -p washboard-app --target aarch64-apple-darwin
 
   fixtures:
     name: Fixture oracle (lxml)
@@ -40,7 +33,7 @@ jobs:
       - run: uv run --script fixtures/check_fixtures.py
 
   macos:
-    name: macOS (build + test everything)
+    name: macOS (clippy, tests)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,5 +42,6 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-targets
+      # Also lints the macOS-only code (app, Keychain) that the Linux job never compiles.
+      - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace

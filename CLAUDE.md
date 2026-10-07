@@ -28,7 +28,9 @@ LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --target aarch64-a
 uv run --script fixtures/check_fixtures.py                                   # after changing fixtures
 ```
 
-Run all of the first four before every commit; CI runs them with `-D warnings`.
+Run all of the first four before every commit. CI runs fmt, clippy and tests on Linux and
+clippy and tests on macOS, all with `-D warnings`; the cross-target clippy is the local stand-in
+for the macOS job when you have no Mac.
 Linking the app needs a Mac; from Linux only type-check it. The env var is needed because no
 macOS SDK is available to compile bundled C code (SQLite) for the Apple target; C code you add
 must likewise skip its build when cross-checking for macOS from another host (see `libxml2-sys`). The toolchain and the
