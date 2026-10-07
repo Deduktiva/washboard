@@ -74,7 +74,7 @@ Each step ends in something you can launch and look at. Commit after each step.
    - Re-highlight on `textStorage:didProcessEditing:` (or `textDidChange:`), limited to the
      edited range extended to line boundaries.
    - Measure with a ~1 MB XML file: typing must stay responsive. Note the numbers in your
-     report. This is the TextKit 1 vs 2 decision from PLAN §4/§7 M0. If TextKit 2 turns out
+     report. This backs the TextKit 1 choice in PLAN §4 "Editor". If TextKit 2 turns out
      clearly better with a working ruler, say so; don't silently switch.
    - Issues bar: a list of diagnostics (`washboard_core::diag::Diagnostic`, sample data).
      Clicking one selects that line in the editor and scrolls to it.

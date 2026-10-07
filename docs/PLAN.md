@@ -64,11 +64,11 @@ washboard/
 │  │   ├─ schema/             pure-Rust XSD model for completion + templates
 │  │   ├─ validate/           libxml2 schema compile/validate, error → (line,col,msg)
 │  │   ├─ xml/                tokenizer (highlighting), well-formedness check, pretty-print
-│  │   ├─ soap/               envelope/version detection, SOAPAction, fault parsing
+│  │   ├─ soap.rs             namespaces, envelope builder, body elements
 │  │   ├─ http/               client, TLS policy, exchange capture for the log
-│  │   └─ secrets/            trait SecretStore { get/set/delete } (Keychain impl behind cfg)
+│  │   └─ secrets.rs          trait SecretStore { get/set/delete } (Keychain impl behind cfg)
 │  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs (§2.1)
-│  ├─ washboard-cli/          command-line tool on the same project folders, drives core without UI
+│  ├─ washboard-cli/          `washboard` command-line tool on the same project folders, no UI
 │  └─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; bundle, assets
 └─ packaging                  `cargo-packager` config (.app, DMG) + `rcodesign` for signing/notarizing
 ```
@@ -80,7 +80,7 @@ washboard/
 | SQLite | `rusqlite` (`bundled`) | bundled = known version, no surprises from system sqlite |
 | XML parsing | own tolerant tokenizer for highlighting and start tags, `roxmltree` for the WSDL/XSD model, libxml2 for well-formedness and validation, `quick-xml` for escaping | one well-formedness verdict for editor and validation |
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see §5 for the gotchas |
-| HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Verify in M0 that raw-ish header capture is adequate. |
+| HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Header capture is close but not byte-exact (§10). |
 | Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
 | IDs / time | `uuid`, `jiff` | |
 | File watching (M5) | `notify` (FSEvents backend) | external edits to request files |
@@ -91,10 +91,11 @@ end's `MainThread` implementation (§2.1; `dispatch2` main queue on macOS).
 ### Threading model
 - **Main thread**: all AppKit, and the `washboard-ui-model` state, which is only touched there
   (`Rc<RefCell<…>>`, deliberately not `Send`).
-- **Validation thread** (one per app): owns all libxml2 schema work. If the pinned release only
-  offers the process-global external-entity loader, serializing all schema compiles on one
-  thread avoids races; if it has per-context resource loaders, this can become a small pool.
-  Compiled schemas are cached per project and invalidated on WSDL replacement.
+- **Validation threads**: libxml2 schema work runs off the main thread. Compiles on different
+  threads don't interfere (each thread's loader serves only its own bundle, see
+  `validate::xsd`), so this can be a small pool. A `CompiledSchema` is `Send`, not `Sync`: one
+  thread validates against it at a time. Compiled schemas are cached per project and
+  invalidated on WSDL replacement.
 - **HTTP workers**: one short-lived thread per send. "Cancel" detaches and ignores the result
   (blocking ureq can't be interrupted mid-read; a per-server timeout bounds it).
 - Workers receive immutable snapshots (`Arc<…>`), never project state.
@@ -261,9 +262,10 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
   uses the most recently used server of the project.
 
 ### Editor
-- `NSTextView`; TextKit 1 (explicit `NSLayoutManager`) vs TextKit 2 is decided in the M0 spike.
-  macOS 27 as the floor makes TextKit 2 more plausible, but line-number rulers and large documents
-  have historically been its weak spots, and we need both.
+- `NSTextView` on **TextKit 1** (explicit `NSLayoutManager`). Line-number rulers and large
+  documents have historically been TextKit 2's weak spots, and we need both. The app shell
+  measures typing on a 1 MB file; TextKit 2 is reconsidered only if it is clearly better there
+  with a working ruler.
 - Line-number ruler (`NSRulerView` subclass) with error/warning markers in the gutter.
 - Highlighting: Rust tokenizer, applied as temporary attributes on the layout manager for the
   edited range expanded to the enclosing tag boundaries. Full pass only on load.
@@ -349,18 +351,20 @@ libxml2 cannot compile a WSDL directly. Steps:
    `type="tns:Foo"` breaks after extraction.
 2. Inline schemas often `xs:import` each other by namespace without `schemaLocation`. Generate a
    synthetic root schema that imports every schema by a synthetic URI
-   (`washboard-inline:/<n>.xsd`).
-3. Install a custom `xmlExternalEntityLoader` that resolves only: synthetic URIs, paths inside the
-   project's `wsdl/` folder, and the bundled SOAP envelope XSDs. Everything else fails. Parse
-   with `XML_PARSE_NONET` as a second line of defence.
+   (`washboard:/inline/<n>.xsd`).
+3. Resolve only documents in the `SchemaBundle` (project XSDs, extracted and generated schemas,
+   the shipped SOAP envelope XSD); everything else fails. libxml2 2.15.4 has a per-context
+   resource loader but doesn't pass it to nested imports, so a process-global loader backed by a
+   thread-local bundle covers those (`validate::xsd`). Instance documents are parsed with
+   `XML_PARSE_NONET | XML_PARSE_NO_XXE` and a loader that refuses everything.
 4. Use `xmlSchemaSetValidStructuredErrors` to collect `(line, col, message)`.
 
 5. **One namespace split across several files.** libxml2 imports each target namespace only once:
    a second `xs:import` of the same namespace with a different `schemaLocation` is silently
    skipped, and the types in that file go missing. Your WSDLs reportedly don't do this, so the
-   import check only *detects* it and warns. The fix (a generated wrapper schema per namespace
-   that `xs:include`s all its files, with every import of that namespace pointed at it) is
-   built only if a real WSDL needs it — or if `rpc/literal` needs it (§5.4).
+   import check detects it and warns, and the bundle builder generates a wrapper schema per
+   split namespace that `xs:include`s all its files, with every import of that namespace pointed
+   at it (also used for `rpc/literal`, §5.4).
 
 ### libxml2: vendored, not system
 The system library on current macOS is 2.9.13 (Feb 2022), built with HTTP and FTP support.
@@ -369,8 +373,8 @@ Reasons to vendor a pinned current release instead:
   control when or whether Apple updates it.
 - A build with HTTP/FTP compiled out makes "no network from the schema loader" a property of the
   binary, not only of our entity loader and `XML_PARSE_NONET`.
-- Newer releases have per-context resource loaders instead of the process-global
-  `xmlSetExternalEntityLoader` (verify in M0), which removes the single-validation-thread constraint.
+- Newer releases have per-context resource loaders; with them (plus the thread-local global
+  loader, §5 step 3) schema compiles need no global lock.
 - Same version in CI (Linux) and in the app, so test results carry over.
 
 For faster local builds, `WASHBOARD_LIBXML2=pkg-config` links a Homebrew/distro copy instead;
@@ -378,8 +382,7 @@ release builds and CI always use the vendored one (a Homebrew dylib would not ex
 Macs, and a static Homebrew copy makes releases depend on the build machine).
 
 Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static linking
-is fine). Because upstream maintenance has been thin at times, pick the release in M0 and record
-how we'll watch for advisories.
+is fine). Pinned release and how we watch for advisories: `crates/libxml2-sys/README.md`.
 
 Known libxml2 limits regardless of version: XSD 1.0 only; some edge cases (complex `xs:redefine`,
 certain identity constraints) remain weak.
@@ -394,12 +397,13 @@ Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
 - **Template generation is bounded**: recursion depth limit (default 6) and a node budget; when
   cut, a `<!-- … truncated: type Foo -->` comment is emitted instead of silently stopping.
 - **Validation of a request** reuses the compiled schema; cost is proportional to the request,
-  not the schema. Live validation is enabled only if M0 measures it under ~100 ms.
+  not the schema. Live validation is enabled only if it measures under ~100 ms
+  (WP-VALIDATE-PERF in `docs/TASKS.md`).
 - **Fixture corpus**: since real WSDLs can't be shared, CI uses public WSDLs of similar shape plus
   a generator that synthesises large schema sets (N files, depth D, namespaces split across files,
   recursive types, deep derivation chains, substitution groups across namespaces, `xs:any`,
-  multi-file `wsdl:import`, BOM-prefixed files). `washboard-cli inspect` (§7, M1) prints the same structural report locally,
-  without contents, so real WSDLs can be checked against the assumptions here.
+  multi-file `wsdl:import`, BOM-prefixed files). `washboard inspect` prints the same structural
+  report locally, without contents, so real WSDLs can be checked against the assumptions here.
 
 ### 5.2 `xsi:type`, abstract declarations, `xs:any`
 Validation of all three is libxml2's job and it handles them (derivation checks, `block`/`final`,
@@ -460,7 +464,7 @@ Behaviour:
   file's own `wsdl:types` schemas are extracted as in §5 step 1, with that file's namespaces.
 - **`soap:header message="…" part="…" use="literal"`**: the header part may come from a
   different message than the body. Headers are emitted in templates and validated (§4,
-  validation step 6). Parts used as headers are excluded from the body; `soap:body parts="…"`
+  validation steps 4–6). Parts used as headers are excluded from the body; `soap:body parts="…"`
   is honoured.
 - **Style is per operation**: `soap:operation style` overrides `soap:binding style`; the check
   is done per operation, so a mostly-document binding with one rpc operation still loads.
@@ -523,27 +527,13 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 
 Each milestone ends in something runnable.
 
-**M0 — Spikes (de-risk before committing to structure)**
-- objc2: window + `NSSplitView` + `NSOutlineView` source list + `NSTextView` (TextKit 1 and 2) with ruler
-  and incremental highlighting on a 1 MB XML file. Goal: confirm objc2 ergonomics for
-  subclassing (`NSRulerView`, delegates, data sources).
-- libxml2: compile inline schemas from 3–4 real-world WSDLs (with cross imports, external XSDs)
-  using the synthetic-root + custom-loader approach; capture line-numbered errors. Include a
-  synthetic 2 MB set with a namespace split across files and 4+ import levels. Measure compile
-  time and per-request validation time. Build the vendored libxml2 via `build.rs` on macOS and
-  Linux; check whether per-context resource loaders are usable for schema compiles.
-- ureq + native-tls: self-signed server, toggle verification; check what we can capture for the log.
-
-**M1 — Core library + CLI**
-Project create/open, DB + migrations, WSDL import & import-check, request CRUD + auto-naming,
-servers, Keychain secrets, template generation, validation (incl. generated rpc/literal schemas), send, history. `washboard-cli`
-exercises all of it. Unit tests + fixture WSDL corpus + local HTTPS test server.
-`washboard-cli inspect <wsdl> [xsd-dir]` prints the structural report from §5.1 (counts, depths,
-flags; no names or contents), so it can be run on WSDLs that can't leave your machine.
+M0 (libxml2 and ureq spikes) and M1 (core library and the `washboard` CLI) are done; what is
+left of them is in `docs/TASKS.md` (libxml2 timings: WP-VALIDATE-PERF).
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
-new-project sheet. In parallel, `washboard-ui-model` (Linux-testable): app and window state,
+new-project sheet. The shell is also the objc2 spike: TextKit 1 editor with ruler and
+incremental highlighting on a 1 MB XML file, `NSRulerView` subclass, delegates, data sources. In parallel, `washboard-ui-model` (Linux-testable): app and window state,
 request CRUD, editor buffers, autosave/Save All, reopen projects on launch, with a fake front
 end in tests. Then wire the AppKit shell to it.
 
