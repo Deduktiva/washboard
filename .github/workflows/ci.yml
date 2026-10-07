@@ -36,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install lxml
-      - run: python3 -I fixtures/check_fixtures.py
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --script fixtures/check_fixtures.py
 
   macos:
     name: macOS (build + test everything)

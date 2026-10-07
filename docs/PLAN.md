@@ -556,4 +556,11 @@ both may become configurable in v2.
   cursor context (`xml::cursor_context`) to the schema model, which walks the content model
   (sequence position, `maxOccurs` already reached, chosen `xs:choice` branch) and offers only
   what may legally come next, ranking required elements first.
+- **Decision pending: own HTTP/1.1 client instead of `ureq`.** `ureq` does not expose the raw
+  response, so the HTTP log shows the canonical reason phrase instead of the server's status
+  line, lowercased header names, and repeated headers grouped by name; the TLS version is
+  unknown. A small client on `native-tls` + `httparse` (POST only, `Content-Length` and chunked
+  responses, no redirects, no proxies) would make the log byte-exact in both directions and
+  drop a dependency, at the cost of owning chunked decoding and timeout handling. v1 stays on
+  `ureq`.
 - **Configurable retention:** history entries per request (v1: 20) and HTTP log size (v1: 50).

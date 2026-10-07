@@ -39,5 +39,5 @@ where a start tag *ends* (see WP-VALIDATE in `docs/TASKS.md`).
 
 `check_fixtures.py` validates every request with lxml/libxml2 using the pipeline from the plan
 (inline schema extraction with namespace carry-over, rpc wrapper generation with `xs:include`,
-dispatch by body QName). Run `python3 -I fixtures/check_fixtures.py [-v]` after changing a
+dispatch by body QName). Run `uv run --script fixtures/check_fixtures.py [-v]` after changing a
 fixture. It is a reference for behaviour, not product code.

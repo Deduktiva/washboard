@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["lxml>=5.3"]
+# ///
 """Reference oracle for the fixtures, using lxml (libxml2) directly.
 
 Checks that every request in fixtures/*/requests/ produces the outcome stated in its
@@ -8,9 +12,11 @@ validation pipeline from docs/PLAN.md §5/§5.4 and serves two purposes:
   * proves the fixtures themselves are correct before the Rust code exists, and
   * documents the expected behaviour in executable form.
 
-Usage: python3 -I fixtures/check_fixtures.py   (needs `lxml`)
+Usage: uv run --script fixtures/check_fixtures.py [-v]
+(uv provides `lxml` from the inline metadata above; no system packages needed.)
 
-Not part of the product and not run in CI; the Rust test suite is authoritative.
+Not part of the product. CI runs it to keep the fixtures honest; the Rust test suite is
+authoritative for the product's behaviour.
 """
 
 import copy

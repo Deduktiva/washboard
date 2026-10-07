@@ -5,6 +5,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -37,7 +38,7 @@ fn request(server: Server) -> SendRequest {
 struct Script {
     response: Vec<u8>,
     delay: Duration,
-    tls: Option<native_tls::TlsAcceptor>,
+    tls: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl Script {
@@ -60,8 +61,14 @@ fn serve_once(script: Script) -> (u16, JoinHandle<Vec<u8>>) {
         tcp.set_read_timeout(Some(Duration::from_secs(10)))
             .expect("timeout");
         match script.tls {
-            Some(acceptor) => match acceptor.accept(tcp) {
-                Ok(tls) => exchange(tls, &script.response, script.delay),
+            // The handshake runs on first read; if the client rejects the certificate, that
+            // read fails and `exchange` returns the empty request.
+            Some(config) => match rustls::ServerConnection::new(config) {
+                Ok(conn) => exchange(
+                    rustls::StreamOwned::new(conn, tcp),
+                    &script.response,
+                    script.delay,
+                ),
                 Err(_) => Vec::new(),
             },
             None => exchange(tcp, &script.response, script.delay),
@@ -128,14 +135,22 @@ fn ok_response(body: &[u8]) -> Vec<u8> {
     r
 }
 
-fn self_signed() -> native_tls::TlsAcceptor {
+/// TLS for the test server comes from rustls, not native-tls: Security.framework refuses to
+/// import rcgen's PKCS#8 key as an identity (errSecUnknownFormat), and the server side is not
+/// what these tests are about. TLS 1.2 stays enabled because the client's Security.framework
+/// backend does not speak TLS 1.3.
+fn self_signed() -> Arc<rustls::ServerConfig> {
     let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).expect("cert");
-    let identity = native_tls::Identity::from_pkcs8(
-        ck.cert.pem().as_bytes(),
-        ck.signing_key.serialize_pem().as_bytes(),
-    )
-    .expect("identity");
-    native_tls::TlsAcceptor::new(identity).expect("acceptor")
+    let key = rustls::pki_types::PrivatePkcs8KeyDer::from(ck.signing_key.serialize_der());
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("protocol versions")
+    .with_no_client_auth()
+    .with_single_cert(vec![ck.cert.der().clone()], key.into())
+    .expect("server config");
+    Arc::new(config)
 }
 
 #[test]
