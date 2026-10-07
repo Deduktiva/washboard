@@ -19,20 +19,31 @@ pub fn run(
     dir: &Path,
     name: &str,
     server_name: Option<&str>,
+    skip_validation: bool,
     fail_on_fault: bool,
 ) -> anyhow::Result<ExitCode> {
     let mut project = support::open_write(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let wsdl = support::load_project_wsdl(&project)?;
-    let validation = validation::check(&wsdl, &request, &text)?;
-    let errors = validation::error_count(&validation);
-    if errors > 0 {
-        eprintln!(
-            "not sent: the request has {errors} error{}",
-            if errors == 1 { "" } else { "s" }
-        );
-        return Ok(ExitCode::from(1));
+    // With --skip-validation the request is still validated, so the errors are on record,
+    // but nothing stops the send: sending broken requests on purpose is how servers get tested.
+    match validation::check(&wsdl, &request, &text) {
+        Ok(v) => {
+            let errors = validation::error_count(&v);
+            let s = if errors == 1 { "" } else { "s" };
+            if errors > 0 && !skip_validation {
+                eprintln!(
+                    "not sent: the request has {errors} error{s} (--skip-validation sends anyway)"
+                );
+                return Ok(ExitCode::from(1));
+            }
+            if errors > 0 {
+                eprintln!("note: sending despite {errors} error{s} (--skip-validation)");
+            }
+        }
+        Err(e) if skip_validation => eprintln!("note: not validated: {e:#}"),
+        Err(e) => return Err(e.context("not sent")),
     }
     let server = choose_server(&project, &request, server_name)?;
     let password = match &server.auth {

@@ -573,6 +573,33 @@ fn basic_auth_password_comes_from_the_environment() {
 }
 
 #[test]
+fn skip_validation_sends_broken_requests_anyway() {
+    let e = customer();
+    let (url, seen) = serve(vec![(500, FAULT_RESPONSE)]);
+    ok(wb(&e, &["server", "add", "Local", &url]));
+    ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
+    let req = "GetCustomer 1";
+    fill_from_fixture(&e, req, "invalid-not-well-formed.xml");
+
+    fails(
+        &wb(&e, &["request", "send", req]),
+        1,
+        "--skip-validation sends anyway",
+    );
+    let o = wb(&e, &["request", "send", req, "--skip-validation"]);
+    assert_eq!(ok(o.clone_output()), FAULT_RESPONSE);
+    assert!(stderr(&o).contains("not well-formed"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("sending despite 1 error"),
+        "{}",
+        stderr(&o)
+    );
+    let s = seen.recv().expect("request seen");
+    let sent = fs::read_to_string(e.project.join(format!("requests/{req}.xml"))).expect("file");
+    assert_eq!(s.body, sent);
+}
+
+#[test]
 fn writing_commands_fail_while_the_project_is_open_elsewhere() {
     let e = customer();
     ok(wb(&e, &["server", "add", "Test", "https://test.invalid/"]));
