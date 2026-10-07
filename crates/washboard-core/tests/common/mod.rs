@@ -28,17 +28,24 @@ pub fn generate(shape: &Shape) -> SchemaBundle {
     let mut root = format!(r#"<xs:schema xmlns:xs="{XS}" targetNamespace="urn:synthetic:root">"#);
     for n in 0..shape.namespaces {
         let mut files: Vec<String> = (0..shape.files).map(|_| String::new()).collect();
+        // Locations are relative to the including document, as in real schema sets. Every
+        // file imports the other namespaces itself: an import in main.xsd does not extend to
+        // the files it includes, and libxml2 rejects such references.
+        for (f, file) in files.iter_mut().enumerate() {
+            if f == 0 {
+                for part in 1..shape.files {
+                    let _ = write!(file, r#"<xs:include schemaLocation="part{part}.xsd"/>"#);
+                }
+            }
+            for m in (0..shape.namespaces).filter(|&m| m != n) {
+                let _ = write!(
+                    file,
+                    r#"<xs:import namespace="{}" schemaLocation="../ns{m}/main.xsd"/>"#,
+                    ns(m)
+                );
+            }
+        }
         let main = &mut files[0];
-        for f in 1..shape.files {
-            let _ = write!(main, r#"<xs:include schemaLocation="ns{n}/part{f}.xsd"/>"#);
-        }
-        for m in (0..shape.namespaces).filter(|&m| m != n) {
-            let _ = write!(
-                main,
-                r#"<xs:import namespace="{}" schemaLocation="ns{m}/main.xsd"/>"#,
-                ns(m)
-            );
-        }
         let _ = write!(
             main,
             r#"<xs:complexType name="HeadType" abstract="true"><xs:sequence>
@@ -82,6 +89,13 @@ pub fn generate(shape: &Shape) -> SchemaBundle {
             } else {
                 ""
             };
+            // Attributes only on the base of each chain: an extension that repeats an
+            // attribute use is an invalid schema.
+            let attrs = if i % 5 == 0 {
+                format!(r#"<xs:attributeGroup ref="p{n}:AG"/>"#)
+            } else {
+                String::new()
+            };
             let fields = format!(
                 r#"<xs:sequence>
                      <xs:element name="next{i}" type="p{n}:T{next}" minOccurs="0"/>
@@ -95,7 +109,7 @@ pub fn generate(shape: &Shape) -> SchemaBundle {
                      <xs:element ref="p{n}:Head" minOccurs="0" maxOccurs="unbounded"/>
                      <xs:choice><xs:element name="a{i}" type="xs:string"/><xs:element name="b{i}" type="xs:long"/></xs:choice>
                      {any}
-                   </xs:sequence><xs:attributeGroup ref="p{n}:AG"/>"#,
+                   </xs:sequence>{attrs}"#,
                 e = i % 10
             );
             if i % 5 == 0 {
