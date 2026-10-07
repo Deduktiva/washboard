@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use roxmltree::Node;
 
-use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, pos_at_byte};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::schema::{PathStep, SchemaModel, SuggestionSource};
-use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS, XSI_NS};
+use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
 
@@ -309,11 +309,7 @@ fn check_must_understand(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagno
             .attributes()
             .find(|a| a.namespace() == Some(SOAP11_ENV_NS) && a.name() == "mustUnderstand")
         {
-            let lines = LineIndex::new(text);
-            d = d.with_span(TextSpan {
-                start: lines.pos(attr.range().start),
-                end: lines.pos(attr.range().end),
-            });
+            d = d.with_span(LineIndex::new(text).span(attr.range()));
         }
         diags.push(d);
     }
@@ -350,8 +346,18 @@ fn explain_abstract(
     if d.pos != Some(pos_of(text, node)) {
         return;
     }
-    let Some(path) = block_path(node) else {
+    // The editor's own path resolution (prefixes, `xsi:type`), so errors and completion agree.
+    let ctx = xml::cursor_context(text, node.range().start + 1);
+    let Some(path) = block_path(&ctx.path) else {
         return;
+    };
+    let Some(namespaces) = ctx.path.last().map(|e| &e.namespaces) else {
+        return;
+    };
+    let written = |name: &QName| match namespaces.prefix_for(&name.ns) {
+        Some("") => name.local.clone(),
+        Some(prefix) => format!("{prefix}:{}", name.local),
+        None => name.to_string(),
     };
     let (names, lead) = if detail.code == ABSTRACT_ELEMENT {
         let Some((last, parent)) = path.split_last().filter(|(_, p)| !p.is_empty()) else {
@@ -362,14 +368,14 @@ fn explain_abstract(
             .elements
             .into_iter()
             .filter(|c| matches!(&c.source, SuggestionSource::Substitution { head } if *head == last.name))
-            .map(|c| written(node, &c.name))
+            .map(|c| written(&c.name))
             .collect::<Vec<_>>();
         (members, "Use one of its substitution group members instead")
     } else {
         let types = model
             .xsi_type_candidates(&path)
             .into_iter()
-            .map(|t| written(node, &t.name))
+            .map(|t| written(&t.name))
             .collect::<Vec<_>>();
         (types, "Set xsi:type to one of")
     };
@@ -378,47 +384,27 @@ fn explain_abstract(
     }
 }
 
-/// The schema path of `node`: from the `Header` or `Body` child it is in down to `node`,
-/// with each step's `xsi:type`. `None` outside header and body blocks.
-fn block_path(node: Node<'_, '_>) -> Option<Vec<PathStep>> {
-    let mut path = Vec::new();
-    for n in node.ancestors() {
-        let parent = n.parent_element()?;
-        path.push(path_step(n));
-        if in_env(&parent, "Body") || in_env(&parent, "Header") {
-            path.reverse();
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn path_step(n: Node<'_, '_>) -> PathStep {
-    let step = PathStep::new(qname(n));
-    let xsi_type = n.attribute((XSI_NS, "type")).and_then(|v| {
-        let ns = |prefix| n.lookup_namespace_uri(prefix);
-        Some(match v.trim().split_once(':') {
-            Some((prefix, local)) => QName::new(ns(Some(prefix))?, local),
-            None => QName::new(ns(None).unwrap_or_default(), v.trim()),
+/// The schema path for an editor path (outermost first): from the element inside a SOAP
+/// `Header` or `Body` down to the last one. `None` outside header and body blocks, or if a
+/// name on the way does not resolve.
+fn block_path(path: &[xml::PathElement]) -> Option<Vec<PathStep>> {
+    let is_block_parent = |e: &xml::PathElement| {
+        e.name
+            .as_ref()
+            .is_some_and(|n| n.ns == SOAP11_ENV_NS && matches!(n.local.as_str(), "Body" | "Header"))
+    };
+    let first = path.iter().position(is_block_parent)? + 1;
+    path.get(first..)
+        .filter(|block| !block.is_empty())?
+        .iter()
+        .map(|e| {
+            let step = PathStep::new(e.name.clone()?);
+            Some(match e.xsi_type.as_ref().and_then(|t| t.name.clone()) {
+                Some(t) => step.with_xsi_type(t),
+                None => step,
+            })
         })
-    });
-    match xsi_type {
-        Some(t) => step.with_xsi_type(t),
-        None => step,
-    }
-}
-
-/// `name` as the request at `node` would write it: with a prefix in scope there, else in
-/// Clark notation.
-fn written(node: Node<'_, '_>, name: &QName) -> String {
-    match node.namespaces().find(|ns| ns.uri() == name.ns) {
-        Some(ns) => match ns.name() {
-            Some(prefix) => format!("{prefix}:{}", name.local),
-            None => name.local.clone(),
-        },
-        None if name.ns.is_empty() => name.local.clone(),
-        None => name.to_string(),
-    }
+        .collect()
 }
 
 fn in_env(n: &Node<'_, '_>, local: &str) -> bool {
@@ -442,6 +428,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::diag::TextSpan;
     use crate::wsdl::{self, Sources};
 
     fn customer() -> (Wsdl, RequestSchema) {

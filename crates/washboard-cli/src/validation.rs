@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
 use anyhow::bail;
-use washboard_core::diag::{self, Diagnostic, Severity, TextPos};
+use washboard_core::diag::{self, Diagnostic, LineIndex, Severity};
 use washboard_core::model::RequestMeta;
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::{self, RequestSchema, Validation};
@@ -55,12 +55,14 @@ fn render(renderer: &Renderer, name: &str, text: &str, d: &Diagnostic) -> String
         Severity::Warning => Level::WARNING,
     };
     let title = level.primary_title(d.message.as_str());
+    let lines = LineIndex::new(text);
     let range = match (d.span, d.pos) {
-        (Some(span), _) => byte_at(text, span.start)
-            .zip(byte_at(text, span.end))
+        (Some(span), _) => lines
+            .byte(span.start)
+            .zip(lines.byte(span.end))
             .filter(|(start, end)| start <= end)
             .map(|(start, end)| start..end),
-        (None, Some(pos)) => byte_at(text, pos).map(|b| point(text, b)),
+        (None, Some(pos)) => lines.byte(pos).map(|b| point(text, b)),
         (None, None) => None,
     };
     let report = match (range, d.pos) {
@@ -77,26 +79,6 @@ fn render(renderer: &Renderer, name: &str, text: &str, d: &Diagnostic) -> String
         (None, None) => [title.element(Origin::path(name))],
     };
     format!("{}\n\n", renderer.render(&report))
-}
-
-/// The byte offset of `pos` in `text`, or `None` if it is outside the text. A column one past
-/// the end of a line is the line's end.
-fn byte_at(text: &str, pos: TextPos) -> Option<usize> {
-    let line = usize::try_from(pos.line).ok()?.checked_sub(1)?;
-    let column = usize::try_from(pos.column).ok()?.checked_sub(1)?;
-    let start = if line == 0 {
-        0
-    } else {
-        text.match_indices('\n').nth(line - 1)?.0 + 1
-    };
-    let content = &text[start..];
-    let content = &content[..content.find('\n').unwrap_or(content.len())];
-    let offset = content
-        .char_indices()
-        .map(|(i, _)| i)
-        .chain(std::iter::once(content.len()))
-        .nth(column)?;
-    Some(start + offset)
 }
 
 /// The char at `byte`, as a range a caret can mark.
@@ -125,7 +107,7 @@ pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use washboard_core::diag::{DiagSource, TextSpan};
+    use washboard_core::diag::{DiagSource, TextPos, TextSpan};
 
     use super::*;
 
@@ -167,17 +149,5 @@ mod tests {
         assert_eq!(plain("R", "<a/>", &d), "warning: w\n --> R\n\n");
         let d = Diagnostic::error(DiagSource::Soap, Some(TextPos { line: 9, column: 1 }), "e");
         assert_eq!(plain("R", "<a/>", &d), "error: e\n --> R:9:1\n\n");
-    }
-
-    #[test]
-    fn byte_at_counts_chars() {
-        let t = "ab\nüx\n";
-        let p = |line, column| TextPos { line, column };
-        assert_eq!(byte_at(t, p(1, 1)), Some(0));
-        assert_eq!(byte_at(t, p(2, 2)), Some(5));
-        assert_eq!(byte_at(t, p(2, 3)), Some(6));
-        assert_eq!(byte_at(t, p(2, 4)), None);
-        assert_eq!(byte_at(t, p(3, 1)), Some(7));
-        assert_eq!(byte_at(t, p(4, 1)), None);
     }
 }

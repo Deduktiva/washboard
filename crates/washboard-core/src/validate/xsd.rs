@@ -1149,10 +1149,7 @@ impl<'t> Source<'t> {
             None => None,
         }
         .unwrap_or_else(|| tag.bytes.clone());
-        TextSpan {
-            start: self.lines.pos(bytes.start),
-            end: self.lines.pos(bytes.end),
-        }
+        self.lines.span(bytes)
     }
 
     /// The attribute written as `name` on `tag`, from its name to the closing quote.
