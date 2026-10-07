@@ -542,9 +542,10 @@ left of them is in `docs/TASKS.md` (libxml2 timings: WP-VALIDATE-PERF).
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
 new-project sheet. The shell is also the objc2 spike: TextKit 1 editor with ruler and
-incremental highlighting on a 1 MB XML file, `NSRulerView` subclass, delegates, data sources. In parallel, `washboard-ui-model` (Linux-testable): app and window state,
-request CRUD, editor buffers, autosave/Save All, reopen projects on launch, with a fake front
-end in tests. Then wire the AppKit shell to it.
+incremental highlighting on a 1 MB XML file, `NSRulerView` subclass, delegates, data sources.
+In parallel, `washboard-ui-model` (Linux-testable): app and window state, request CRUD, editor
+buffers, autosave/Save All, reopen projects on launch, with a fake front end in tests. Then wire
+the AppKit shell to it.
 
 **M3 — Send loop**
 Server popup, send with pre-validation, response pane with tabs, history, HTTP log panel,
