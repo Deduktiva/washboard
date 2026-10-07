@@ -479,8 +479,10 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 - Redirects disabled; a 3xx is shown as the response.
 - Proxy: ureq's env proxy detection disabled; system proxy settings are ignored. No proxy support.
 - DNS lookups for the server host are, of course, still made.
-- CI check: `cargo deny` with a ban list (no `reqwest`, `hyper`, telemetry crates) and a test that
-  greps the dependency tree for network-capable crates outside `core::http`.
+- CI check: `cargo deny check bans` with a ban list in `deny.toml` (no `reqwest`, `hyper`,
+  telemetry crates), and `washboard-core/tests/network_boundary.rs`: network-capable crates
+  reach the dependency graph only through core's `ureq` dependency, and socket/HTTP APIs appear
+  in source only under `core/src/http/`.
 - Optional (later): App Sandbox with only `com.apple.security.network.client`; doesn't restrict
   hosts but limits blast radius.
 
@@ -528,7 +530,7 @@ Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, ac
 
 ### CI
 - Linux: fmt, clippy, tests for every crate except the AppKit front end (including
-  `washboard-ui-model` with its fake front end), the fixture oracle; `cargo deny` to add.
+  `washboard-ui-model` with its fake front end), the fixture oracle, `cargo deny check bans`.
 - macOS runner: clippy and tests for everything; later an unsigned `.app` artifact.
 
 ---
