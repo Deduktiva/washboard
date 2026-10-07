@@ -33,7 +33,7 @@ Every `requests/*.xml` starts with exactly one of:
 An `error` expectation is met if validation yields at least one error on line `N` whose message
 contains `substring` (case-insensitive). Line `N` is the line of the element's start tag.
 All start tags carrying a checked error are on a single line, because libxml2 reports the line
-where a start tag *ends* (see WP-LIBXML2 in `docs/TASKS.md`).
+where a start tag *ends* (see "Positions" in `crates/washboard-core/src/validate/xsd.rs`).
 
 ## Oracle
 

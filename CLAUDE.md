@@ -54,6 +54,11 @@ must likewise skip its build when cross-checking for macOS from another host (se
 - **Ownership:** when working on a work package, edit only the paths it owns, plus additive
   contract changes and new dependencies in that crate's `Cargo.toml`. If you need something from
   another package, stub it locally in tests and say so in your report.
+- **objc2 (`washboard-app`):** AppKit is main-thread-only; pass `MainThreadMarker` down rather
+  than creating one deep inside. Every delegate, data source and subclass via `define_class!`,
+  Rust state in `#[ivars]` behind `RefCell`/`Cell`. AppKit delegate properties are weak: the
+  controller owns its delegates and data sources. Check method names on docs.rs for the exact
+  versions in `Cargo.lock`; the selector-to-Rust naming is easy to guess wrong.
 - **Tests:** use `fixtures/` for WSDL/XSD inputs; build temp dirs for project tests. Fixture
   files are byte-exact (`.gitattributes`); never reformat them.
 - **Style:** match the surrounding code; doc comments on public items explain *why* and
