@@ -294,6 +294,10 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 5. Header blocks the binding declares (`soap:header`) but that are missing → warning; header
    blocks the binding doesn't declare are validated if the schema knows them (lax), otherwise
    left alone, as SOAP intends.
+6. `soapenv:mustUnderstand`, `actor` and `encodingStyle` are allowed on every header block,
+   as SOAP 1.1 §4.2 says. A block's declared type rarely allows foreign attributes, so the
+   libxml2 errors for these three are dropped and `mustUnderstand` is checked for `0`/`1` in
+   Rust instead. Other attributes in the SOAP namespace stay errors.
 
 Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
