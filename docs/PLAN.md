@@ -426,6 +426,20 @@ Behaviour:
 - **Hover** shows the effective type ("declared `tns:Party`, actual `tns:Company` via xsi:type").
 - **Validation errors** from libxml2 for these cases are terse (e.g. "The type definition is
   abstract"); we append the list of allowed concrete types/members from the index.
+  - Do this on structured data, never by matching libxml2's message text. The wrapper
+    (`validate::xsd`) already receives each error's code and the node it refers to (the
+    element, or the `xmlAttr` for attribute errors) and currently flattens both into
+    `Diagnostic { message, pos }`. Add an optional, additive `detail` to `Diagnostic` with
+    the libxml2 error code, the element's document-order index (the wrapper already computes
+    it for positions) and, for attribute errors, the attribute's QName. `Diagnostic` is only
+    built through `Diagnostic::error`/`warning`, so existing callers are unaffected.
+  - The enrichment then maps the code to "abstract type" / "abstract element", resolves the
+    element's path in the request with the Rust model, and appends the candidates.
+  - Same `detail` lets the editor underline the offending attribute instead of the whole
+    start tag (today attribute errors point at the element's `<`).
+  - Where libxml2 must not complain about something the protocol allows, remove it from the
+    parsed tree before validating (`CompiledSchema::validate_text_stripping`, used for SOAP
+    header-block attributes) rather than filtering errors afterwards.
 
 ### 5.3 WSDL-level details
 - **`wsdl:import`**: WSDL files are loaded transitively and merged into one definitions model
