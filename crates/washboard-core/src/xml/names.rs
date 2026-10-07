@@ -12,39 +12,6 @@ pub(crate) fn is_xml_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
-/// `NameStartChar` from XML 1.0 (5th edition), without `:` (namespaces forbid it in NCNames).
-fn is_ncname_start(c: char) -> bool {
-    matches!(c,
-        'A'..='Z' | '_' | 'a'..='z'
-        | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
-        | '\u{370}'..='\u{37D}' | '\u{37F}'..='\u{1FFF}' | '\u{200C}'..='\u{200D}'
-        | '\u{2070}'..='\u{218F}' | '\u{2C00}'..='\u{2FEF}' | '\u{3001}'..='\u{D7FF}'
-        | '\u{F900}'..='\u{FDCF}' | '\u{FDF0}'..='\u{FFFD}' | '\u{10000}'..='\u{EFFFF}')
-}
-
-fn is_ncname_char(c: char) -> bool {
-    is_ncname_start(c)
-        || matches!(c,
-            '-' | '.' | '0'..='9' | '\u{B7}' | '\u{300}'..='\u{36F}' | '\u{203F}'..='\u{2040}')
-}
-
-/// Whether `s` is an XML `NCName` (a name without colons).
-pub(crate) fn is_ncname(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if is_ncname_start(c) => chars.all(is_ncname_char),
-        _ => false,
-    }
-}
-
-/// Whether `s` is a namespace-conforming QName: `NCName` or `NCName:NCName`.
-pub(crate) fn is_qname(s: &str) -> bool {
-    match s.split_once(':') {
-        Some((p, l)) => is_ncname(p) && is_ncname(l),
-        None => is_ncname(s),
-    }
-}
-
 /// Splits `p:local` into `(Some("p"), "local")`; a name without a colon has no prefix.
 pub(crate) fn split_qname(raw: &str) -> (Option<&str>, &str) {
     match raw.split_once(':') {

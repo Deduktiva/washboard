@@ -204,43 +204,10 @@ impl CompiledSchema {
     /// violations are [`DiagSource::Schema`]. Element positions point at the start tag's `<`
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
-        init();
-        let Ok(len) = c_int::try_from(xml.len()) else {
-            return vec![Diagnostic::error(
-                DiagSource::WellFormedness,
-                None,
-                "document too large to validate",
-            )];
+        let (doc, parse_errors) = match parse_instance(xml, None) {
+            Ok(parsed) => parsed,
+            Err(d) => return vec![d],
         };
-        let collector = Collector::new(false);
-        let options = ffi::XML_PARSE_NONET | ffi::XML_PARSE_NO_XXE | ffi::XML_PARSE_BIG_LINES;
-
-        // SAFETY: `xml` outlives the parse (libxml2 copies or reads it during the call);
-        // `collector` outlives both contexts, which are freed before this block ends.
-        let doc = unsafe {
-            let ctxt = ffi::xmlNewParserCtxt();
-            if ctxt.is_null() {
-                return vec![oom()];
-            }
-            ffi::xmlCtxtSetErrorHandler(
-                ctxt,
-                Some(on_error),
-                ptr::from_ref(&collector).cast_mut().cast(),
-            );
-            ffi::xmlCtxtSetResourceLoader(ctxt, Some(refuse_all), ptr::null_mut());
-            let doc = ffi::xmlCtxtReadMemory(
-                ctxt,
-                xml.as_ptr().cast::<c_char>(),
-                len,
-                INSTANCE_URL.as_ptr(),
-                ptr::null(),
-                options,
-            );
-            ffi::xmlFreeParserCtxt(ctxt);
-            doc
-        };
-
-        let parse_errors = collector.finish();
         let not_well_formed = doc.is_null() || parse_errors.iter().any(RawError::is_error);
         if not_well_formed {
             if !doc.is_null() {
@@ -436,6 +403,74 @@ impl RawError {
             Diagnostic::warning(source, pos, self.message)
         }
     }
+}
+
+/// Parses an instance document with the safe options (no network, no external entities, a
+/// loader that refuses everything). Returns the document, null if parsing failed outright,
+/// and the parse errors in document order. The caller owns and frees the document.
+///
+/// `encoding` overrides the document's own declaration; `None` lets libxml2 detect it.
+fn parse_instance(
+    xml: &[u8],
+    encoding: Option<&CStr>,
+) -> Result<(*mut ffi::xmlDoc, Vec<RawError>), Diagnostic> {
+    init();
+    let Ok(len) = c_int::try_from(xml.len()) else {
+        return Err(Diagnostic::error(
+            DiagSource::WellFormedness,
+            None,
+            "document too large to parse",
+        ));
+    };
+    let collector = Collector::new(false);
+    let options = ffi::XML_PARSE_NONET | ffi::XML_PARSE_NO_XXE | ffi::XML_PARSE_BIG_LINES;
+
+    // SAFETY: `xml` outlives the parse (libxml2 copies or reads it during the call);
+    // `collector` outlives the context, which is freed before this block ends.
+    let doc = unsafe {
+        let ctxt = ffi::xmlNewParserCtxt();
+        if ctxt.is_null() {
+            return Err(oom());
+        }
+        ffi::xmlCtxtSetErrorHandler(
+            ctxt,
+            Some(on_error),
+            ptr::from_ref(&collector).cast_mut().cast(),
+        );
+        ffi::xmlCtxtSetResourceLoader(ctxt, Some(refuse_all), ptr::null_mut());
+        let doc = ffi::xmlCtxtReadMemory(
+            ctxt,
+            xml.as_ptr().cast::<c_char>(),
+            len,
+            INSTANCE_URL.as_ptr(),
+            encoding.map_or(ptr::null(), CStr::as_ptr),
+            options,
+        );
+        ffi::xmlFreeParserCtxt(ctxt);
+        doc
+    };
+    Ok((doc, collector.finish()))
+}
+
+/// The first well-formedness error in already decoded `text`, as libxml2 reports it:
+/// `(line, column, message)`, 1-based, 0 when unknown. The text is parsed as UTF-8 whatever
+/// its XML declaration says. Used by [`crate::xml::check_well_formed`], so the editor and the
+/// validation pipeline judge documents with the same parser.
+pub(crate) fn first_well_formedness_error(text: &str) -> Option<(u32, u32, String)> {
+    let (doc, errors) = match parse_instance(text.as_bytes(), Some(c"UTF-8")) {
+        Ok(parsed) => parsed,
+        Err(d) => return Some((0, 0, d.message)),
+    };
+    let failed = doc.is_null();
+    if !failed {
+        // SAFETY: returned by xmlCtxtReadMemory and not used afterwards.
+        unsafe { ffi::xmlFreeDoc(doc) };
+    }
+    errors
+        .into_iter()
+        .find(RawError::is_error)
+        .map(|e| (e.line, e.column, e.message))
+        .or_else(|| failed.then(|| (0, 0, "document is not well-formed".to_owned())))
 }
 
 /// Receives libxml2's structured errors for one context.
