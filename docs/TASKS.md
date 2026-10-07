@@ -151,20 +151,20 @@ Owns: `crates/washboard-app/**`.
 Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-core/src/project/`.
 - Same project folders as the app, through `washboard_core::project` and `wsdl` — no separate
   formats or logic in the CLI.
-- Commands: `inspect <wsdl> [--xsd-dir …]` (structural report, no names), `new-project`,
-  `replace-wsdl`, `list` (operations incl. unsupported ones, requests with last server),
-  `template <operation>` (print, or `--save` as a new request with the auto name),
-  `request new|rename|duplicate|delete|show`, `server add|list|edit|remove`, `history <request>`,
-  `send <request> [--server NAME]` (records history, prints status line and body).
+- Commands, noun-verb throughout; `-C/--project <dir>` (default: cwd) selects the project:
+  `inspect <wsdl> [--xsd-dir …]` (works on WSDL files, no project; structural report, no names),
+  `project new|replace-wsdl|show`, `operation list|template <op> [--save]`,
+  `request list|new|show|rename|duplicate|delete|validate|send [--server NAME]|history`,
+  `server list|add|edit|remove`. `request send` records history and prints status line and body.
 - `validate` and the validation step before `send` call WP-VALIDATE's pipeline, which does not
   exist yet: `validate` exits with "not available yet", and `send` refuses without
   `--skip-validation` (flag removed once WP-VALIDATE lands).
-- Locking: read-only commands (`inspect`, `list`, `template` without `--save`, `history`,
-  `request show`, `server list`) open the project without the lock, so they work while the app
+- Locking: read-only commands (`inspect`, `project show`, `operation list|template` without
+  `--save`, `request list|show|history`, `server list`) open the project without the lock, so they work while the app
   has it open. Commands that write take the lock and fail with a clear message if it is held.
 - Passwords: `KeychainSecretStore` on macOS; elsewhere `WASHBOARD_PASSWORD` or an interactive
   prompt with no echo. `server add/edit --password-stdin` for scripts.
-- Output for humans by default; `--json` on `inspect`, `list`, `history`. Exit codes:
+- Output for humans by default; `--json` on `inspect`, the `list` commands and `request history`. Exit codes:
   0 ok, 1 command-level failure (send transport error, SOAP fault with `--fail-on-fault`),
   2 usage/IO/project errors.
 - Integration tests run the binary against copies of `fixtures/` in temp dirs (`assert_cmd`
