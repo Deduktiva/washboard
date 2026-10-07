@@ -19,7 +19,7 @@ use crate::soap::{SOAP11_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
 
-use super::xsd::CompiledSchema;
+use super::xsd::{CompiledSchema, StripAttributes};
 
 /// SOAP 1.2 envelope namespace. Only recognized to give a specific error (PLAN §1).
 const SOAP12_ENV_NS: &str = "http://www.w3.org/2003/05/soap-envelope";
@@ -219,11 +219,16 @@ pub fn validate_request(
     }
 
     // 4. One libxml2 pass: envelope shape, headers and body together.
-    let mut schema_diags = schema.schema.validate_text(text);
+    // SOAP's own header-block attributes are taken out of libxml2's copy first (see
+    // `HEADER_BLOCK_ATTRIBUTES`) and checked here instead.
+    out.diagnostics.extend(
+        schema
+            .schema
+            .validate_text_stripping(text, &STRIP_HEADER_BLOCK_ATTRIBUTES),
+    );
     for block in header_blocks(env) {
-        allow_soap_header_attributes(text, block, &mut schema_diags);
+        check_must_understand(text, block, &mut out.diagnostics);
     }
-    out.diagnostics.extend(schema_diags);
 
     // 5. Headers the binding declares but the request lacks. SOAP makes no header
     // mandatory by itself, so this only warns.
@@ -249,7 +254,19 @@ pub fn validate_request(
 }
 
 /// SOAP 1.1 attributes any header block may carry (§4.2.2, §4.2.3, §4.1.1).
+///
+/// A block the project schema declares has a type that usually allows no foreign attributes,
+/// so libxml2 would reject these. They are removed from the document libxml2 validates, on
+/// every header block, and the one value with a real constraint, `mustUnderstand`, is checked
+/// by [`check_must_understand`]. `actor` and `encodingStyle` are URIs, which libxml2 accepts
+/// almost unchecked anyway.
 const HEADER_BLOCK_ATTRIBUTES: [&str; 3] = ["mustUnderstand", "actor", "encodingStyle"];
+
+const STRIP_HEADER_BLOCK_ATTRIBUTES: StripAttributes<'static> = StripAttributes {
+    parent: (SOAP11_ENV_NS, "Header"),
+    namespace: SOAP11_ENV_NS,
+    names: &HEADER_BLOCK_ATTRIBUTES,
+};
 
 /// Element children of the envelope's `Header`s.
 fn header_blocks<'a, 'i>(env: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
@@ -258,31 +275,17 @@ fn header_blocks<'a, 'i>(env: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>
         .flat_map(|h| h.children().filter(Node::is_element))
 }
 
-/// SOAP 1.1 lets every header block carry `soapenv:mustUnderstand`, `actor` and
-/// `encodingStyle`, but a block the project schema declares has a type that usually allows no
-/// foreign attributes, so libxml2 rejects them. Those errors are dropped here; the one value
-/// with a real constraint, `mustUnderstand` (`0` or `1`), is then checked in its place.
-/// Blocks the schema does not declare are validated laxly by the envelope schema, which
-/// checks the values itself and produces no such error.
-fn allow_soap_header_attributes(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagnostic>) {
-    let pos = Some(pos_of(text, block));
-    for local in HEADER_BLOCK_ATTRIBUTES {
-        let Some(value) = block.attribute((SOAP11_ENV_NS, local)) else {
-            continue;
-        };
-        // libxml2: "Element '…', attribute '{ns}local': The attribute '{ns}local' is not
-        // allowed." The pinned libxml2 is tested against this wording below.
-        let needle = format!("attribute '{{{SOAP11_ENV_NS}}}{local}' is not allowed");
-        let before = diags.len();
-        diags.retain(|d| !(d.pos == pos && d.message.contains(&needle)));
-        let dropped = diags.len() < before;
-        if dropped && local == "mustUnderstand" && !matches!(value.trim(), "0" | "1") {
-            diags.push(Diagnostic::error(
-                DiagSource::Schema,
-                pos,
-                format!("soapenv:mustUnderstand must be 0 or 1, not {value:?}"),
-            ));
-        }
+/// `soapenv:mustUnderstand` is `0` or `1` (SOAP 1.1 §4.2.3).
+fn check_must_understand(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagnostic>) {
+    let Some(value) = block.attribute((SOAP11_ENV_NS, "mustUnderstand")) else {
+        return;
+    };
+    if !matches!(value.trim(), "0" | "1") {
+        diags.push(Diagnostic::error(
+            DiagSource::Schema,
+            Some(pos_of(text, block)),
+            format!("soapenv:mustUnderstand must be 0 or 1, not {value:?}"),
+        ));
     }
 }
 
