@@ -14,7 +14,7 @@ a new package that names those paths.
 |---|---|---|
 | IDs, `QName`, `OperationRef`, `Server`, `Auth`, `RequestMeta`, `HistoryEntry` | `crates/washboard-core/src/model.rs` | all |
 | `SchemaBundle`, `SchemaDoc`, `SchemaOrigin` | `crates/washboard-core/src/model.rs` | WSDL → LIBXML2, SCHEMA |
-| `Diagnostic`, `TextPos`, `LineIndex`, `pos_at_byte`, `has_errors`, `error_count` | `crates/washboard-core/src/diag.rs` | XML, LIBXML2, VALIDATE, WSDL, CLI, APP |
+| `Diagnostic`, `TextPos`, `TextSpan`, `DiagDetail`, `LineIndex`, `pos_at_byte`, `has_errors`, `error_count` | `crates/washboard-core/src/diag.rs` | XML, LIBXML2, VALIDATE, WSDL, CLI, APP |
 | `SendRequest`, `Exchange`, `RawMessage`, `TlsInfo` | `crates/washboard-core/src/http/exchange.rs` | HTTP, PROJECT (history), APP |
 | `SecretStore`, `MemorySecretStore` | `crates/washboard-core/src/secrets.rs` | PROJECT, HTTP callers |
 | `xml::decode`, `xml::encode_utf8` | `crates/washboard-core/src/xml/encoding.rs` | everything that reads XML |
@@ -41,6 +41,7 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 | WP-VALIDATE | `crates/washboard-core/src/validate/**` except `xsd.rs` (`mod.rs`, `request.rs`, `soap-envelope-1.1.xsd`) | PLAN §4 "Validation semantics", one libxml2 pass; checked by `tests/pipeline.rs`. |
 | WP-CLI | `crates/washboard-cli/**` | `washboard` noun-verb CLI on the app's project folders. Exit codes: `src/main.rs` docs; read-only commands open without the lock (`src/support.rs`). `send --skip-validation` still validates and prints errors, then sends. |
 | WP-VALIDATE-PERF | `crates/washboard-core/tests/validate_perf.rs`, `crates/washboard-core/tests/common/` (synthetic schema generator, shared with `schema_perf.rs`) | libxml2 compile and `validate_request` timings on the synthetic 2 MB set; numbers in PLAN §5.1, targets asserted in release builds. |
+| WP-DIAG-DETAIL | follow-up on the VALIDATE, LIBXML2 and CLI paths above; added `TextSpan`, `DiagDetail` and `Diagnostic::{span, detail}` to `diag` | PLAN §5.2 "Validation errors": libxml2 error code, element index and attribute on diagnostics, spans, abstract type/element alternatives from `schema::SchemaModel`, CLI excerpts via `annotate-snippets`. |
 
 ## Open
 
@@ -98,7 +99,6 @@ done in the cloud: the macOS CI job compiles, tests and packages it; looking at 
 | Package | Depends on | Owns | Scope |
 |---|---|---|---|
 | WP-UI-MODEL | core (done) | `crates/washboard-ui-model/**` (+ its workspace member entry) | New crate (PLAN §2.1): app/window state, commands, editor buffers, autosave, background jobs, events to the front end; front-end traits (`MainThread`, `Timers`, `Dialogs`). Diagnostics as in PLAN §2.1: spans to UTF-16, one shared `SchemaModel` also passed to `RequestSchema::with_model`. Completion needs the editor path (`xml::PathElement`s) as `schema::PathStep`s; `validate::request::block_path` already converts it, so move that into `schema` (may edit `schema/query.rs` and `validate/request.rs` for this) and use it from both. Tested on Linux with a fake front end. No toolkit dependency. |
-| WP-DIAG-DETAIL | VALIDATE (done) | `crates/washboard-core/src/validate/**`, `crates/washboard-cli/src/validation.rs`; additive `detail` and span on `Diagnostic` | PLAN §5.2 "Validation errors": libxml2 error code, element index and attribute QName on diagnostics; byte spans for attribute, value and start-tag errors; abstract type/element errors list the allowed concrete types/members from `schema::SchemaModel`; CLI excerpt via `annotate-snippets` once spans exist. |
 | WP-REPLACE-REPORT | VALIDATE (done) | new `crates/washboard-core/src/project/replace_report.rs`, `crates/washboard-cli/src/commands/project.rs` | PLAN §4 "Replace WSDL": after a replace, report operations added/removed and requests that no longer validate; `project replace-wsdl` prints it. Requests are never rewritten. |
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | `crates/washboard-app/**` (after APP-SHELL) | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
 | WP-DIST | APP-SHELL | `cargo-packager` metadata in `crates/washboard-app/Cargo.toml`, a release workflow in `.github/workflows/` | DMG via `cargo-packager`; codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
