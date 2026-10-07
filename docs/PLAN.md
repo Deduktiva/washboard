@@ -11,7 +11,7 @@ Decisions taken so far:
 | Schema validation | libxml2 XSD validation via FFI, **vendored and statically linked** (system copy is 2.9.13 from 2022, see §5) |
 | WSDL/XSD imports | User supplies all referenced files; they are copied into the project. Unresolved imports are errors. Never fetched. |
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
-| Minimum OS | macOS 27 |
+| Minimum OS | macOS 26 (the GitHub macOS runners run 26, so CI can launch the app) |
 | Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
 | SOAP | 1.1 only; `document/literal` and `rpc/literal`. No SOAP 1.2, no `rpc/encoded`. |
 | Proxies | None. Connections go directly to the configured server. |
@@ -153,9 +153,9 @@ front end is new. For GTK4 the editor would be `GtkSourceView` (XML highlighting
 gutter included); on Windows, Scintilla or a RichEdit-based control.
 
 ### Packaging
-`cargo-packager` builds `Washboard.app` from configuration (`Info.plist`:
-`CFBundleIdentifier` `at.deduktiva.washboard`, `LSMinimumSystemVersion`, `NSHighResolutionCapable`,
-version from Cargo); WP-DIST adds the DMG, signing and notarization. The app's Cargo binary stays
+`cargo-packager` builds `Washboard.app` from configuration (`Info.plist`: `CFBundleIdentifier`
+`at.deduktiva.washboard`, `LSMinimumSystemVersion` 26.0, `NSHighResolutionCapable`, version
+from Cargo); WP-DIST adds the DMG, signing and notarization. The app's Cargo binary stays
 `washboard-app`: the CLI is `washboard`, and on case-insensitive APFS a binary named `Washboard`
 would overwrite it in `target/release/`. Inside the bundle the executable is `Washboard`
 (`CFBundleExecutable`), in `Washboard.app/Contents/MacOS/`. The macOS CI job builds the bundle,
