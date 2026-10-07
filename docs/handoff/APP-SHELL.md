@@ -128,5 +128,7 @@ Each step ends in something you can launch and look at. Commit after each step.
 ## Out of scope
 
 Core integration (loading projects, real requests, validation, sending, autosave, reopening
-projects on launch), completion popups, hover docs, Keychain. These belong to
-WP-APP-INTEGRATION once the core packages land.
+projects on launch), completion popups, hover docs, Keychain. App behaviour will live in the
+toolkit-independent `washboard-ui-model` crate (PLAN §2.1); WP-APP-INTEGRATION binds the shell
+to it. Keep the shell's controllers thin with that in mind: views, layout and forwarding input,
+not state or rules (e.g. no autosave timers or dirty tracking in AppKit classes).
