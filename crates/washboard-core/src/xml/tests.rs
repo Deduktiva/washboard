@@ -40,33 +40,13 @@ fn all_fixtures() -> Vec<(PathBuf, String)> {
     out
 }
 
-/// Deterministic xorshift PRNG: reproducible "random" tests without a dependency.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
+/// A char boundary in `s`, uniformly-ish. Tests seed `fastrand` so failures reproduce.
+fn boundary(rng: &mut fastrand::Rng, s: &str) -> usize {
+    let mut i = rng.usize(..=s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
     }
-
-    fn below(&mut self, n: usize) -> usize {
-        if n == 0 {
-            0
-        } else {
-            (self.next() % n as u64) as usize
-        }
-    }
-
-    /// A char boundary in `s`, uniformly-ish.
-    fn boundary(&mut self, s: &str) -> usize {
-        let mut i = self.below(s.len() + 1);
-        while !s.is_char_boundary(i) {
-            i -= 1;
-        }
-        i
-    }
+    i
 }
 
 /// Snippets that change the tokenizer state when typed in the middle of a document.
@@ -239,23 +219,23 @@ fn construct_starts_allow_restart() {
 
 #[test]
 fn token_buffer_edits_match_full_tokenization() {
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut rng = fastrand::Rng::with_seed(0x9E37_79B9_7F4A_7C15);
     for (path, original) in all_fixtures() {
         let mut text = original.clone();
         let mut buf = TokenBuffer::new(&text);
         for step in 0..150 {
-            let start = rng.boundary(&text);
-            let mut end = (start + rng.below(12)).min(text.len());
+            let start = boundary(&mut rng, &text);
+            let mut end = (start + rng.usize(..12)).min(text.len());
             while !text.is_char_boundary(end) {
                 end += 1;
             }
-            if rng.below(3) == 0 {
+            if rng.usize(..3) == 0 {
                 end = start; // pure insertion
             }
-            let insert = if rng.below(4) == 0 {
+            let insert = if rng.usize(..4) == 0 {
                 ""
             } else {
-                SNIPPETS[rng.below(SNIPPETS.len())]
+                SNIPPETS[rng.usize(..SNIPPETS.len())]
             };
             let mut new_text = String::with_capacity(text.len() + insert.len());
             new_text.push_str(&text[..start]);
@@ -766,18 +746,18 @@ fn pretty_refuses_broken_xml() {
 
 #[test]
 fn nothing_panics_on_truncated_and_mutated_fixtures() {
-    let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
+    let mut rng = fastrand::Rng::with_seed(0xDEAD_BEEF_CAFE_F00D);
     for (_, text) in all_fixtures() {
         let mut inputs: Vec<String> = Vec::new();
         for _ in 0..40 {
-            let cut = rng.boundary(&text);
+            let cut = boundary(&mut rng, &text);
             inputs.push(text[..cut].to_owned());
-            let a = rng.boundary(&text);
+            let a = boundary(&mut rng, &text);
             let mut s = text[..a].to_owned();
-            for _ in 0..rng.below(4) + 1 {
-                s.push_str(SNIPPETS[rng.below(SNIPPETS.len())]);
+            for _ in 0..rng.usize(..4) + 1 {
+                s.push_str(SNIPPETS[rng.usize(..SNIPPETS.len())]);
             }
-            let b = rng.boundary(&text).max(a);
+            let b = boundary(&mut rng, &text).max(a);
             let b = (a..=b)
                 .rev()
                 .find(|&i| text.is_char_boundary(i))
@@ -815,7 +795,7 @@ fn nothing_panics_on_truncated_and_mutated_fixtures() {
     }
 }
 
-fn exercise(s: &str, rng: &mut Rng) {
+fn exercise(s: &str, rng: &mut fastrand::Rng) {
     let tokens = tokenize(s);
     assert_token_invariants(s, &tokens);
     let wf = well_formedness_error(s);
@@ -825,12 +805,12 @@ fn exercise(s: &str, rng: &mut Rng) {
     let pretty = pretty_print(s);
     assert_eq!(pretty.is_ok(), wf.is_none(), "{s:?}");
     for _ in 0..6 {
-        let at = rng.below(s.len() + 2);
+        let at = rng.usize(..s.len() + 2);
         let ctx = cursor_context(s, at);
         assert!(ctx.parent_path().len() <= ctx.path.len());
     }
     let mut buf = TokenBuffer::new(s);
-    let at = rng.boundary(s);
+    let at = boundary(rng, s);
     let new_text = format!("{}<!--{}", &s[..at], &s[at..]);
     buf.edit(&new_text, at..at, 4);
     assert_eq!(buf.tokens(), tokenize(&new_text).as_slice());

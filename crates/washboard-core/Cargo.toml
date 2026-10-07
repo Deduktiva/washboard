@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.23.1"
+jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 libxml2-sys.workspace = true
 quick-xml = "0.42.0"
 roxmltree = "0.21.1"
@@ -19,6 +20,7 @@ ureq = { version = "3.4.2", default-features = false, features = ["native-tls"] 
 uuid = { version = "1.27.0", features = ["v4"] }
 
 [dev-dependencies]
+fastrand = "2.5.0"
 rcgen = "0.14.10"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 tempfile = "3.27.0"
