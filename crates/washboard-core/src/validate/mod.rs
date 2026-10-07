@@ -6,4 +6,4 @@
 pub mod request;
 pub mod xsd;
 
-pub use request::{Validation, validate_request};
+pub use request::{RequestSchema, Validation, validate_request};

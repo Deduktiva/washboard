@@ -8,8 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use washboard_core::diag::Severity;
-use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::validate::{self, Validation};
+use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::{wsdl, xml};
 
 fn fixtures() -> PathBuf {
@@ -51,7 +50,7 @@ fn check_project(dir: &str, entry: &str, extras: &[&str]) {
         "{dir}: import check failed: {:#?}",
         loaded.check
     );
-    let schema = CompiledSchema::compile(&loaded.bundle)
+    let schema = RequestSchema::compile(&loaded.bundle)
         .unwrap_or_else(|d| panic!("{dir}: bundle does not compile: {d:#?}"));
 
     let mut checked = 0;

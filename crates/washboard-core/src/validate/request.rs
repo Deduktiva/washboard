@@ -1,26 +1,21 @@
 //! The request validation pipeline (PLAN §4 "Validation semantics").
 //!
-//! [`validate_request`] runs the six steps in order and stops as soon as a step makes the next
-//! one meaningless: well-formedness → SOAP 1.1 envelope → operation dispatch per `Body` child
-//! → XSD validation of the body and declared header blocks. Everything it reports carries a
-//! position in the *request file*, so the editor can underline it and the issues bar can jump
-//! to it.
+//! [`validate_request`] runs well-formedness → SOAP 1.1 root → dispatch of every `Body` child →
+//! **one** libxml2 pass over the whole document, and stops as soon as a step makes the next one
+//! meaningless. Everything it reports carries a position in the request text itself.
 //!
-//! # Blocks
-//!
-//! libxml2 validates a document against a global element declaration, and neither the envelope
-//! nor the `Body` is in the project schema. Each block (a `Body` child, or a header block the
-//! binding declares) is therefore cut out as a standalone document: the text before it is
-//! replaced by newlines and spaces so that every line and column still matches the request
-//! file, and the namespace declarations it inherited from its ancestors are added to its start
-//! tag. Columns on the start tag's own line shift by the length of those declarations; element
-//! positions do not, because they point at the `<`.
+//! The libxml2 pass runs against a [`RequestSchema`]: the project's bundle plus a shipped SOAP
+//! 1.1 envelope schema whose `Header` and `Body` hold lax wildcards. The envelope's shape is
+//! checked by that schema, every header or body block the project schema declares globally is
+//! validated fully, and blocks it does not know (WS-Security and friends) are left alone. No
+//! block is cut out of the document, so there is nothing to re-declare and no line mapping
+//! beyond the start-tag adjustment in [`super::xsd`].
 
 use roxmltree::Node;
 
 use crate::diag::{DiagSource, Diagnostic, Severity, TextPos, pos_at_byte};
-use crate::model::{OperationRef, QName};
-use crate::soap::SOAP11_ENV_NS;
+use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
+use crate::soap::{SOAP11_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
 
@@ -29,10 +24,89 @@ use super::xsd::CompiledSchema;
 /// SOAP 1.2 envelope namespace. Only recognized to give a specific error (PLAN §1).
 const SOAP12_ENV_NS: &str = "http://www.w3.org/2003/05/soap-envelope";
 
+/// The SOAP 1.1 envelope schema shipped with washboard (never fetched).
+const ENVELOPE_XSD: &str = include_str!("soap-envelope-1.1.xsd");
+/// Bundle URI of [`ENVELOPE_XSD`].
+pub const ENVELOPE_URI: &str = "washboard:/soap/envelope-1.1.xsd";
+/// Bundle URI and namespace of the generated root importing the project root and the envelope.
+pub const REQUEST_ROOT_URI: &str = "washboard:/request-root.xsd";
+const REQUEST_ROOT_NS: &str = "urn:washboard:request-root";
+
+/// The project's schema plus the SOAP 1.1 envelope, compiled once per project (in the app, in
+/// the background on open) and reused for every request.
+#[derive(Debug)]
+pub struct RequestSchema {
+    schema: CompiledSchema,
+}
+
+impl RequestSchema {
+    /// Compiles [`request_bundle`]`(bundle)`. Errors are [`CompiledSchema::compile`]'s.
+    pub fn compile(bundle: &SchemaBundle) -> Result<Self, Vec<Diagnostic>> {
+        CompiledSchema::compile(&request_bundle(bundle)).map(|schema| Self { schema })
+    }
+
+    /// Compile warnings, for the import report.
+    pub fn warnings(&self) -> &[Diagnostic] {
+        self.schema.warnings()
+    }
+}
+
+/// `bundle` with the SOAP 1.1 envelope schema added and a new root importing both.
+///
+/// libxml2 imports a namespace only once, so a project that brings its own copy of the
+/// envelope namespace (some WSDLs import it for faults) keeps it, and ours is not added.
+pub fn request_bundle(bundle: &SchemaBundle) -> SchemaBundle {
+    let mut out = bundle.clone();
+    let own_envelope = bundle.docs.iter().any(|d| d.target_ns == SOAP11_ENV_NS);
+    if !own_envelope {
+        out.docs.push(SchemaDoc {
+            uri: ENVELOPE_URI.to_owned(),
+            target_ns: SOAP11_ENV_NS.to_owned(),
+            origin: SchemaOrigin::Generated,
+            text: ENVELOPE_XSD.to_owned(),
+        });
+    }
+    let root_ns = bundle
+        .get(&bundle.root)
+        .map(|d| d.target_ns.clone())
+        .unwrap_or_default();
+    let mut root = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <xs:schema xmlns:xs=\"{XSD_NS}\" targetNamespace=\"{REQUEST_ROOT_NS}\">\n"
+    );
+    let import = |ns: &str, uri: &str| match ns {
+        "" => format!(
+            "  <xs:import schemaLocation=\"{}\"/>\n",
+            xml::escape_attr(uri)
+        ),
+        ns => format!(
+            "  <xs:import namespace=\"{}\" schemaLocation=\"{}\"/>\n",
+            xml::escape_attr(ns),
+            xml::escape_attr(uri)
+        ),
+    };
+    if !bundle.root.is_empty() {
+        root.push_str(&import(&root_ns, &bundle.root));
+    }
+    if !own_envelope {
+        root.push_str(&import(SOAP11_ENV_NS, ENVELOPE_URI));
+    }
+    root.push_str("</xs:schema>\n");
+    out.docs.push(SchemaDoc {
+        uri: REQUEST_ROOT_URI.to_owned(),
+        target_ns: REQUEST_ROOT_NS.to_owned(),
+        origin: SchemaOrigin::Generated,
+        text: root,
+    });
+    out.root = REQUEST_ROOT_URI.to_owned();
+    out
+}
+
 /// What validating one request found.
 #[derive(Debug, Clone, Default)]
 pub struct Validation {
-    /// In pipeline order: well-formedness, envelope, dispatch, then schema errors per block.
+    /// In pipeline order: well-formedness or root, dispatch, then the schema pass, then
+    /// warnings about missing headers.
     pub diagnostics: Vec<Diagnostic>,
     /// The operation each `Body` child dispatched to, in document order. Empty when the
     /// request did not get as far as dispatch, or when nothing matched.
@@ -58,20 +132,20 @@ impl Validation {
     }
 }
 
-/// Validates one request against the project's WSDL and compiled schema.
+/// Validates one request against the project's WSDL and its [`RequestSchema`].
 ///
 /// `text` is the decoded request file (see [`crate::xml::decode`]). `hint` is the operation
 /// the request was created for; it only picks between operations that share a body element
 /// (one portType bound twice) and is otherwise ignored, because the body decides.
 pub fn validate_request(
     wsdl: &Wsdl,
-    schema: &CompiledSchema,
+    schema: &RequestSchema,
     text: &str,
     hint: Option<&OperationRef>,
 ) -> Validation {
     let mut out = Validation::default();
 
-    // 1. Well-formedness. Everything below assumes a tree, so this is fatal.
+    // 1. Well-formedness: the same libxml2 parse the editor uses. Fatal.
     if let Err(d) = xml::check_well_formed(text) {
         out.diagnostics.push(d);
         return out;
@@ -79,8 +153,8 @@ pub fn validate_request(
     let doc = match roxmltree::Document::parse(text) {
         Ok(doc) => doc,
         Err(e) => {
-            // The checker above accepts a few documents roxmltree rejects (very deep nesting,
-            // enormous entity expansion). Report its own message rather than nothing.
+            // libxml2 accepts a few documents roxmltree rejects (very deep nesting, large
+            // entity expansion). Without a tree there is no dispatch, so report it.
             let pos = TextPos {
                 line: e.pos().row,
                 column: e.pos().col,
@@ -88,98 +162,24 @@ pub fn validate_request(
             out.diagnostics.push(Diagnostic::error(
                 DiagSource::WellFormedness,
                 Some(pos),
-                format!("not well-formed: {e}"),
+                format!("cannot be read as a SOAP request: {e}"),
             ));
             return out;
         }
     };
 
-    // 2./3. A SOAP 1.1 envelope with a `Body`, and nothing unexpected around it.
+    // 2. A SOAP 1.1 envelope. Anything else would only produce "no matching global
+    // declaration" from libxml2, so it gets its own message and stops here.
     let env = doc.root_element();
-    let Some(body) = envelope(&mut out, text, env) else {
-        return out;
-    };
-
-    // 4. Every `Body` child is an operation's input.
-    let mut blocks: Vec<Node<'_, '_>> = Vec::new();
-    for child in body.children().filter(Node::is_element) {
-        let name = qname(child);
-        match wsdl.dispatch(&name, hint) {
-            Some(d) => {
-                out.dispatched.push(d.clone());
-                blocks.push(child);
-            }
-            None => out.diagnostics.push(Diagnostic::error(
-                DiagSource::Soap,
-                Some(pos_of(text, child)),
-                match wsdl.dispatch_all(&name).is_empty() {
-                    true => format!("no operation of this WSDL takes {name} as its request"),
-                    // Dispatch only indexes supported operations, so this cannot happen
-                    // today; kept so the message stays right if that changes.
-                    false => format!("no supported operation takes {name} as its request"),
-                },
-            )),
-        }
-    }
-    if out.dispatched.is_empty() && out.diagnostics.is_empty() {
-        out.diagnostics.push(Diagnostic::error(
-            DiagSource::Soap,
-            Some(pos_of(text, body)),
-            "the SOAP Body is empty; it must contain the operation's request element",
-        ));
-    }
-
-    // 6. Header blocks the binding declares. Undeclared ones (WS-Security and friends) are
-    // not in the project schema, so they are reported but not validated.
-    let declared: Vec<&QName> = out
-        .dispatched
-        .iter()
-        .flat_map(|d| d.header_elements.iter())
-        .collect();
-    let header = env
-        .children()
-        .filter(Node::is_element)
-        .find(|n| in_env(n, "Header"));
-    for block in header
-        .iter()
-        .flat_map(|h| h.children().filter(Node::is_element))
-    {
-        let name = qname(block);
-        if declared.iter().any(|d| **d == name) {
-            blocks.push(block);
-        } else {
-            out.diagnostics.push(Diagnostic::warning(
-                DiagSource::Soap,
-                Some(pos_of(text, block)),
-                format!("{name} is not a header of this operation; it is not validated"),
-            ));
-        }
-    }
-
-    // 5./6. The blocks themselves, against the compiled project schema.
-    for block in blocks {
-        out.diagnostics
-            .extend(schema.validate(standalone(text, block).as_bytes()));
-    }
-    out
-}
-
-/// Checks the envelope's shape and returns its `Body` (PLAN §4 steps 2 and 3).
-///
-/// This is the SOAP 1.1 envelope schema's content model, checked here rather than by libxml2:
-/// the messages name what is wrong instead of reading like a content-model violation, and the
-/// positions come from the request text directly. Like that schema, it allows elements from
-/// other namespaces after the `Body`.
-fn envelope<'a, 'i>(out: &mut Validation, text: &str, env: Node<'a, 'i>) -> Option<Node<'a, 'i>> {
-    let pos = Some(pos_of(text, env));
     let name = qname(env);
+    let pos = Some(pos_of(text, env));
     if name.ns == SOAP12_ENV_NS {
         out.diagnostics.push(Diagnostic::error(
             DiagSource::Soap,
             pos,
             "this is a SOAP 1.2 envelope; washboard supports SOAP 1.1 only",
         ));
-        return None;
+        return out;
     }
     if name.ns != SOAP11_ENV_NS || name.local != "Envelope" {
         out.diagnostics.push(Diagnostic::error(
@@ -187,72 +187,67 @@ fn envelope<'a, 'i>(out: &mut Validation, text: &str, env: Node<'a, 'i>) -> Opti
             pos,
             format!("the root element is {name}, not a SOAP 1.1 Envelope"),
         ));
-        return None;
+        return out;
     }
 
-    let mut header = None;
-    let mut body = None;
-    for child in env.children().filter(Node::is_element) {
-        let at = Some(pos_of(text, child));
-        let name = qname(child);
-        if name.ns != SOAP11_ENV_NS {
-            if body.is_none() {
-                out.diagnostics.push(Diagnostic::error(
+    // 3. Every `Body` child is an operation's input. The envelope schema allows anything in
+    // the `Body`, so this is the only check that catches an unknown request element. A
+    // missing `Body` is left to the schema pass.
+    let body = env
+        .children()
+        .filter(Node::is_element)
+        .find(|n| in_env(n, "Body"));
+    if let Some(body) = body {
+        for child in body.children().filter(Node::is_element) {
+            let name = qname(child);
+            match wsdl.dispatch(&name, hint) {
+                Some(d) => out.dispatched.push(d.clone()),
+                None => out.diagnostics.push(Diagnostic::error(
                     DiagSource::Soap,
-                    at,
-                    format!("{name} is not allowed before the SOAP Body"),
-                ));
-            }
-            continue;
-        }
-        match name.local.as_str() {
-            "Header" if body.is_some() => out.diagnostics.push(Diagnostic::error(
-                DiagSource::Soap,
-                at,
-                "the SOAP Header must come before the Body",
-            )),
-            "Header" if header.is_some() => out.diagnostics.push(Diagnostic::error(
-                DiagSource::Soap,
-                at,
-                "the envelope has more than one SOAP Header",
-            )),
-            "Header" => header = Some(child),
-            "Body" if body.is_some() => out.diagnostics.push(Diagnostic::error(
-                DiagSource::Soap,
-                at,
-                "the envelope has more than one SOAP Body",
-            )),
-            "Body" => body = Some(child),
-            _ => out.diagnostics.push(Diagnostic::error(
-                DiagSource::Soap,
-                at,
-                format!("{name} is not allowed in a SOAP Envelope"),
-            )),
-        }
-    }
-    if let Some(h) = header {
-        for block in h.children().filter(Node::is_element) {
-            if block.tag_name().namespace().is_none() {
-                out.diagnostics.push(Diagnostic::error(
-                    DiagSource::Soap,
-                    Some(pos_of(text, block)),
-                    format!(
-                        "the header block {} has no namespace; SOAP 1.1 header blocks must be \
-                         namespace-qualified",
-                        block.tag_name().name()
-                    ),
-                ));
+                    Some(pos_of(text, child)),
+                    format!("no operation of this WSDL takes {name} as its request"),
+                )),
             }
         }
+        if !body.children().any(|n| n.is_element()) {
+            out.diagnostics.push(Diagnostic::error(
+                DiagSource::Soap,
+                Some(pos_of(text, body)),
+                "the SOAP Body is empty; it must contain the operation's request element",
+            ));
+        }
     }
-    if body.is_none() {
-        out.diagnostics.push(Diagnostic::error(
-            DiagSource::Soap,
-            pos,
-            "the envelope has no SOAP Body",
-        ));
+
+    // 4. One libxml2 pass: envelope shape, headers and body together.
+    out.diagnostics.extend(schema.schema.validate_text(text));
+
+    // 5. Headers the binding declares but the request lacks. SOAP makes no header
+    // mandatory by itself, so this only warns.
+    let present: Vec<QName> = env
+        .children()
+        .filter(Node::is_element)
+        .filter(|n| in_env(n, "Header"))
+        .flat_map(|h| h.children().filter(Node::is_element))
+        .map(qname)
+        .collect();
+    let mut missing: Vec<&QName> = Vec::new();
+    for h in out.dispatched.iter().flat_map(|d| &d.header_elements) {
+        if !present.contains(h) && !missing.contains(&h) {
+            missing.push(h);
+        }
     }
-    body
+    let warnings: Vec<Diagnostic> = missing
+        .into_iter()
+        .map(|h| {
+            Diagnostic::warning(
+                DiagSource::Soap,
+                pos,
+                format!("the operation declares the header {h}, but the request has none"),
+            )
+        })
+        .collect();
+    out.diagnostics.extend(warnings);
+    out
 }
 
 fn in_env(n: &Node<'_, '_>, local: &str) -> bool {
@@ -266,75 +261,9 @@ fn qname(n: Node<'_, '_>) -> QName {
     )
 }
 
-/// Position of an element's start tag in the request file.
+/// Position of an element's start tag in the request text.
 fn pos_of(text: &str, n: Node<'_, '_>) -> TextPos {
     pos_at_byte(text, n.range().start)
-}
-
-/// Cuts `block` out as a standalone document with its line and column numbers preserved and
-/// the namespaces it inherited declared on its start tag (module docs).
-fn standalone(text: &str, block: Node<'_, '_>) -> String {
-    let range = block.range();
-    let before = &text[..range.start];
-    let line = before.matches('\n').count();
-    let column = before
-        .rsplit('\n')
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .count();
-
-    let elem = &text[range];
-    let name_end = elem
-        .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
-        .unwrap_or(elem.len());
-    let mut decls = String::new();
-    for (prefix, uri) in inherited_namespaces(block, &elem[..name_end], &elem[name_end..]) {
-        match prefix {
-            Some(p) => decls.push_str(&format!(" xmlns:{p}=\"{}\"", xml::escape_attr(&uri))),
-            None => decls.push_str(&format!(" xmlns=\"{}\"", xml::escape_attr(&uri))),
-        }
-    }
-
-    let mut out = String::with_capacity(line + column + elem.len() + decls.len());
-    out.extend(std::iter::repeat_n('\n', line));
-    out.extend(std::iter::repeat_n(' ', column));
-    out.push_str(&elem[..name_end]);
-    out.push_str(&decls);
-    out.push_str(&elem[name_end..]);
-    out
-}
-
-/// In-scope namespaces of `block` that its own start tag does not declare. Re-declaring one it
-/// declares itself would be a duplicate attribute, so the start tag's `xmlns` attributes are
-/// scanned (roxmltree does not expose them as attributes).
-fn inherited_namespaces(
-    block: Node<'_, '_>,
-    name: &str,
-    rest: &str,
-) -> Vec<(Option<String>, String)> {
-    let tag = format!("{name}{rest}");
-    let mut own: Vec<Option<String>> = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(&tag);
-    let mut buf = Vec::new();
-    // The slice is one well-formed element, so the first event is its start tag.
-    if let Ok(quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)) =
-        reader.read_event_into(&mut buf)
-    {
-        for attr in e.attributes().flatten() {
-            let key: &str = attr.key.as_ref();
-            if key == "xmlns" {
-                own.push(None);
-            } else if let Some(p) = key.strip_prefix("xmlns:") {
-                own.push(Some(p.to_owned()));
-            }
-        }
-    }
-    block
-        .namespaces()
-        .map(|ns| (ns.name().map(str::to_owned), ns.uri().to_owned()))
-        .filter(|(prefix, _)| !own.contains(prefix))
-        .collect()
 }
 
 #[cfg(test)]
@@ -344,7 +273,7 @@ mod tests {
     use super::*;
     use crate::wsdl::{self, Sources};
 
-    fn customer() -> (Wsdl, CompiledSchema) {
+    fn customer() -> (Wsdl, RequestSchema) {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/customer");
         let extra: Vec<PathBuf> = ["CustomerBinding.wsdl", "xsd"]
             .iter()
@@ -353,7 +282,7 @@ mod tests {
         let w = wsdl::load(
             &Sources::from_disk(&root.join("CustomerService.wsdl"), &extra).expect("sources"),
         );
-        let s = CompiledSchema::compile(&w.bundle).expect("fixture bundle compiles");
+        let s = RequestSchema::compile(&w.bundle).expect("fixture bundle compiles");
         (w, s)
     }
 
@@ -370,9 +299,20 @@ mod tests {
             .collect()
     }
 
+    fn warnings(v: &Validation) -> Vec<String> {
+        v.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .map(ToString::to_string)
+            .collect()
+    }
+
     const GET_CUSTOMER: &str = concat!(
         "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n",
         "                  xmlns:msg=\"urn:example:customer:messages\">\n",
+        "  <soapenv:Header>\n",
+        "    <msg:RequestContext><msg:correlationId>c</msg:correlationId></msg:RequestContext>\n",
+        "  </soapenv:Header>\n",
         "  <soapenv:Body>\n",
         "    <msg:GetCustomer><msg:customerId>1</msg:customerId></msg:GetCustomer>\n",
         "  </soapenv:Body>\n",
@@ -382,7 +322,7 @@ mod tests {
     #[test]
     fn dispatches_and_reports_the_soap_action() {
         let v = run(GET_CUSTOMER);
-        assert!(!v.has_errors(), "{:#?}", v.diagnostics);
+        assert!(v.diagnostics.is_empty(), "{:#?}", v.diagnostics);
         assert_eq!(
             v.operation().map(|o| o.operation.as_str()),
             Some("GetCustomer")
@@ -406,10 +346,11 @@ mod tests {
         let v = run(
             "<e:Envelope xmlns:e=\"http://www.w3.org/2003/05/soap-envelope\"><e:Body/></e:Envelope>",
         );
-        assert_eq!(errors(&v).len(), 1);
+        assert_eq!(errors(&v).len(), 1, "{:#?}", errors(&v));
         assert!(errors(&v)[0].contains("SOAP 1.2"), "{:#?}", errors(&v));
 
         let v = run("<msg:GetCustomer xmlns:msg=\"urn:example:customer:messages\"/>");
+        assert_eq!(errors(&v).len(), 1, "{:#?}", errors(&v));
         assert!(
             errors(&v)[0].contains("not a SOAP 1.1 Envelope"),
             "{:#?}",
@@ -417,72 +358,93 @@ mod tests {
         );
     }
 
+    /// The envelope's shape comes from the shipped envelope schema, in the same pass.
     #[test]
-    fn envelope_shape_is_checked() {
+    fn envelope_shape_is_checked_by_the_envelope_schema() {
         let env = |inner: &str| {
             format!(
-                "<e:Envelope xmlns:e=\"http://schemas.xmlsoap.org/soap/envelope/\">{inner}</e:Envelope>"
+                "<e:Envelope xmlns:e=\"http://schemas.xmlsoap.org/soap/envelope/\" \
+                 xmlns:msg=\"urn:example:customer:messages\">{inner}</e:Envelope>"
             )
         };
+        let body = "<e:Body><msg:GetCustomer><msg:customerId>1</msg:customerId>\
+                    </msg:GetCustomer></e:Body>";
         let cases = [
-            ("<e:Header/>", "no SOAP Body"),
-            ("<e:Body/><e:Header/>", "must come before the Body"),
-            ("<e:Body/><e:Body/>", "more than one SOAP Body"),
-            ("<e:Fault/><e:Body/>", "not allowed in a SOAP Envelope"),
-            ("<e:Body/>", "Body is empty"),
-            (
-                "<e:Header><h/></e:Header><e:Body/>",
-                "must be namespace-qualified",
-            ),
+            ("<e:Header/>".to_owned(), "Body"),
+            (format!("{body}<e:Header/>"), "Header"),
+            (format!("{body}{body}"), "Body"),
+            (format!("<e:Fault/>{body}"), "Fault"),
+            (format!("<e:Header><h/></e:Header>{body}"), "h"),
         ];
         for (inner, needle) in cases {
-            let v = run(&env(inner));
+            let v = run(&env(&inner));
+            let e = errors(&v);
             assert!(
-                errors(&v).iter().any(|e| e.contains(needle)),
-                "{inner}: expected {needle:?}, got {:#?}",
-                errors(&v)
+                e.iter().any(|m| m.contains(needle)),
+                "{inner}: expected an error naming {needle:?}, got {e:#?}"
             );
         }
-    }
-
-    #[test]
-    fn undeclared_header_blocks_are_a_warning_only() {
-        let text = GET_CUSTOMER.replace(
-            "  <soapenv:Body>",
-            "  <soapenv:Header><wsse:Security xmlns:wsse=\"urn:example:wsse\"/></soapenv:Header>\n  <soapenv:Body>",
-        );
-        let v = run(&text);
-        assert!(!v.has_errors(), "{:#?}", v.diagnostics);
-        let w: Vec<_> = v
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Warning)
-            .collect();
-        assert_eq!(w.len(), 1, "{:#?}", v.diagnostics);
+        let v = run(&env("<e:Body/>"));
         assert!(
-            w[0].message.contains("not a header of this operation"),
-            "{w:#?}"
+            errors(&v).iter().any(|e| e.contains("Body is empty")),
+            "{:#?}",
+            errors(&v)
         );
     }
 
     #[test]
-    fn declared_header_blocks_are_validated() {
+    fn unknown_header_blocks_are_left_alone() {
         let text = GET_CUSTOMER.replace(
-            "  <soapenv:Body>",
-            "  <soapenv:Header>\n    <msg:RequestContext>\n      <msg:nope/>\n    </msg:RequestContext>\n  </soapenv:Header>\n  <soapenv:Body>",
+            "  </soapenv:Header>",
+            "    <wsse:Security xmlns:wsse=\"urn:example:wsse\" soapenv:mustUnderstand=\"1\">\
+             <wsse:Anything/></wsse:Security>\n  </soapenv:Header>",
         );
         let v = run(&text);
-        let e = errors(&v);
+        assert!(v.diagnostics.is_empty(), "{:#?}", v.diagnostics);
+    }
+
+    #[test]
+    fn soap_attributes_are_checked() {
+        let text = GET_CUSTOMER.replace(
+            "  </soapenv:Header>",
+            "    <wsse:Security xmlns:wsse=\"urn:example:wsse\" soapenv:mustUnderstand=\"yes\"/>\n  </soapenv:Header>",
+        );
+        let e = errors(&run(&text));
+        assert!(
+            e.iter()
+                .any(|m| m.starts_with("5:5:") && m.contains("mustUnderstand")),
+            "{e:#?}"
+        );
+    }
+
+    #[test]
+    fn declared_header_blocks_are_validated_in_place() {
+        let text = GET_CUSTOMER.replace(
+            "<msg:RequestContext><msg:correlationId>c</msg:correlationId></msg:RequestContext>",
+            "<msg:RequestContext>\n      <msg:nope/>\n    </msg:RequestContext>",
+        );
+        let e = errors(&run(&text));
         assert!(
             e.iter().any(|m| m.starts_with("5:7:")),
             "expected an error at 5:7: {e:#?}"
         );
     }
 
-    /// Cutting a block out keeps its line *and* column, and does not duplicate a namespace
-    /// declaration the block makes itself.
     #[test]
-    fn block_positions_and_namespaces_survive_the_cut() {
+    fn missing_declared_header_is_a_warning() {
+        let start = GET_CUSTOMER.find("  <soapenv:Header>").expect("header");
+        let end = GET_CUSTOMER.find("  <soapenv:Body>").expect("body");
+        let text = format!("{}{}", &GET_CUSTOMER[..start], &GET_CUSTOMER[end..]);
+        let v = run(&text);
+        assert!(!v.has_errors(), "{:#?}", v.diagnostics);
+        let w = warnings(&v);
+        assert_eq!(w.len(), 1, "{w:#?}");
+        assert!(w[0].contains("RequestContext"), "{w:#?}");
+    }
+
+    /// Positions refer to the request text, columns included, with no cutting out.
+    #[test]
+    fn positions_are_in_the_request_text() {
         let text = concat!(
             "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n",
             "                  xmlns:cus=\"urn:example:customer\">\n",
@@ -493,23 +455,41 @@ mod tests {
             "  </soapenv:Body>\n",
             "</soapenv:Envelope>\n",
         );
-        let v = run(text);
-        let e = errors(&v);
-        assert!(!e.is_empty(), "the body is invalid");
-        // Line 5, and the column of `<cus:nope/>`; nothing about a duplicate xmlns:msg.
+        let e = errors(&run(text));
         assert!(
             e.iter().any(|m| m.starts_with("5:41:")),
             "expected an error at 5:41 (the `<` of `<cus:nope/>`), got {e:#?}"
         );
-        assert!(!e.iter().any(|m| m.contains("well-formed")), "{e:#?}");
     }
 
     #[test]
     fn unknown_body_element_is_an_error_with_a_position() {
         let v = run(&GET_CUSTOMER.replace("GetCustomer", "DeleteCustomer"));
         let e = errors(&v);
-        assert_eq!(e.len(), 1, "{e:#?}");
-        assert!(e[0].starts_with("4:5: error: no operation"), "{e:#?}");
+        assert!(
+            e.iter().any(|m| m.starts_with("7:5: error: no operation")),
+            "{e:#?}"
+        );
         assert!(v.operation().is_none());
+    }
+
+    #[test]
+    fn request_bundle_keeps_a_project_supplied_envelope_schema() {
+        let mut b = SchemaBundle {
+            docs: Vec::new(),
+            root: String::new(),
+        };
+        assert!(request_bundle(&b).get(ENVELOPE_URI).is_some());
+        b.docs.push(SchemaDoc {
+            uri: "washboard:/wsdl/soap.xsd".into(),
+            target_ns: SOAP11_ENV_NS.into(),
+            origin: SchemaOrigin::File {
+                path: "soap.xsd".into(),
+            },
+            text: String::new(),
+        });
+        let r = request_bundle(&b);
+        assert!(r.get(ENVELOPE_URI).is_none());
+        assert_eq!(r.root, REQUEST_ROOT_URI);
     }
 }

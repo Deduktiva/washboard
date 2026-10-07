@@ -7,8 +7,7 @@ use std::process::ExitCode;
 use anyhow::bail;
 use washboard_core::diag::Severity;
 use washboard_core::model::RequestMeta;
-use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::validate::{self, Validation};
+use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::wsdl::Wsdl;
 
 use crate::support;
@@ -20,7 +19,7 @@ use crate::support;
 /// The schema is compiled per call: the CLI is one command per process, where the app
 /// compiles once in the background when the project opens.
 pub fn check(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> anyhow::Result<Validation> {
-    let schema = match CompiledSchema::compile(&wsdl.bundle) {
+    let schema = match RequestSchema::compile(&wsdl.bundle) {
         Ok(s) => s,
         Err(diagnostics) => {
             for d in &diagnostics {
