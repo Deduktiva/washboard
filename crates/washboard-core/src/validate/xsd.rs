@@ -55,7 +55,7 @@ use std::sync::Once;
 
 use libxml2_sys as ffi;
 
-use crate::diag::{DiagSource, Diagnostic, Severity, TextPos};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, Severity, TextPos};
 use crate::model::SchemaBundle;
 
 /// Base URI given to every bundle document; see the module docs.
@@ -810,137 +810,19 @@ struct StartTag {
     local: String,
 }
 
-/// Lists all start tags (including empty-element tags) in document order.
-///
-/// Assumes well-formed input; on anything else it returns a best-effort list.
+/// Lists all start tags (including empty-element tags) in document order, with the positions
+/// `map_pos` needs. Uses the editor's tokenizer, so comments, CDATA, PIs and the DOCTYPE are
+/// skipped the same way everywhere.
 fn scan_start_tags(text: &str) -> Vec<StartTag> {
-    let mut c = Cursor {
-        b: text.as_bytes(),
-        i: 0,
-        line: 1,
-        column: 1,
-    };
-    let mut out = Vec::new();
-    while c.i < c.b.len() {
-        if c.b[c.i] != b'<' {
-            c.bump();
-        } else if c.at(b"<!--") {
-            c.skip_past(b"-->");
-        } else if c.at(b"<![CDATA[") {
-            c.skip_past(b"]]>");
-        } else if c.at(b"<?") {
-            c.skip_past(b"?>");
-        } else if c.at(b"<!") {
-            c.skip_declaration();
-        } else if c.at(b"</") {
-            c.skip_past(b">");
-        } else {
-            let pos = TextPos {
-                line: c.line,
-                column: c.column,
-            };
-            c.bump();
-            let start = c.i;
-            while c.i < c.b.len() && !matches!(c.b[c.i], b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>')
-            {
-                c.bump();
-            }
-            let name = &text[start..c.i];
-            let local = name.rsplit(':').next().unwrap_or(name).to_owned();
-            c.skip_tag_rest();
-            out.push(StartTag {
-                pos,
-                end_line: c.line,
-                local,
-            });
-            c.bump(); // the '>'
-        }
-    }
-    out
-}
-
-struct Cursor<'a> {
-    b: &'a [u8],
-    i: usize,
-    line: u32,
-    column: u32,
-}
-
-impl Cursor<'_> {
-    fn at(&self, s: &[u8]) -> bool {
-        self.b[self.i..].starts_with(s)
-    }
-
-    /// Advances one byte, counting lines and chars (not UTF-8 continuation bytes).
-    fn bump(&mut self) {
-        let Some(&b) = self.b.get(self.i) else {
-            return;
-        };
-        self.i += 1;
-        if b == b'\n' {
-            self.line += 1;
-            self.column = 1;
-        } else if b & 0xC0 != 0x80 {
-            self.column += 1;
-        }
-    }
-
-    fn skip_past(&mut self, end: &[u8]) {
-        while self.i < self.b.len() && !self.at(end) {
-            self.bump();
-        }
-        for _ in 0..end.len() {
-            self.bump();
-        }
-    }
-
-    fn skip_quoted(&mut self) {
-        let q = self.b[self.i];
-        self.bump();
-        while self.i < self.b.len() && self.b[self.i] != q {
-            self.bump();
-        }
-        self.bump();
-    }
-
-    /// Stops on the tag's closing `>`.
-    fn skip_tag_rest(&mut self) {
-        while self.i < self.b.len() {
-            match self.b[self.i] {
-                b'"' | b'\'' => self.skip_quoted(),
-                b'>' => return,
-                _ => self.bump(),
-            }
-        }
-    }
-
-    /// `<!DOCTYPE …>` including an internal subset.
-    fn skip_declaration(&mut self) {
-        let mut depth = 0u32;
-        self.bump();
-        while self.i < self.b.len() {
-            if self.at(b"<!--") {
-                self.skip_past(b"-->");
-                continue;
-            }
-            match self.b[self.i] {
-                b'"' | b'\'' => self.skip_quoted(),
-                b'[' => {
-                    depth += 1;
-                    self.bump();
-                }
-                b']' => {
-                    depth = depth.saturating_sub(1);
-                    self.bump();
-                }
-                b'>' if depth == 0 => {
-                    self.bump();
-                    return;
-                }
-                _ => self.bump(),
-            }
-        }
-    }
+    let lines = LineIndex::new(text);
+    crate::xml::start_tags(text)
+        .into_iter()
+        .map(|t| StartTag {
+            pos: lines.pos(t.start),
+            end_line: lines.pos(t.end.saturating_sub(1)).line,
+            local: t.local(text).to_owned(),
+        })
+        .collect()
 }
 
 /// Start-tag position for an error, if it can be determined.

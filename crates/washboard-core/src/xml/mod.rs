@@ -22,6 +22,7 @@ mod escape;
 mod lex;
 mod names;
 mod pretty;
+mod start_tags;
 mod tokens;
 pub mod utf16;
 mod wellformed;
@@ -31,6 +32,7 @@ pub use encoding::{DecodeError, Decoded, Encoding, decode, encode_utf8};
 pub use escape::{escape_attr, escape_text};
 pub use names::NamespaceMap;
 pub use pretty::pretty_print;
+pub use start_tags::{StartTag, start_tag_at, start_tags};
 pub use tokens::{RangeTokens, Token, TokenBuffer, TokenKind, tokenize, tokenize_range};
 pub use wellformed::{WellFormednessError, check_well_formed, well_formedness_error};
 

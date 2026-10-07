@@ -24,8 +24,9 @@ use crate::soap::XSD_NS;
 use super::defs::{Definitions, Direction, Operation, PartContent, Protocol, Style};
 use super::graph::{FileKind, Owner, RefKind, Walk, parse};
 use super::source::percent_encode_path;
-use super::text::{Edit, LineIndex, splice, start_tag, xml_decl_encoding};
-use crate::xml::escape_attr;
+use super::text::{Edit, splice, xml_decl_encoding};
+use crate::diag::LineIndex;
+use crate::xml::{escape_attr, start_tag_at};
 
 /// URI prefix of supplied files inside the bundle; the rest is the percent-encoded
 /// project-relative path.
@@ -398,10 +399,11 @@ fn extract_inline(
     let el = doc
         .descendants()
         .find(|n| n.is_element() && n.range() == range)?;
-    let tag = start_tag(src, range.start)?;
+    let tag = start_tag_at(src, range.start)?;
     let declared: HashSet<Option<&str>> = tag
         .attr_names
         .iter()
+        .map(|r| &src[r.clone()])
         .filter_map(|a| {
             if a == "xmlns" {
                 Some(None)
@@ -422,7 +424,7 @@ fn extract_inline(
     }
     if !decls.is_empty() {
         edits.push(Edit {
-            range: tag.name_end..tag.name_end,
+            range: tag.name.end..tag.name.end,
             text: decls,
         });
     }
