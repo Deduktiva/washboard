@@ -103,24 +103,6 @@ pub(crate) fn start_tag(text: &str, start: usize) -> Option<StartTag> {
     })
 }
 
-/// Escapes text for use inside a double- or single-quoted attribute value.
-pub(crate) fn escape_attr(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for c in value.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            '\n' => out.push_str("&#10;"),
-            '\r' => out.push_str("&#13;"),
-            '\t' => out.push_str("&#9;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// A replacement of `range` (possibly empty, i.e. an insertion) by `text`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Edit {
@@ -242,10 +224,5 @@ mod tests {
         assert_eq!(&t[r], "UTF-16");
         assert!(xml_decl_encoding("<?xml version='1.0'?><a encoding='x'/>").is_none());
         assert!(xml_decl_encoding("<a/>").is_none());
-    }
-
-    #[test]
-    fn escapes_attribute_values() {
-        assert_eq!(escape_attr("a&b<\"'"), "a&amp;b&lt;&quot;&apos;");
     }
 }

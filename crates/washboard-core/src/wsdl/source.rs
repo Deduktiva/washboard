@@ -3,10 +3,12 @@
 //! Paths are handled as `/`-separated strings, normalized lexically (no symlink resolution,
 //! no file system access), so the same code serves files on disk and files held in memory.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use thiserror::Error;
 
 /// One supplied WSDL or XSD file.
@@ -208,43 +210,25 @@ fn segments(path: &str) -> Vec<&str> {
     path.split('/').filter(|s| !s.is_empty()).collect()
 }
 
+/// Unreserved characters (RFC 3986) and `/` stay literal; everything else is escaped.
+const PATH_SAFE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~')
+    .remove(b'/');
+
 /// Decodes `%XX` escapes; invalid escapes and non-UTF-8 results are kept verbatim.
 pub(crate) fn percent_decode(s: &str) -> String {
-    if !s.contains('%') {
-        return s.to_owned();
-    }
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        if b[i] == b'%'
-            && let (Some(h), Some(l)) = (
-                b.get(i + 1).and_then(|c| (*c as char).to_digit(16)),
-                b.get(i + 2).and_then(|c| (*c as char).to_digit(16)),
-            )
-        {
-            out.push((h * 16 + l) as u8);
-            i += 3;
-            continue;
-        }
-        out.push(b[i]);
-        i += 1;
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_owned())
+    percent_decode_str(s)
+        .decode_utf8()
+        .map_or_else(|_| s.to_owned(), Cow::into_owned)
 }
 
 /// Percent-encodes everything but RFC 3986 unreserved characters and `/`, so the result is
 /// a canonical URI path that libxml2's URI handling leaves unchanged.
 pub(crate) fn percent_encode_path(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
+    utf8_percent_encode(s, PATH_SAFE).to_string()
 }
 
 /// A `schemaLocation` / `location` value, classified.

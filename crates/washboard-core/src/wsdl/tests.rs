@@ -1074,8 +1074,8 @@ fn sources_normalize_and_dedupe() {
 
 #[test]
 fn from_disk_collects_xsd_and_wsdl_skipping_hidden() {
-    let root = std::env::temp_dir().join(format!("washboard-wsdl-test-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let tmp = tempfile::TempDir::new().unwrap();
+    let root = tmp.path();
     std::fs::create_dir_all(root.join("x/sub")).unwrap();
     std::fs::create_dir_all(root.join("x/.previous")).unwrap();
     std::fs::write(root.join("S.wsdl"), wsdl("", "")).unwrap();
@@ -1095,7 +1095,6 @@ fn from_disk_collects_xsd_and_wsdl_skipping_hidden() {
     let dests: Vec<&str> = w.layout.iter().map(|l| l.dest.as_str()).collect();
     assert_eq!(dests, ["S.wsdl", "x/a.XSD", "x/sub/b.wsdl"]);
     assert!(Sources::from_disk(&root.join("missing.wsdl"), &[]).is_err());
-    std::fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]

@@ -18,6 +18,7 @@
 
 mod context;
 mod encoding;
+mod escape;
 mod lex;
 mod names;
 mod pretty;
@@ -27,6 +28,7 @@ mod wellformed;
 
 pub use context::{CursorContext, CursorLocation, PathElement, XsiType, cursor_context};
 pub use encoding::{DecodeError, Decoded, Encoding, decode, encode_utf8};
+pub use escape::{escape_attr, escape_text};
 pub use names::NamespaceMap;
 pub use pretty::pretty_print;
 pub use tokens::{RangeTokens, Token, TokenBuffer, TokenKind, tokenize, tokenize_range};

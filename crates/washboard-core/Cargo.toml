@@ -10,11 +10,13 @@ publish.workspace = true
 base64 = "0.23.1"
 jiff = { version = "0.2.38", default-features = false, features = ["std"] }
 libxml2-sys.workspace = true
+percent-encoding = "2.3.2"
 quick-xml = "0.42.0"
 roxmltree = "0.21.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 ureq = { version = "3.4.2", default-features = false, features = ["native-tls"] }
 uuid = { version = "1.27.0", features = ["v4"] }
@@ -23,7 +25,6 @@ uuid = { version = "1.27.0", features = ["v4"] }
 fastrand = "2.5.0"
 rcgen = "0.14.10"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
-tempfile = "3.27.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7.0"

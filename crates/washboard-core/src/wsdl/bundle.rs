@@ -24,7 +24,8 @@ use crate::soap::XSD_NS;
 use super::defs::{Definitions, Direction, Operation, PartContent, Protocol, Style};
 use super::graph::{FileKind, Owner, RefKind, Walk, parse};
 use super::source::percent_encode_path;
-use super::text::{Edit, LineIndex, escape_attr, splice, start_tag, xml_decl_encoding};
+use super::text::{Edit, LineIndex, splice, start_tag, xml_decl_encoding};
+use crate::xml::escape_attr;
 
 /// URI prefix of supplied files inside the bundle; the rest is the percent-encoded
 /// project-relative path.
@@ -248,7 +249,7 @@ pub(crate) fn build(
                 edits.push(match &site.loc_value {
                     Some(range) => Edit {
                         range: range.clone(),
-                        text: escape_attr(&loc),
+                        text: escape_attr(&loc).into_owned(),
                     },
                     None => Edit {
                         range: site.name_end..site.name_end,

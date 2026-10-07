@@ -364,31 +364,8 @@ fn lookup(bundle: &SchemaBundle, url: &str) -> Option<usize> {
     if let Some(i) = rest.strip_prefix("?doc=").and_then(|n| n.parse().ok()) {
         return Some(i).filter(|&i: &usize| i < bundle.docs.len());
     }
-    let rest = percent_decode(rest);
+    let rest = percent_encoding::percent_decode_str(rest).decode_utf8_lossy();
     bundle.docs.iter().position(|d| d.uri == rest)
-}
-
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = |c: u8| char::from(c).to_digit(16);
-        if b[i] == b'%'
-            && let (Some(h), Some(l)) = (
-                b.get(i + 1).copied().and_then(hex),
-                b.get(i + 2).copied().and_then(hex),
-            )
-        {
-            // h and l are < 16, so this fits in a byte.
-            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
-            i += 3;
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Rewrites libxml2's internal URLs in a message back to bundle URIs.
@@ -404,7 +381,9 @@ fn humanize(msg: &str, bundle: &SchemaBundle) -> String {
         let url = &tail[..end];
         match lookup(bundle, url) {
             Some(i) => out.push_str(&bundle.docs[i].uri),
-            None => out.push_str(&percent_decode(&url[BASE.len()..])),
+            None => out.push_str(
+                &percent_encoding::percent_decode_str(&url[BASE.len()..]).decode_utf8_lossy(),
+            ),
         }
         rest = &tail[end..];
     }
@@ -1346,16 +1325,15 @@ mod tests {
 
     #[test]
     fn instance_documents_load_nothing() {
-        let secret = std::env::temp_dir().join(format!("washboard-xxe-{}.txt", std::process::id()));
-        std::fs::write(&secret, "TOP-SECRET").expect("temp file");
-        let url = format!("file://{}", secret.display());
+        let mut secret = tempfile::NamedTempFile::new().expect("temp file");
+        std::io::Write::write_all(&mut secret, b"TOP-SECRET").expect("temp file");
+        let url = format!("file://{}", secret.path().display());
         let xml = format!(
             "<!DOCTYPE r [<!ENTITY e SYSTEM \"{url}\">]>\n\
              <r xmlns=\"urn:t\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n   \
              xsi:schemaLocation=\"urn:t {url}\"><a>&e;</a><n>1</n></r>"
         );
         let diags = small().validate(xml.as_bytes());
-        let _ = std::fs::remove_file(&secret);
         assert!(
             diags.iter().all(|d| !d.message.contains("TOP-SECRET")),
             "{diags:#?}"
@@ -1392,14 +1370,16 @@ mod tests {
     /// not be loaded from a nested import.
     #[test]
     fn nested_imports_cannot_reach_the_file_system() {
-        let outside =
-            std::env::temp_dir().join(format!("washboard-outside-{}.xsd", std::process::id()));
-        std::fs::write(
-            &outside,
-            format!("<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:o\"/>"),
+        let mut outside = tempfile::Builder::new()
+            .suffix(".xsd")
+            .tempfile()
+            .expect("temp file");
+        std::io::Write::write_all(
+            &mut outside,
+            format!("<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:o\"/>").as_bytes(),
         )
         .expect("temp file");
-        let path = outside.display().to_string();
+        let path = outside.path().display().to_string();
         let mid = |loc: &str| {
             format!(
                 "<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:m\">\
@@ -1423,7 +1403,6 @@ mod tests {
                 "{loc}: {diags:#?}"
             );
         }
-        let _ = std::fs::remove_file(&outside);
     }
 
     #[test]
@@ -1575,6 +1554,5 @@ mod tests {
         assert_eq!(lookup(&bundle, "customer.xsd"), None);
         assert!(has_scheme("washboard:/root.xsd"));
         assert!(!has_scheme("xsd/a:b.xsd"));
-        assert_eq!(percent_decode("a%20b%zz"), "a b%zz");
     }
 }

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::model::QName;
 use crate::soap::XSI_NS;
+use crate::xml::{escape_attr, escape_text};
 
 use super::builtin::ANY_TYPE;
 use super::component::{ElemId, NamespaceConstraint, Particle, ProcessContents, Term, Wildcard};
@@ -472,20 +473,6 @@ fn is_ncname(s: &str) -> bool {
         && chars.all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-fn escape(s: &str, attr: bool) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' if !attr => out.push_str("&gt;"),
-            '"' if attr => out.push_str("&quot;"),
-            _ => out.push(c),
-        }
-    }
-    out
-}
-
 fn comment_text(s: &str) -> String {
     let mut t = s.replace("--", "- -");
     if t.ends_with('-') {
@@ -510,13 +497,13 @@ fn write_node(n: &Node, level: usize, indent: &str, decls: &[(String, String)], 
             out.push('<');
             out.push_str(name);
             for (p, ns) in decls {
-                out.push_str(&format!(" xmlns:{p}=\"{}\"", escape(ns, true)));
+                out.push_str(&format!(" xmlns:{p}=\"{}\"", escape_attr(ns)));
             }
             for (a, v) in attrs {
-                out.push_str(&format!(" {a}=\"{}\"", escape(v, true)));
+                out.push_str(&format!(" {a}=\"{}\"", escape_attr(v)));
             }
             match (text, children.is_empty()) {
-                (Some(t), true) => out.push_str(&format!(">{}</{name}>\n", escape(t, false))),
+                (Some(t), true) => out.push_str(&format!(">{}</{name}>\n", escape_text(t))),
                 (None, true) => out.push_str("/>\n"),
                 _ => {
                     out.push_str(">\n");
