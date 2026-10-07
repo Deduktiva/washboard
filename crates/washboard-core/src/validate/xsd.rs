@@ -1454,6 +1454,62 @@ mod tests {
         }
     }
 
+    /// Concurrent compiles must each see only their own bundle, also for nested imports, which
+    /// go through the process-global loader (module docs). The bundles below use the same URIs
+    /// with different contents, so a loader serving another thread's bundle shows up as the
+    /// wrong element being accepted.
+    #[test]
+    fn concurrent_compiles_resolve_nested_imports_from_their_own_bundle() {
+        fn bundle(leaf_element: &str) -> SchemaBundle {
+            let generated = || SchemaOrigin::Generated;
+            let mid = format!(
+                "<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:m\">\
+                 <xs:import namespace=\"urn:l\" schemaLocation=\"a/leaf.xsd\"/></xs:schema>"
+            );
+            let leaf = format!(
+                "<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:l\">\
+                 <xs:element name=\"{leaf_element}\" type=\"xs:string\"/></xs:schema>"
+            );
+            SchemaBundle {
+                docs: vec![
+                    root_doc(&[("urn:m", "a/mid.xsd")]),
+                    doc("a/mid.xsd", "urn:m", generated(), mid),
+                    doc("a/leaf.xsd", "urn:l", generated(), leaf),
+                ],
+                root: "washboard:/root.xsd".into(),
+            }
+        }
+        let instance = |name: &str| format!("<l:{name} xmlns:l=\"urn:l\">x</l:{name}>");
+
+        const THREADS: usize = 8;
+        for _ in 0..10 {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+            let handles: Vec<_> = (0..THREADS)
+                .map(|i| {
+                    let barrier = barrier.clone();
+                    let (own, other) = if i % 2 == 0 { ("a", "b") } else { ("b", "a") };
+                    std::thread::spawn(move || {
+                        let bundle = bundle(own);
+                        barrier.wait();
+                        let schema = CompiledSchema::compile(&bundle).expect("compiles");
+                        (own, other, schema)
+                    })
+                })
+                .collect();
+            for h in handles {
+                let (own, other, schema) = h.join().expect("thread");
+                assert!(
+                    schema.validate(instance(own).as_bytes()).is_empty(),
+                    "{own}"
+                );
+                assert!(
+                    !schema.validate(instance(other).as_bytes()).is_empty(),
+                    "{other}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn start_tag_scanner_skips_markup_that_is_not_a_start_tag() {
         let text = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [\n<!ENTITY x \"<y>\">\n<!-- ] > -->\n]>\n\
