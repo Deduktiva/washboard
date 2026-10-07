@@ -117,6 +117,12 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
   completion and hover requests answered from `schema::SchemaModel`.
+- Diagnostics for the editor (§5.2 "Validation errors"): underline `Diagnostic::span` when
+  present, else mark `pos`; both are converted to UTF-16 for the front end like every other
+  text position. The project's one `SchemaModel` (built with the schema compile, shared in an
+  `Arc`) also goes to `RequestSchema::with_model`, so abstract-type errors name the
+  alternatives. `Diagnostic::detail` is there for quick fixes later (e.g. "set `xsi:type` to
+  …"); none are planned yet.
 - **Not undo/redo.** The native text widget owns undo (`NSTextView`'s undo manager, later
   `GtkSourceView`'s or the Windows control's); the model only receives the resulting edits
   like any other edit. Programmatic changes the model makes (format XML, insert template,
@@ -439,29 +445,27 @@ Behaviour:
 - **Hover** shows the effective type ("declared `tns:Party`, actual `tns:Company` via xsi:type").
 - **Validation errors** from libxml2 for these cases are terse (e.g. "The type definition is
   abstract"); we append the list of allowed concrete types/members from the index.
-  - Do this on structured data, never by matching libxml2's message text. The wrapper
-    (`validate::xsd`) already receives each error's code and the node it refers to (the
-    element, or the `xmlAttr` for attribute errors) and currently flattens both into
-    `Diagnostic { message, pos }`. Add an optional, additive `detail` to `Diagnostic` with
-    the libxml2 error code, the element's document-order index (the wrapper already computes
-    it for positions) and, for attribute errors, the attribute's QName. `Diagnostic` is only
-    built through `Diagnostic::error`/`warning`, so existing callers are unaffected.
-  - The enrichment then maps the code to "abstract type" / "abstract element", resolves the
-    element's path in the request with the Rust model, and appends the candidates.
-  - Same `detail` lets the editor underline the offending attribute instead of the whole
-    start tag (today attribute errors point at the element's `<`).
-  - Spans: `Diagnostic` has a start position only, so the editor can mark a point and the
-    CLI (`request validate`, `request send`) prints the source line with a single `^` at the
-    element's `<`. With `detail`, the wrapper can resolve a byte range in the request text:
-    the attribute (name to closing quote) for attribute errors, the element's text content
-    for simple-type and facet errors, the start tag for content-model errors. Carry it as an
-    optional span (start and end `TextPos`) next to `pos`, so the editor underlines exactly
-    the bad value and the CLI prints `^^^^` under it; diagnostics without a span keep
-    today's single caret.
-  - When spans land, replace the CLI's hand-written excerpt (`render` in
-    `washboard-cli/src/validation.rs`) with `annotate-snippets`, the renderer rustc uses: it
-    gives multi-character and multi-line underlines and labels without our own layout code.
-    Not worth it while diagnostics carry a single point.
+  - This works on structured data, not on libxml2's message text. `validate::xsd` puts the
+    libxml2 error code, the element's document-order index and, for attribute errors, the
+    attribute's QName into `Diagnostic::detail` (`diag::DiagDetail`).
+    `validate::request` maps codes 1846 (abstract element) and 1876 (abstract type) to the
+    element, resolves its path in the request with `schema::SchemaModel` and appends the
+    substitution group members or the `xsi:type` candidates. This needs a model attached
+    with `RequestSchema::with_model`; the app shares the one it builds for completion.
+  - Exception, attributes: libxml2 2.15.4 never hands us the `xmlAttr`. `xmlVUpdateError`
+    (error.c) replaces every node with its element before the error is raised. The attribute's
+    name survives only in the message prefix libxml2 builds from the node's QName
+    (`Element '…', attribute '{ns}a': `), so the wrapper reads that prefix and accepts the
+    name only if the element has such an attribute (`xmlHasNsProp`). A changed format loses
+    the attribute; it never names a wrong one. Revisit if libxml2 starts keeping the node.
+  - Spans: `Diagnostic::span` (start and end `TextPos`, end exclusive) sits next to `pos`
+    and is chosen by error code: the attribute (name to closing quote) for attribute errors,
+    the element's text (whitespace trimmed) for simple-type and facet errors, the start tag
+    for everything else. `pos` stays at the element's `<`. Diagnostics without a span get a
+    single caret at `pos`.
+  - The CLI (`request validate`, `request send`) renders diagnostics with `annotate-snippets`,
+    the renderer rustc uses, so spans are underlined across characters and lines without
+    layout code of our own.
   - Where libxml2 must not complain about something the protocol allows, remove it from the
     parsed tree before validating (`CompiledSchema::validate_text_stripping`, used for SOAP
     header-block attributes) rather than filtering errors afterwards.
