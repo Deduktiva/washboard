@@ -4,8 +4,6 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use uuid::Uuid;
-
 use super::ProjectError;
 
 /// Attaches the path to an I/O error.
@@ -25,24 +23,18 @@ impl<T> IoContext<T> for io::Result<T> {
 /// Writes `bytes` to `path` via a temp file in the same directory and `rename`, so readers
 /// (and a crash) see either the old or the new content, never a mix.
 ///
-/// The temp name starts with `.` so request reconciliation ignores leftovers.
+/// The temp name starts with `.` so request reconciliation ignores leftovers; `tempfile` removes
+/// the temp file if anything fails before the rename.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    let tmp = dir.join(format!(".wb-{}.tmp", Uuid::new_v4().simple()));
-    let result = (|| {
-        let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-        fs::rename(&tmp, path)
-    })();
-    if let Err(source) = result {
-        let _ = fs::remove_file(&tmp);
-        return Err(ProjectError::Io {
-            path: path.to_owned(),
-            source,
-        });
-    }
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".wb-")
+        .suffix(".tmp")
+        .tempfile_in(dir)
+        .at(path)?;
+    tmp.write_all(bytes).at(path)?;
+    tmp.as_file().sync_all().at(path)?;
+    tmp.persist(path).map_err(|e| e.error).at(path)?;
     // Persist the rename itself. Best effort: not every file system allows fsync on a directory.
     if let Ok(d) = File::open(dir) {
         let _ = d.sync_all();
