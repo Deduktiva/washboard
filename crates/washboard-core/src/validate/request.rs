@@ -15,14 +15,11 @@ use roxmltree::Node;
 
 use crate::diag::{DiagSource, Diagnostic, Severity, TextPos, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
-use crate::soap::{SOAP11_ENV_NS, XSD_NS};
+use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
 
 use super::xsd::{CompiledSchema, StripAttributes};
-
-/// SOAP 1.2 envelope namespace. Only recognized to give a specific error (PLAN §1).
-const SOAP12_ENV_NS: &str = "http://www.w3.org/2003/05/soap-envelope";
 
 /// The SOAP 1.1 envelope schema shipped with washboard (never fetched).
 const ENVELOPE_XSD: &str = include_str!("soap-envelope-1.1.xsd");
