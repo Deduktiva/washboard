@@ -46,53 +46,84 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 ## Open
 
 ### WP-APP-SHELL — AppKit skeleton
-Owns: `crates/washboard-app/**`.
+Owns: `crates/washboard-app/**`; for step 1 also the macOS job in `.github/workflows/ci.yml`.
 
 A runnable skeleton matching `docs/gui-draft.html` (the visual target) and PLAN §8, proving the
 objc2 patterns the app will use everywhere. No project logic, persistence, validation, HTTP,
 autosave or dirty tracking: those live in `washboard-ui-model` (PLAN §2.1), so controllers stay
-thin (views, layout, forwarding input). Static sample data shaped like the core types. Can be
-done in the cloud: the macOS CI job compiles, tests and packages it; looking at it needs a Mac
-(checklist below).
-- **Lifecycle:** `AppDelegate` via `define_class!`, kept alive for the app's lifetime;
-  `applicationShouldTerminateAfterLastWindowClosed` returns `false` (the welcome window takes
-  over).
-- **Main menu in code**, no nib. App: About, Settings… (disabled), Hide, Quit. File: New
+thin (views, layout, forwarding input). Static sample data shaped like the core types.
+
+Built as a stack of PRs, one per step, each merged before the next is reviewed. Every step is
+checked by CI on a real Mac: the crate is a library plus a thin `main`, and
+`crates/washboard-app/tests/appkit.rs` (`harness = false`, so it runs on the main thread)
+builds the real objects headless and asserts on them. Each step adds its checks there. Only
+the "Needs a Mac" list at the end needs a person.
+
+**Step 1 — library, lifecycle, bundle, CI.**
+- `src/lib.rs` with the app code, `src/main.rs` only calls it.
+- `AppDelegate` via `define_class!`, kept alive for the app's lifetime;
+  `applicationShouldTerminateAfterLastWindowClosed` returns `false`. A placeholder window.
+- `cargo-packager` builds `Washboard.app` (PLAN §2 "Packaging"), unsigned, with a placeholder
+  icon; no hand-written bundling code. `MACOSX_DEPLOYMENT_TARGET` 26.0 for the bundle build.
+- CI: the macOS job runs on `macos-26` (pinned, not `-latest`), builds the bundle, checks its
+  `Info.plist` with `plutil`, and uploads it as an artifact.
+- Check: `tests/appkit.rs` creates the application, installs the delegate, finishes launching
+  and asserts the window exists and closing it does not terminate.
+
+**Step 2 — main menu and welcome window.**
+- Main menu in code, no nib. App: About, Settings… (disabled), Hide, Quit. File: New
   Project… ⇧⌘N, Open Project… ⌘O, Open Recent (`NSDocumentController`), Close ⌘W, Save All ⌘S.
   Edit: standard first-responder items (Undo/Redo, Cut/Copy/Paste, Select All, Find). Project:
   New Request ⌘N, Duplicate ⌘D, Rename, Delete ⌘⌫, Validate ⌘B, Send ⌘↩, Replace WSDL…,
   Project Settings…. Window: HTTP Log ⌥⌘L plus the window list. Stub handlers log.
-- **Welcome window** when no project is open: icon, name, New/Open; `NSTableView` of recent
-  projects.
-- **Project window**, one controller per project: unified `NSToolbar` via a delegate (sidebar
-  toggle, server popup, Validate, Send, Save All, HTTP Log); `NSSplitViewController` with a
-  source-list `NSOutlineView` (REQUESTS, and OPERATIONS as service › port › operation; unsaved
-  dot and ⚠ markers; inline rename on Return; +/−/⋯ footer) and a content split of editor,
-  collapsible issues bar and response pane.
-- **Editor:** `NSTextView` on TextKit 1 (`initUsingTextLayoutManager(false)` or an explicit
+- Welcome window when no project is open: icon, name, New/Open; `NSTableView` of recent
+  projects (sample data).
+- Check: every menu item's title, key equivalent, modifiers and action selector against one
+  table in the test; the welcome window's table shows the sample rows.
+
+**Step 3 — project window.**
+- One controller per project. Unified `NSToolbar` via a delegate (sidebar toggle, server popup,
+  Validate, Send, Save All, HTTP Log).
+- `NSSplitViewController` with a source-list `NSOutlineView` (REQUESTS, and OPERATIONS as
+  service › port › operation; unsaved dot and ⚠ markers; inline rename on Return; +/−/⋯
+  footer) and a content split of editor placeholder, collapsible issues bar and response pane.
+- Check: toolbar item identifiers in order; outline row counts with groups expanded; the
+  content split's panes; delegates and data sources are still alive after an autorelease pool
+  drain (they are weak in AppKit).
+
+**Step 4 — editor.**
+- `NSTextView` on TextKit 1 (`initUsingTextLayoutManager(false)` or an explicit
   `NSLayoutManager` stack); monospaced system font; smart quotes, dashes and text replacement
-  off. Line numbers and error markers from an `NSRulerView` subclass over the visible glyph
-  range. Highlighting from `washboard_core::xml`'s tokenizer, applied as temporary attributes on
-  the layout manager for the edited range extended to line boundaries, so undo and the saved
-  text are unaffected. Undo stays with `NSTextView`. Issues bar: click selects the line.
-- **Response pane:** status label, Response/Headers/History tabs, read-only highlighted text
-  view, history table.
-- **HTTP log panel:** one `NSPanel` for the app; exchange table over request/response side by
-  side; `Authorization` masked with click to reveal.
-- **Sheets:** New Project (fields, references with ✓/✗, Create disabled on ✗) and Project
-  Settings › Servers.
-- **Threading pattern:** a fake Send runs on a `std::thread` and posts back to the main queue
-  with `dispatch2`; this is the pattern every background job uses.
-- **Bundle:** `cargo-packager` builds `Washboard.app` (PLAN §2 "Packaging"), unsigned, with a
-  placeholder icon; no hand-written bundling code.
-- **Acceptance (CI):** clippy clean natively on macOS and with `--target
-  aarch64-apple-darwin` from Linux; the macOS job builds the `.app` with `cargo-packager` and
-  uploads it as an artifact; a test measures `NSLayoutManager` layout of a 1 MB XML document on
-  the runner and prints the time.
-- **Needs a Mac (the user, from the CI artifact):** launches from Finder; matches the GUI
-  draft in light and dark mode; menus, shortcuts, sidebar rename, ruler, highlighting,
-  issue click-to-line, fake send, log panel and both sheets behave; typing stays responsive in a
-  1 MB file.
+  off.
+- Line numbers and error markers from an `NSRulerView` subclass over the visible glyph range.
+- Highlighting from `washboard_core::xml`'s tokenizer, applied as temporary attributes on the
+  layout manager for the edited range extended to line boundaries, so undo and the saved text
+  are unaffected. Undo stays with `NSTextView`.
+- Check: the view has a layout manager and no text layout manager; substitutions are off;
+  after an edit the temporary attributes match the tokens while the text storage has no
+  colour attributes and undo restores the text; layout of a 1 MB XML document, timed and
+  printed.
+
+**Step 5 — issues bar, response pane, HTTP log, threading.**
+- Issues bar: click selects the line. Response pane: status label, Response/Headers/History
+  tabs, read-only highlighted text view, history table. HTTP log: one `NSPanel` for the app;
+  exchange table over request/response side by side; `Authorization` masked with click to
+  reveal.
+- Threading pattern: a fake Send runs on a `std::thread` and posts back to the main queue with
+  `dispatch2`; this is the pattern every background job uses.
+- Check: a fake send's result arrives on the main thread and updates the status label; the log
+  shows `Authorization` masked until revealed; clicking an issue selects its line.
+
+**Step 6 — sheets.**
+- New Project (fields, references with ✓/✗, Create disabled on ✗) and Project Settings ›
+  Servers.
+- Check: Create is disabled while a reference is ✗ and enabled once all are ✓; the servers
+  table edits its sample rows.
+
+**Needs a Mac (the user, from the CI artifact, after step 6):** launches from Finder; matches
+the GUI draft in light and dark mode; menus, shortcuts, sidebar rename, ruler, highlighting,
+issue click-to-line, fake send, log panel and both sheets behave; typing stays responsive in a
+1 MB file.
 
 ### Later packages
 
