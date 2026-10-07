@@ -16,3 +16,6 @@ pub mod soap;
 pub mod validate;
 pub mod wsdl;
 pub mod xml;
+
+#[cfg(test)]
+mod test_support;

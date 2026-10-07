@@ -7,10 +7,11 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::bail;
+use washboard_core::diag;
 use washboard_core::http::{self, SendRequest};
 use washboard_core::model::{Auth, RequestMeta, Server};
 use washboard_core::project::Project;
-use washboard_core::soap;
+use washboard_core::validate::Validation;
 use washboard_core::wsdl::Wsdl;
 
 use crate::{passwords, support, validation};
@@ -26,19 +27,35 @@ pub fn run(
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let wsdl = support::load_project_wsdl(&project)?;
-    if skip_validation {
-        eprintln!("note: sending without validation");
-    } else {
-        validation::check(&project, &wsdl, &request, &text).map_err(|e| {
-            e.context("not sent; pass --skip-validation to send without validating")
-        })?;
-    }
+    // With --skip-validation the request is still validated, so the errors are on record,
+    // but nothing stops the send: sending broken requests on purpose is how servers get tested.
+    let validation = match validation::check(&wsdl, &request, &text) {
+        Ok(v) => {
+            let errors = diag::error_count(&v.diagnostics);
+            let s = if errors == 1 { "" } else { "s" };
+            if errors > 0 && !skip_validation {
+                eprintln!(
+                    "not sent: the request has {errors} error{s} (--skip-validation sends anyway)"
+                );
+                return Ok(ExitCode::from(1));
+            }
+            if errors > 0 {
+                eprintln!("note: sending despite {errors} error{s} (--skip-validation)");
+            }
+            Some(v)
+        }
+        Err(e) if skip_validation => {
+            eprintln!("note: not validated: {e:#}");
+            None
+        }
+        Err(e) => return Err(e.context("not sent")),
+    };
     let server = choose_server(&project, &request, server_name)?;
     let password = match &server.auth {
         Auth::Basic { username } => Some(passwords::for_send(&project, &server, username)?),
         Auth::None => None,
     };
-    let soap_action = soap_action(&wsdl, &request, &text);
+    let soap_action = soap_action(&wsdl, &request, validation.as_ref());
 
     let exchange = http::send(&SendRequest {
         server: server.clone(),
@@ -103,18 +120,15 @@ fn choose_server(
     }
 }
 
-/// From the operation the Body content dispatches to, using the request's operation hint to
-/// choose among operations sharing a body element; falls back to the hint alone (e.g. for a
+/// The operation the body dispatched to during validation; falls back to the request's
+/// operation hint when nothing dispatched (only possible with `--skip-validation`, e.g. for a
 /// body that does not parse). `None` sends `SOAPAction: ""`.
-fn soap_action(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> Option<String> {
-    let hint = request.operation.as_ref();
-    let dispatched = soap::body_elements(text)
-        .and_then(|els| els.into_iter().next())
-        .and_then(|first| wsdl.dispatch(&first, hint))
-        .map(|d| d.soap_action.clone());
-    match dispatched {
-        Some(action) => action,
-        None => hint
+fn soap_action(wsdl: &Wsdl, request: &RequestMeta, v: Option<&Validation>) -> Option<String> {
+    match v.and_then(|v| v.dispatched.first()) {
+        Some(d) => d.soap_action.clone(),
+        None => request
+            .operation
+            .as_ref()
             .and_then(|h| wsdl.operation(h))
             .and_then(|(_, op)| op.soap_action.clone()),
     }

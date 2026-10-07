@@ -11,10 +11,7 @@ use super::*;
 use crate::http::{Exchange, RawMessage, TlsInfo};
 use crate::model::{Auth, HistoryId, OperationRef, QName, Server};
 use crate::secrets::{MemorySecretStore, SecretKey, SecretStore};
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
+use crate::test_support::fixtures;
 
 const CUSTOMER_FILES: &[&str] = &[
     "CustomerService.wsdl",

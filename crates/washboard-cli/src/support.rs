@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
-use washboard_core::diag::Severity;
+use washboard_core::diag;
 use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
 use washboard_core::project::{Project, ProjectError, WsdlFile, WsdlSet};
 use washboard_core::schema::SchemaModel;
@@ -82,7 +82,7 @@ pub fn check_import(entry: &Path, extra: &[PathBuf]) -> anyhow::Result<CheckedIm
             for d in &diags {
                 eprintln!("{d}");
             }
-            if diags.iter().any(|d| d.severity == Severity::Error) {
+            if diag::has_errors(&diags) {
                 bail!("the schema set does not compile; nothing was changed");
             }
         }

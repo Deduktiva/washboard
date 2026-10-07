@@ -4,20 +4,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::*;
 use crate::diag::Severity;
 use crate::model::SchemaOrigin;
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, XSD_NS};
+use crate::test_support::fixtures;
 
 const CUS_SVC: &str = "urn:example:customer:service";
 const CUS_MSG: &str = "urn:example:customer:messages";
 const LEGACY: &str = "urn:example:legacy";
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
 
 fn customer() -> Wsdl {
     let dir = fixtures().join("customer");
@@ -83,7 +80,7 @@ fn errors(w: &Wsdl) -> Vec<&str> {
     w.check
         .diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| d.is_error())
         .map(|d| d.message.as_str())
         .collect()
 }

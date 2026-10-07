@@ -10,6 +10,8 @@ use crate::wsdl::{Direction, PartContent, Support, UnsupportedReason, Wsdl};
 
 /// SOAP 1.1 envelope namespace. SOAP 1.2 is not supported.
 pub const SOAP11_ENV_NS: &str = "http://schemas.xmlsoap.org/soap/envelope/";
+/// SOAP 1.2 envelope namespace. Only recognized, to tell users that SOAP 1.2 is unsupported.
+pub const SOAP12_ENV_NS: &str = "http://www.w3.org/2003/05/soap-envelope";
 /// WSDL SOAP 1.1 binding namespace (`soap:binding`, `soap:operation`, `soap:body`, …).
 pub const WSDL_SOAP11_NS: &str = "http://schemas.xmlsoap.org/wsdl/soap/";
 /// WSDL SOAP 1.2 binding namespace; bindings using it are listed as unsupported.
@@ -199,14 +201,11 @@ pub fn body_elements(text: &str) -> Option<Vec<QName>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use super::*;
+    use crate::test_support::fixtures;
     use crate::wsdl::{self, Sources};
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-    }
 
     fn load(dir: &str, entry: &str, extra: &[&str]) -> (Wsdl, SchemaModel) {
         let root = fixtures().join(dir);
@@ -281,8 +280,8 @@ mod tests {
     fn body_elements_rejects_non_envelopes() {
         assert_eq!(body_elements("<a/>"), None);
         assert_eq!(body_elements("<a"), None);
-        let soap12 = r#"<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">
-            <s:Body><x/></s:Body></s:Envelope>"#;
-        assert_eq!(body_elements(soap12), None);
+        let soap12 =
+            format!(r#"<s:Envelope xmlns:s="{SOAP12_ENV_NS}"><s:Body><x/></s:Body></s:Envelope>"#);
+        assert_eq!(body_elements(&soap12), None);
     }
 }

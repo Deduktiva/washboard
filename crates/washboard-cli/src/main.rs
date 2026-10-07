@@ -150,7 +150,8 @@ enum RequestCommand {
         /// Server name; defaults to the request's last server.
         #[arg(long)]
         server: Option<String>,
-        /// Send without validating first (required until validation is available).
+        /// Send even if validation finds errors (to test how a server handles broken
+        /// requests). The errors are still printed.
         #[arg(long)]
         skip_validation: bool,
         /// Exit with 1 when the response is a SOAP fault.

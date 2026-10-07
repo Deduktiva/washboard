@@ -294,6 +294,11 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 5. Header blocks the binding declares (`soap:header`) but that are missing → warning; header
    blocks the binding doesn't declare are validated if the schema knows them (lax), otherwise
    left alone, as SOAP intends.
+6. `soapenv:mustUnderstand`, `actor` and `encodingStyle` are allowed on every header block,
+   as SOAP 1.1 §4.2 says. A block's declared type rarely allows foreign attributes, so these
+   three are removed from libxml2's parsed tree before the pass (no error filtering, positions
+   unchanged) and `mustUnderstand` is checked for `0`/`1` in Rust instead. Other attributes in
+   the SOAP namespace stay errors.
 
 Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
@@ -421,6 +426,32 @@ Behaviour:
 - **Hover** shows the effective type ("declared `tns:Party`, actual `tns:Company` via xsi:type").
 - **Validation errors** from libxml2 for these cases are terse (e.g. "The type definition is
   abstract"); we append the list of allowed concrete types/members from the index.
+  - Do this on structured data, never by matching libxml2's message text. The wrapper
+    (`validate::xsd`) already receives each error's code and the node it refers to (the
+    element, or the `xmlAttr` for attribute errors) and currently flattens both into
+    `Diagnostic { message, pos }`. Add an optional, additive `detail` to `Diagnostic` with
+    the libxml2 error code, the element's document-order index (the wrapper already computes
+    it for positions) and, for attribute errors, the attribute's QName. `Diagnostic` is only
+    built through `Diagnostic::error`/`warning`, so existing callers are unaffected.
+  - The enrichment then maps the code to "abstract type" / "abstract element", resolves the
+    element's path in the request with the Rust model, and appends the candidates.
+  - Same `detail` lets the editor underline the offending attribute instead of the whole
+    start tag (today attribute errors point at the element's `<`).
+  - Spans: `Diagnostic` has a start position only, so the editor can mark a point and the
+    CLI (`request validate`, `request send`) prints the source line with a single `^` at the
+    element's `<`. With `detail`, the wrapper can resolve a byte range in the request text:
+    the attribute (name to closing quote) for attribute errors, the element's text content
+    for simple-type and facet errors, the start tag for content-model errors. Carry it as an
+    optional span (start and end `TextPos`) next to `pos`, so the editor underlines exactly
+    the bad value and the CLI prints `^^^^` under it; diagnostics without a span keep
+    today's single caret.
+  - When spans land, replace the CLI's hand-written excerpt (`render` in
+    `washboard-cli/src/validation.rs`) with `annotate-snippets`, the renderer rustc uses: it
+    gives multi-character and multi-line underlines and labels without our own layout code.
+    Not worth it while diagnostics carry a single point.
+  - Where libxml2 must not complain about something the protocol allows, remove it from the
+    parsed tree before validating (`CompiledSchema::validate_text_stripping`, used for SOAP
+    header-block attributes) rather than filtering errors afterwards.
 
 ### 5.3 WSDL-level details
 - **`wsdl:import`**: WSDL files are loaded transitively and merged into one definitions model

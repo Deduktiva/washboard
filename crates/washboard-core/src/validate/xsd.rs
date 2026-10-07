@@ -1,8 +1,8 @@
 //! XSD compilation and validation with libxml2 (WP-LIBXML2).
 //!
 //! [`CompiledSchema::compile`] turns a [`SchemaBundle`] into a libxml2 schema;
-//! [`CompiledSchema::validate`] checks one standalone document (a header or body block the
-//! caller has cut out of the envelope, with its in-scope namespace declarations carried over).
+//! [`CompiledSchema::validate`] and [`CompiledSchema::validate_text`] check one document; the
+//! request pipeline (`validate::request`) passes the whole SOAP envelope.
 //!
 //! # Resource loading
 //!
@@ -55,7 +55,7 @@ use std::sync::Once;
 
 use libxml2_sys as ffi;
 
-use crate::diag::{DiagSource, Diagnostic, LineIndex, Severity, TextPos};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, has_errors};
 use crate::model::SchemaBundle;
 
 /// Base URI given to every bundle document; see the module docs.
@@ -168,7 +168,7 @@ impl CompiledSchema {
             .collect();
         diags.extend(compile_diagnostics(collector.finish(), bundle));
 
-        let failed = diags.iter().any(|d| d.severity == Severity::Error);
+        let failed = has_errors(&diags);
         match NonNull::new(schema) {
             Some(schema) if !failed => Ok(CompiledSchema {
                 schema,
@@ -204,7 +204,43 @@ impl CompiledSchema {
     /// violations are [`DiagSource::Schema`]. Element positions point at the start tag's `<`
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
-        let (doc, parse_errors) = match parse_instance(xml, None) {
+        self.validate_with(xml, None, None, || {
+            crate::xml::decode(xml)
+                .map(|d| scan_start_tags(&d.text))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Like [`Self::validate`] for already decoded text, which is parsed as UTF-8 whatever its
+    /// XML declaration says, the same way [`crate::xml::check_well_formed`] parses it. This is
+    /// what the editor and the request pipeline hold.
+    pub fn validate_text(&self, text: &str) -> Vec<Diagnostic> {
+        self.validate_with(text.as_bytes(), Some(c"UTF-8"), None, || {
+            scan_start_tags(text)
+        })
+    }
+
+    /// Like [`Self::validate_text`], but removes the attributes `strip` names from the parsed
+    /// document before validating it, so the schema never sees them. Positions are unaffected:
+    /// elements keep their line numbers and document order.
+    pub fn validate_text_stripping(
+        &self,
+        text: &str,
+        strip: &StripAttributes<'_>,
+    ) -> Vec<Diagnostic> {
+        self.validate_with(text.as_bytes(), Some(c"UTF-8"), Some(strip), || {
+            scan_start_tags(text)
+        })
+    }
+
+    fn validate_with(
+        &self,
+        xml: &[u8],
+        encoding: Option<&CStr>,
+        strip: Option<&StripAttributes<'_>>,
+        start_tags: impl FnOnce() -> Vec<StartTag>,
+    ) -> Vec<Diagnostic> {
+        let (doc, parse_errors) = match parse_instance(xml, encoding) {
             Ok(parsed) => parsed,
             Err(d) => return vec![d],
         };
@@ -218,7 +254,7 @@ impl CompiledSchema {
                 .into_iter()
                 .map(|e| e.into_diagnostic(DiagSource::WellFormedness, None))
                 .collect();
-            if !diags.iter().any(|d| d.severity == Severity::Error) {
+            if !has_errors(&diags) {
                 diags.push(Diagnostic::error(
                     DiagSource::WellFormedness,
                     None,
@@ -226,6 +262,11 @@ impl CompiledSchema {
                 ));
             }
             return diags;
+        }
+
+        if let Some(strip) = strip {
+            // SAFETY: `doc` is a valid, well-formed document owned here and not shared.
+            unsafe { strip_attributes(doc, strip) };
         }
 
         let collector = Collector::new(false);
@@ -258,9 +299,7 @@ impl CompiledSchema {
         let tags = if raw.is_empty() {
             Vec::new()
         } else {
-            crate::xml::decode(xml)
-                .map(|d| scan_start_tags(&d.text))
-                .unwrap_or_default()
+            start_tags()
         };
         let mut diags: Vec<Diagnostic> = raw
             .into_iter()
@@ -272,7 +311,7 @@ impl CompiledSchema {
                 e.into_diagnostic(DiagSource::Schema, pos)
             })
             .collect();
-        if ret != 0 && !diags.iter().any(|d| d.severity == Severity::Error) {
+        if ret != 0 && !has_errors(&diags) {
             diags.push(Diagnostic::error(
                 DiagSource::Schema,
                 None,
@@ -284,6 +323,81 @@ impl CompiledSchema {
             ));
         }
         diags
+    }
+}
+
+/// Attributes to remove before validation: those in `namespace` named in `names`, on every
+/// element child of an element named `parent` (namespace URI, local name; `""` for no
+/// namespace).
+///
+/// For attributes a protocol allows on elements whose schema types do not, such as SOAP's
+/// `mustUnderstand` on header blocks.
+#[derive(Debug, Clone, Copy)]
+pub struct StripAttributes<'a> {
+    pub parent: (&'a str, &'a str),
+    pub namespace: &'a str,
+    pub names: &'a [&'a str],
+}
+
+/// Removes the attributes `strip` names (see [`StripAttributes`]).
+///
+/// # Safety
+/// `doc` must be a live document that nothing else uses during the call.
+unsafe fn strip_attributes(doc: *mut ffi::xmlDoc, strip: &StripAttributes<'_>) {
+    let (Ok(ns), Ok(names)) = (
+        CString::new(strip.namespace),
+        strip
+            .names
+            .iter()
+            .map(|n| CString::new(*n))
+            .collect::<Result<Vec<_>, _>>(),
+    ) else {
+        return; // A NUL byte cannot match any name libxml2 parsed.
+    };
+    let mut targets = Vec::new();
+    // SAFETY: guaranteed by the caller; collecting first keeps the walk off a tree that is
+    // being changed.
+    unsafe {
+        walk_elements(doc, |n, _| {
+            let parent = (*n).parent;
+            if !parent.is_null()
+                && (*parent).type_ == ffi::XML_ELEMENT_NODE
+                && element_is(parent, strip.parent.0, strip.parent.1)
+            {
+                targets.push(n);
+            }
+            false
+        });
+        for node in targets {
+            for name in &names {
+                let attr = ffi::xmlHasNsProp(node, name.as_ptr().cast(), ns.as_ptr().cast());
+                if !attr.is_null() {
+                    ffi::xmlRemoveProp(attr);
+                }
+            }
+        }
+    }
+}
+
+/// Whether `node` is the element `{ns}local`.
+///
+/// # Safety
+/// `node` must point to a live element.
+unsafe fn element_is(node: *const ffi::xmlNode, ns: &str, local: &str) -> bool {
+    // SAFETY: a live element's name is a NUL-terminated string, and its `ns` is null or a
+    // live `xmlNs` with a NUL-terminated `href`.
+    unsafe {
+        let name = (*node).name;
+        if name.is_null() || CStr::from_ptr(name.cast()).to_bytes() != local.as_bytes() {
+            return false;
+        }
+        let node_ns = (*node).ns.cast::<ffi::xmlNs>();
+        let href = if node_ns.is_null() || (*node_ns).href.is_null() {
+            &b""[..]
+        } else {
+            CStr::from_ptr((*node_ns).href.cast()).to_bytes()
+        };
+        href == ns.as_bytes()
     }
 }
 
@@ -884,21 +998,12 @@ fn map_pos(tags: &[StartTag], e: &RawError) -> Option<TextPos> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::model::{SchemaDoc, SchemaOrigin};
+    use crate::test_support::{fixtures, read_fixture};
 
     const XS: &str = "http://www.w3.org/2001/XMLSchema";
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-    }
-
-    fn read_text(rel: &str) -> String {
-        let bytes = std::fs::read(fixtures().join(rel)).expect("fixture exists");
-        crate::xml::decode(&bytes).expect("fixture decodes").text
-    }
 
     fn doc(uri: &str, target_ns: &str, origin: SchemaOrigin, text: String) -> SchemaDoc {
         SchemaDoc {
@@ -912,7 +1017,7 @@ mod tests {
     /// A fixture XSD as WP-WSDL would put it into the bundle: decoded, URI relative to the
     /// project's `wsdl/` folder, `schemaLocation`s rewritten to bundle URIs.
     fn file_doc(uri: &str, target_ns: &str, rewrites: &[(&str, &str)]) -> SchemaDoc {
-        let mut text = read_text(&format!("customer/{uri}"));
+        let mut text = read_fixture(&format!("customer/{uri}"));
         for (from, to) in rewrites {
             let from = format!("schemaLocation=\"{from}\"");
             assert!(text.contains(&from), "{uri} references {from}");
@@ -950,7 +1055,7 @@ mod tests {
 
     /// The inline schema of `CustomerBinding.wsdl` with namespaces carried over.
     fn inline_messages_schema() -> SchemaDoc {
-        let wsdl = read_text("customer/CustomerBinding.wsdl");
+        let wsdl = read_fixture("customer/CustomerBinding.wsdl");
         let parsed = roxmltree::Document::parse(&wsdl).expect("wsdl parses");
         let schema = parsed
             .descendants()
@@ -1048,127 +1153,6 @@ mod tests {
         Some(TextPos { line, column })
     }
 
-    /// `(line, needle)` from the fixture's `<!-- expect: … -->` line; `None` for valid.
-    fn expectation(text: &str) -> Option<(u32, String)> {
-        let first = text.lines().next().expect("expect line");
-        let rest = first
-            .strip_prefix("<!-- expect: ")
-            .and_then(|r| r.strip_suffix(" -->"))
-            .expect("expect comment");
-        if rest == "valid" {
-            return None;
-        }
-        let (line, needle) = rest
-            .strip_prefix("error line ")
-            .and_then(|r| r.split_once(": "))
-            .expect("error expectation");
-        Some((line.parse().expect("line number"), needle.to_owned()))
-    }
-
-    /// Validates every header block and body child the way WP-VALIDATE will: cut out with
-    /// namespaces, padded with newlines so lines match the request file.
-    fn validate_blocks(schema: &CompiledSchema, text: &str) -> Vec<Diagnostic> {
-        const SOAP11: &str = "http://schemas.xmlsoap.org/soap/envelope/";
-        let parsed = roxmltree::Document::parse(text).expect("request parses");
-        let env = parsed.root_element();
-        let mut diags = Vec::new();
-        for section in env.children().filter(|n| n.is_element()) {
-            assert!(
-                section.has_tag_name((SOAP11, "Header")) || section.has_tag_name((SOAP11, "Body"))
-            );
-            for block in section.children().filter(|n| n.is_element()) {
-                let line = parsed.text_pos_at(block.range().start).row as usize;
-                let sub = format!(
-                    "{}{}",
-                    "\n".repeat(line - 1),
-                    cut_with_namespaces(text, block)
-                );
-                diags.extend(schema.validate(sub.as_bytes()));
-            }
-        }
-        diags
-    }
-
-    /// Checks the blocks of `project/requests/<name>` against the file's expectation.
-    fn check_request(schema: &CompiledSchema, project: &str, name: &str) {
-        let text = read_text(&format!("{project}/requests/{name}"));
-        let diags = validate_blocks(schema, &text);
-        match expectation(&text) {
-            None => assert!(diags.is_empty(), "{name}: {diags:#?}"),
-            Some((line, needle)) => assert!(
-                diags.iter().any(|d| d.source == DiagSource::Schema
-                    && d.severity == Severity::Error
-                    && d.pos.map(|p| p.line) == Some(line)
-                    && d.message.to_lowercase().contains(&needle.to_lowercase())),
-                "{name}: expected line {line} `{needle}`, got {diags:#?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn customer_requests_reproduce_oracle_verdicts() {
-        let schema = CompiledSchema::compile(&customer_bundle()).expect("customer compiles");
-        assert_eq!(schema.warnings(), &[] as &[Diagnostic]);
-        // The others fail before schema validation (WP-VALIDATE: well-formedness, SOAP 1.2,
-        // dispatch); see `not_well_formed_is_reported_with_position` for the first.
-        for name in [
-            "valid-create-order.xml",
-            "valid-get-customer.xml",
-            "invalid-abstract-element.xml",
-            "invalid-abstract-type.xml",
-            "invalid-any-lax-known.xml",
-            "invalid-bad-simple-type.xml",
-        ] {
-            check_request(&schema, "customer", name);
-        }
-    }
-
-    /// The rpc/literal bundle as PLAN §5.4 (and the oracle) builds it: the generated wrapper
-    /// shares the inline schema's namespace, so it `xs:include`s it.
-    #[test]
-    fn legacy_rpc_requests_reproduce_oracle_verdicts() {
-        let wsdl = read_text("legacy-rpc/Legacy.wsdl");
-        let parsed = roxmltree::Document::parse(&wsdl).expect("wsdl parses");
-        let inline = parsed
-            .descendants()
-            .find(|n| n.has_tag_name((XS, "schema")))
-            .expect("inline schema");
-        let ns = "urn:example:legacy";
-        let rpc = format!(
-            "<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"{ns}\">\n\
-             <xs:include schemaLocation=\"washboard:/inline/0.xsd\"/>\n\
-             <xs:element name=\"Lookup\"><xs:complexType><xs:sequence>\n\
-             <xs:element name=\"customerNo\" type=\"xs:string\"/>\n\
-             <xs:element name=\"asOf\" type=\"xs:date\"/>\n\
-             </xs:sequence></xs:complexType></xs:element>\n</xs:schema>\n"
-        );
-        let bundle = SchemaBundle {
-            docs: vec![
-                root_doc(&[(ns, "washboard:/rpc/0.xsd")]),
-                doc("washboard:/rpc/0.xsd", ns, SchemaOrigin::Generated, rpc),
-                doc(
-                    "washboard:/inline/0.xsd",
-                    ns,
-                    SchemaOrigin::InlineWsdl {
-                        wsdl_path: "Legacy.wsdl".into(),
-                        index: 0,
-                    },
-                    cut_with_namespaces(&wsdl, inline),
-                ),
-            ],
-            root: "washboard:/root.xsd".into(),
-        };
-        let schema = CompiledSchema::compile(&bundle).expect("legacy compiles");
-        assert_eq!(schema.warnings(), &[] as &[Diagnostic]);
-        for name in [
-            "valid-lookup.xml",
-            "invalid-lookup-bad-date.xml",
-            "invalid-lookup-qualified-part.xml",
-        ] {
-            check_request(&schema, "legacy-rpc", name);
-        }
-    }
-
     #[test]
     fn not_well_formed_is_reported_with_position() {
         let schema = CompiledSchema::compile(&customer_bundle()).expect("customer compiles");
@@ -1177,7 +1161,7 @@ mod tests {
         let diags = schema.validate(&bytes);
         assert!(
             diags.iter().any(|d| d.source == DiagSource::WellFormedness
-                && d.severity == Severity::Error
+                && d.is_error()
                 && d.pos.map(|p| p.line) == Some(9)),
             "{diags:#?}"
         );
@@ -1199,6 +1183,38 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(1, 1));
         assert!(diags[0].message.contains("count"), "{diags:#?}");
+    }
+
+    /// Only the named attributes in the named namespace on children of the named parent go;
+    /// everything else is still validated, and positions do not move.
+    #[test]
+    fn stripped_attributes_are_not_validated() {
+        let strip = StripAttributes {
+            parent: ("urn:t", "r"),
+            namespace: "urn:x",
+            names: &["flag"],
+        };
+        let schema = small();
+        let ok = "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">1</n>\n</r>";
+        assert_eq!(schema.validate_text(ok).len(), 1);
+        assert_eq!(schema.validate_text_stripping(ok, &strip), Vec::new());
+
+        // Another name, another namespace, or on the parent itself: still an error.
+        for bad in [
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:other=\"1\">1</n>\n</r>",
+            "<r xmlns=\"urn:t\" xmlns:y=\"urn:y\">\n  <n y:flag=\"1\">1</n>\n</r>",
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\" x:flag=\"1\">\n  <n>1</n>\n</r>",
+        ] {
+            let diags = schema.validate_text_stripping(bad, &strip);
+            assert_eq!(diags.len(), 1, "{bad}: {diags:#?}");
+        }
+
+        let diags = schema.validate_text_stripping(
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">no</n>\n</r>",
+            &strip,
+        );
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert_eq!(diags[0].pos, pos(2, 3));
     }
 
     #[test]
@@ -1273,7 +1289,7 @@ mod tests {
             "file:///etc/passwd",
         ] {
             assert!(
-                diags.iter().any(|d| d.severity == Severity::Error
+                diags.iter().any(|d| d.is_error()
                     && d.source == DiagSource::Import
                     && d.message.contains(loc)
                     && d.message.contains("not in the schema bundle")),
@@ -1314,7 +1330,7 @@ mod tests {
             };
             let diags = CompiledSchema::compile(&bundle).expect_err("refused");
             assert!(
-                diags.iter().any(|d| d.severity == Severity::Error
+                diags.iter().any(|d| d.is_error()
                     && d.message.contains(path.trim_start_matches('/'))
                     && d.message.contains("not in the schema bundle")),
                 "{loc}: {diags:#?}"
@@ -1419,12 +1435,9 @@ mod tests {
         };
         let schema = CompiledSchema::compile(&bundle).expect("compiles");
         assert!(
-            schema
-                .warnings()
-                .iter()
-                .any(|d| d.severity == Severity::Warning
-                    && d.message.contains("Skipping import")
-                    && d.message.contains("b.xsd")),
+            schema.warnings().iter().any(|d| !d.is_error()
+                && d.message.contains("Skipping import")
+                && d.message.contains("b.xsd")),
             "{:#?}",
             schema.warnings()
         );
@@ -1432,19 +1445,11 @@ mod tests {
 
     #[test]
     fn schemas_compile_and_validate_on_other_threads() {
-        let handles: Vec<_> = (0..4)
-            .map(|_| {
-                std::thread::spawn(|| {
-                    CompiledSchema::compile(&customer_bundle()).expect("compiles")
-                })
-            })
-            .collect();
+        let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(small)).collect();
         for h in handles {
             let schema = h.join().expect("thread");
-            let moved = std::thread::spawn(move || {
-                let text = read_text("customer/requests/valid-get-customer.xml");
-                validate_blocks(&schema, &text)
-            });
+            let moved =
+                std::thread::spawn(move || schema.validate(b"<r xmlns=\"urn:t\"><n>1</n></r>"));
             assert!(moved.join().expect("thread").is_empty());
         }
     }

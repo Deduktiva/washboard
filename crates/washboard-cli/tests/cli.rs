@@ -64,6 +64,21 @@ fn run(args: &[&str]) -> Output {
     cmd(args).output().expect("run washboard")
 }
 
+/// Overwrites a request's file with a fixture request body, so that `send` has something
+/// that validates (generated templates are full of `?` placeholders on purpose).
+fn fill_from_fixture(e: &Env, request: &str, fixture: &str) {
+    let text = fs::read_to_string(e.src.join("requests").join(fixture)).expect("fixture request");
+    let body: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("<soapenv:Envelope"))
+        .collect();
+    fs::write(
+        e.project.join(format!("requests/{request}.xml")),
+        format!("{}\n", body.join("\n")),
+    )
+    .expect("write request");
+}
+
 /// Runs a command on the env's project (`-C`).
 fn wb(e: &Env, args: &[&str]) -> Output {
     let mut all = vec!["-C", e.project.to_str().expect("utf-8 path")];
@@ -295,10 +310,21 @@ fn templates_and_request_management() {
         2,
         "already exists",
     );
-    fails(
-        &wb(&e, &["request", "validate", "Order"]),
-        2,
-        "not available yet",
+    // Validation: the generated template still has its `?` placeholders.
+    let o = wb(&e, &["request", "validate", "Order"]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains("Order: 1 error"), "{}", stderr(&o));
+    // rustc-style excerpt: location, the source line, a caret under the element.
+    assert!(stderr(&o).contains("  --> Order:14:11\n"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("14 |           <com:country>?</com:country>\n   |           ^\n"),
+        "{}",
+        stderr(&o)
+    );
+    fill_from_fixture(&e, "Order", "valid-create-order.xml");
+    assert_eq!(
+        ok(wb(&e, &["request", "validate", "Order"])),
+        "Order: valid\n"
     );
 }
 
@@ -445,20 +471,14 @@ fn send_records_history_and_last_server() {
     ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
     let req = "GetCustomer 1";
 
-    // Validation is not available yet, so sending needs the explicit flag.
-    fails(&wb(&e, &["request", "send", req]), 2, "--skip-validation");
+    // An invalid request is never sent.
+    fill_from_fixture(&e, req, "invalid-bad-simple-type.xml");
+    let o = wb(&e, &["request", "send", req, "--server", "Local"]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(stderr(&o).contains("not sent"), "{}", stderr(&o));
+    fill_from_fixture(&e, req, "valid-get-customer.xml");
 
-    let o = wb(
-        &e,
-        &[
-            "request",
-            "send",
-            req,
-            "--server",
-            "Local",
-            "--skip-validation",
-        ],
-    );
+    let o = wb(&e, &["request", "send", req, "--server", "Local"]);
     assert_eq!(ok(o.clone_output()), OK_RESPONSE);
     assert!(stderr(&o).contains("HTTP/1.1 200 OK"), "{}", stderr(&o));
     let s = seen.recv().expect("request seen");
@@ -483,37 +503,18 @@ fn send_records_history_and_last_server() {
     assert_eq!(json[0]["last_server"], "Local");
 
     // A SOAP fault is a normal response unless --fail-on-fault.
-    let o = wb(&e, &["request", "send", req, "--skip-validation"]);
+    let o = wb(&e, &["request", "send", req]);
     assert_eq!(ok(o.clone_output()), FAULT_RESPONSE);
     assert!(
         stderr(&o).contains("SOAP fault: soapenv:Server: customer locked"),
         "{}",
         stderr(&o)
     );
-    let o = wb(
-        &e,
-        &[
-            "request",
-            "send",
-            req,
-            "--skip-validation",
-            "--fail-on-fault",
-        ],
-    );
+    let o = wb(&e, &["request", "send", req, "--fail-on-fault"]);
     fails(&o, 1, "customer locked");
 
     // Transport errors exit with 1 and are recorded too.
-    let o = wb(
-        &e,
-        &[
-            "request",
-            "send",
-            req,
-            "--server",
-            "Other",
-            "--skip-validation",
-        ],
-    );
+    let o = wb(&e, &["request", "send", req, "--server", "Other"]);
     fails(&o, 1, "127.0.0.1:9");
 
     let hist: Value =
@@ -545,12 +546,10 @@ fn basic_auth_password_comes_from_the_environment() {
         &["server", "add", "Local", &url, "--username", "alice"],
     ));
     ok(wb(&e, &["operation", "template", "CreateOrder", "--save"]));
+    fill_from_fixture(&e, "CreateOrder 1", "valid-create-order.xml");
     // No terminal and no variable: refused before anything is sent.
     fails(
-        &wb(
-            &e,
-            &["request", "send", "CreateOrder 1", "--skip-validation"],
-        ),
+        &wb(&e, &["request", "send", "CreateOrder 1"]),
         2,
         "WASHBOARD_PASSWORD",
     );
@@ -560,7 +559,6 @@ fn basic_auth_password_comes_from_the_environment() {
         "request",
         "send",
         "CreateOrder 1",
-        "--skip-validation",
     ])
     .env("WASHBOARD_PASSWORD", "secret")
     .output()
@@ -582,6 +580,33 @@ fn basic_auth_password_comes_from_the_environment() {
 }
 
 #[test]
+fn skip_validation_sends_broken_requests_anyway() {
+    let e = customer();
+    let (url, seen) = serve(vec![(500, FAULT_RESPONSE)]);
+    ok(wb(&e, &["server", "add", "Local", &url]));
+    ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
+    let req = "GetCustomer 1";
+    fill_from_fixture(&e, req, "invalid-not-well-formed.xml");
+
+    fails(
+        &wb(&e, &["request", "send", req]),
+        1,
+        "--skip-validation sends anyway",
+    );
+    let o = wb(&e, &["request", "send", req, "--skip-validation"]);
+    assert_eq!(ok(o.clone_output()), FAULT_RESPONSE);
+    assert!(stderr(&o).contains("not well-formed"), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("sending despite 1 error"),
+        "{}",
+        stderr(&o)
+    );
+    let s = seen.recv().expect("request seen");
+    let sent = fs::read_to_string(e.project.join(format!("requests/{req}.xml"))).expect("file");
+    assert_eq!(s.body, sent);
+}
+
+#[test]
 fn writing_commands_fail_while_the_project_is_open_elsewhere() {
     let e = customer();
     ok(wb(&e, &["server", "add", "Test", "https://test.invalid/"]));
@@ -594,7 +619,7 @@ fn writing_commands_fail_while_the_project_is_open_elsewhere() {
         &["server", "add", "X", "https://x.invalid/"][..],
         &["operation", "template", "GetCustomer", "--save"],
         &["request", "rename", "GetCustomer 1", "Renamed"],
-        &["request", "send", "GetCustomer 1", "--skip-validation"],
+        &["request", "send", "GetCustomer 1"],
     ] {
         fails(&wb(&e, args), 2, "already open");
     }

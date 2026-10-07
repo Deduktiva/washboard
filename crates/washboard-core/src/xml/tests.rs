@@ -1,26 +1,18 @@
 //! Tests for the editor-side XML utilities, mostly against `fixtures/`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::diag::{DiagSource, TextPos};
 use crate::model::QName;
 use crate::soap::{SOAP11_ENV_NS, XSI_NS};
-
-fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
-
-fn fixture(rel: &str) -> String {
-    let bytes = std::fs::read(fixtures_dir().join(rel)).expect("fixture readable");
-    decode(&bytes).expect("fixture decodes").text
-}
+use crate::test_support::{fixtures, read_fixture};
 
 /// Every XML fixture (requests, WSDLs, XSDs), decoded.
 fn all_fixtures() -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
-    let mut dirs = vec![fixtures_dir()];
+    let mut dirs = vec![fixtures()];
     while let Some(dir) = dirs.pop() {
         for entry in std::fs::read_dir(&dir).expect("fixture dir readable") {
             let path = entry.expect("dir entry").path();
@@ -532,7 +524,7 @@ const COM: &str = "urn:example:common";
 
 #[test]
 fn context_in_xsi_type_value() {
-    let text = fixture("customer/requests/valid-create-order.xml");
+    let text = read_fixture("customer/requests/valid-create-order.xml");
     let at = text.find("com:PublicCompany").expect("present") + 4;
     let ctx = cursor_context(&text, at);
     assert_eq!(
@@ -570,7 +562,7 @@ fn context_in_xsi_type_value() {
 
 #[test]
 fn context_in_text_and_names() {
-    let text = fixture("customer/requests/valid-create-order.xml");
+    let text = read_fixture("customer/requests/valid-create-order.xml");
     let at = text.find("office@").expect("present") + 3;
     let ctx = cursor_context(&text, at);
     assert_eq!(ctx.location, CursorLocation::Text);
@@ -636,7 +628,7 @@ fn context_in_text_and_names() {
 
 #[test]
 fn context_outside_and_in_comments() {
-    let text = fixture("customer/requests/valid-create-order.xml");
+    let text = read_fixture("customer/requests/valid-create-order.xml");
     assert_eq!(cursor_context(&text, 0).location, CursorLocation::Outside);
     assert_eq!(cursor_context(&text, 5).location, CursorLocation::Comment);
     assert!(cursor_context(&text, 5).path.is_empty());
@@ -790,7 +782,7 @@ fn pretty_keeps_formatted_fixtures_unchanged() {
         "customer/requests/invalid-unknown-operation.xml",
         "legacy-rpc/requests/valid-lookup.xml",
     ] {
-        let text = fixture(rel);
+        let text = read_fixture(rel);
         assert_eq!(pretty_print(&text).expect("well-formed"), text, "{rel}");
     }
 }
@@ -815,7 +807,7 @@ fn pretty_reindents_and_aligns_attribute_lines() {
 
 #[test]
 fn pretty_refuses_broken_xml() {
-    let text = fixture("customer/requests/invalid-not-well-formed.xml");
+    let text = read_fixture("customer/requests/invalid-not-well-formed.xml");
     let d = pretty_print(&text).expect_err("not well-formed");
     assert_eq!(d.pos.map(|p| p.line), Some(9));
 }

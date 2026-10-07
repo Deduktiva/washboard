@@ -32,7 +32,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-use crate::diag::{DiagSource, Diagnostic, Severity};
+use crate::diag::{DiagSource, Diagnostic};
 use crate::model::{OperationRef, QName, SchemaBundle};
 use crate::xml::Encoding;
 
@@ -80,9 +80,7 @@ pub struct ImportCheck {
 impl ImportCheck {
     /// Errors block project creation: unreadable files, unresolved or ambiguous references.
     pub fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error)
+        crate::diag::has_errors(&self.diagnostics)
     }
 }
 
