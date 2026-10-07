@@ -103,5 +103,7 @@ done in the cloud: the macOS CI job compiles, tests and packages it; looking at 
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | `crates/washboard-app/**` (after APP-SHELL) | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
 | WP-DIST | APP-SHELL | `cargo-packager` metadata in `crates/washboard-app/Cargo.toml`, a release workflow in `.github/workflows/` | DMG via `cargo-packager`; codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
 
-Not packaged yet: external-change detection with FSEvents (PLAN M5), and a manual check of
-`KeychainSecretStore` on a Mac (type-checked only so far).
+Not packaged yet: external-change detection with FSEvents (PLAN M5), a manual check of
+`KeychainSecretStore` on a Mac (type-checked only so far), and macOS numbers for PLAN §5.1:
+`cargo test --release --test validate_perf --test schema_perf -- --nocapture` on a Mac or as a
+step in the macOS CI job (CI runs debug tests with captured output, so it shows none today).
