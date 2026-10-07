@@ -20,6 +20,13 @@ separately and change only additively unless coordinated.
 Adding a field, variant or function to a contract is fine; say so in your final report.
 Renaming or removing anything in a contract: don't — report the need instead.
 
+## Status
+
+Wave 1 merged into `claude/vigilant-meitner-hrthuh`: WP-LIBXML2, WP-WSDL, WP-SCHEMA, WP-XML,
+WP-PROJECT, WP-HTTP. `crates/washboard-core/tests/pipeline.rs` checks WSDL → bundle →
+libxml2 against the fixture expectations. WP-APP-SHELL is handed off for a Mac
+(`docs/handoff/APP-SHELL.md`). Wave 2 not started.
+
 ## Wave 1 — independent, start in parallel
 
 ### WP-LIBXML2 — libxml2 build, FFI, safe schema wrapper
