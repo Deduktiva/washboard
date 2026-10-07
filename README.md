@@ -9,14 +9,13 @@ washboard server add reference http://192.0.2.1:8080/myservice
 washboard server add production https://192.0.2.2/myservice
 washboard request new querySubscription --name query1
 vim requests/query1.xml  # do whatever
-washboard request send --skip-validation --server reference query1
+washboard request send --server reference query1
 ```
 
 ## send example
 
 ```
-washboard request send --skip-validation --server reference query1
-note: sending without validation
+washboard request send --server reference query1
 HTTP/1.1 200 OK  221 ms  494 bytes
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <soapenv:Body>
@@ -27,6 +26,9 @@ HTTP/1.1 200 OK  221 ms  494 bytes
         </soapenv:Body>
 </soapenv:Envelope>
 ```
+
+`send` validates first and refuses a request with errors; `--skip-validation` sends it anyway,
+to see how the server handles broken XML.
 
 ## history example
 

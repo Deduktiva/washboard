@@ -289,8 +289,8 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
    declaration in the project schema is validated fully, and positions refer directly to the
    user's document. Blocks are never cut out, so there is no namespace re-declaration and no
    line mapping beyond the start-tag adjustment in `validate::xsd`.
-   Verified with libxml2 2.14 against all schema-level fixtures, including `xsi:type`, abstract
-   elements, substitution groups, `xs:any` and rpc/literal wrappers.
+   Checked by `washboard-core/tests/pipeline.rs` against every fixture request, including
+   `xsi:type`, abstract elements, substitution groups, `xs:any` and rpc/literal wrappers.
 5. Header blocks the binding declares (`soap:header`) but that are missing → warning; header
    blocks the binding doesn't declare are validated if the schema knows them (lax), otherwise
    left alone, as SOAP intends.
