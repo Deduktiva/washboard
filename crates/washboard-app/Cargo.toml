@@ -6,6 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "washboard_app"
+
+[[bin]]
+name = "washboard-app"
+path = "src/main.rs"
+
+# AppKit has to run on the main thread; libtest runs tests on worker threads.
+[[test]]
+name = "appkit"
+harness = false
+
 [dependencies]
 washboard-core.workspace = true
 
@@ -16,3 +28,4 @@ workspace = true
 objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
+
