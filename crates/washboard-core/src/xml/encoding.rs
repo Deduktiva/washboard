@@ -1,14 +1,4 @@
-//! XML text utilities shared by all modules.
-//!
-//! Every XML input (WSDL, XSD, request files, responses) goes through [`decode`] before it is
-//! handed to a Rust XML parser. `roxmltree` and `quick-xml` want `&str` without a BOM; real
-//! WSDLs come with UTF-8 BOMs and occasionally as UTF-16 or ISO-8859-1.
-//!
-//! libxml2 gets the original bytes instead — it handles encodings itself — so positions it
-//! reports are converted via [`crate::diag::TextPos`], which does not count the BOM either.
-//!
-//! Planned additions (work package WP-XML in `docs/TASKS.md`): tokenizer for highlighting,
-//! well-formedness check with positions, pretty-printer.
+//! Byte-level decoding of XML input and encoding of request files.
 
 use thiserror::Error;
 
