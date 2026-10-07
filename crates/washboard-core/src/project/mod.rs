@@ -83,6 +83,11 @@ pub enum ProjectError {
         "the project database has version {found}; this Washboard understands up to {supported}"
     )]
     UnsupportedVersion { found: i32, supported: i32 },
+    #[error(
+        "the project database has version {found}; open it for writing once to upgrade it to \
+         {supported}"
+    )]
+    NeedsUpgrade { found: i32, supported: i32 },
     #[error("project name may not be empty")]
     EmptyProjectName,
     #[error("invalid request name {name:?}: {reason}")]
@@ -248,6 +253,50 @@ impl Project {
         };
         project.reconciliation = project.reconcile()?;
         Ok(project)
+    }
+
+    /// Opens an existing project for reading only: no folder lock, no migration, no
+    /// reconciliation, nothing created. Works while another process (the app) has the project
+    /// open, which is what the command-line tool's read-only commands need.
+    ///
+    /// Any write through the returned value fails with a database error. Request files added
+    /// or removed since the last writable open are not reflected in [`Project::requests`]
+    /// ([`Project::reconciliation`] is empty). A database older than [`SCHEMA_VERSION`] is
+    /// refused with [`ProjectError::NeedsUpgrade`] rather than migrated.
+    pub fn open_read_only(folder: &Path) -> Result<Project> {
+        let db_path = folder.join(DB_FILE);
+        if !db_path.is_file() {
+            return Err(ProjectError::NotAProject(folder.to_owned()));
+        }
+        let conn = db::connect_read_only(&db_path)?;
+        let found = db::user_version(&conn)?;
+        if found == 0 {
+            return Err(ProjectError::NotAProject(folder.to_owned()));
+        }
+        if found > SCHEMA_VERSION {
+            return Err(ProjectError::UnsupportedVersion {
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        if found < SCHEMA_VERSION {
+            return Err(ProjectError::NeedsUpgrade {
+                found,
+                supported: SCHEMA_VERSION,
+            });
+        }
+        let id: String = conn
+            .query_row("SELECT id FROM project LIMIT 1", [], |r| r.get(0))
+            .optional()?
+            .ok_or_else(|| ProjectError::Corrupt("no project row".into()))?;
+        let id = ProjectId(parse_uuid(&id, "project")?);
+        Ok(Project {
+            root: folder.to_owned(),
+            conn,
+            _lock: None,
+            id,
+            reconciliation: Reconciliation::default(),
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -509,6 +558,12 @@ fn copy_wsdl_set(set: &WsdlSet, into: &Path) -> Result<()> {
         fs::copy(&f.source, &to).at(&f.source)?;
     }
     Ok(())
+}
+
+/// A timestamp as RFC 3339 UTC text, in the fixed-width form the database stores
+/// (`YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`). For the command-line tool, which has no date library.
+pub fn format_timestamp(t: SystemTime) -> String {
+    timefmt::format(t)
 }
 
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid> {

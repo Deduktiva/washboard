@@ -67,6 +67,17 @@ pub(crate) fn user_version(conn: &Connection) -> Result<i32, ProjectError> {
     Ok(conn.query_row("PRAGMA user_version", [], |r| r.get(0))?)
 }
 
+/// Opens the database without write access, for `Project::open_read_only`.
+///
+/// No pragmas are changed: the journal mode is the writer's business, and foreign keys only
+/// matter for writes. Never creates the file.
+pub(crate) fn connect_read_only(path: &Path) -> Result<Connection, ProjectError> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let conn = Connection::open_with_flags(path, flags)?;
+    conn.busy_timeout(Duration::from_secs(2))?;
+    Ok(conn)
+}
+
 /// Brings the schema to [`SCHEMA_VERSION`]. A newer database is refused, not touched.
 pub(crate) fn migrate(conn: &mut Connection) -> Result<(), ProjectError> {
     let found = user_version(conn)?;
