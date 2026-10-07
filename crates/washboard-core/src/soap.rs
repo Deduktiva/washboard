@@ -201,14 +201,11 @@ pub fn body_elements(text: &str) -> Option<Vec<QName>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use super::*;
+    use crate::test_support::fixtures;
     use crate::wsdl::{self, Sources};
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-    }
 
     fn load(dir: &str, entry: &str, extra: &[&str]) -> (Wsdl, SchemaModel) {
         let root = fixtures().join(dir);

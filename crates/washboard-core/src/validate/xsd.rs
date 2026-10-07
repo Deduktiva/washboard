@@ -998,21 +998,12 @@ fn map_pos(tags: &[StartTag], e: &RawError) -> Option<TextPos> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::model::{SchemaDoc, SchemaOrigin};
+    use crate::test_support::{fixtures, read_fixture};
 
     const XS: &str = "http://www.w3.org/2001/XMLSchema";
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-    }
-
-    fn read_text(rel: &str) -> String {
-        let bytes = std::fs::read(fixtures().join(rel)).expect("fixture exists");
-        crate::xml::decode(&bytes).expect("fixture decodes").text
-    }
 
     fn doc(uri: &str, target_ns: &str, origin: SchemaOrigin, text: String) -> SchemaDoc {
         SchemaDoc {
@@ -1026,7 +1017,7 @@ mod tests {
     /// A fixture XSD as WP-WSDL would put it into the bundle: decoded, URI relative to the
     /// project's `wsdl/` folder, `schemaLocation`s rewritten to bundle URIs.
     fn file_doc(uri: &str, target_ns: &str, rewrites: &[(&str, &str)]) -> SchemaDoc {
-        let mut text = read_text(&format!("customer/{uri}"));
+        let mut text = read_fixture(&format!("customer/{uri}"));
         for (from, to) in rewrites {
             let from = format!("schemaLocation=\"{from}\"");
             assert!(text.contains(&from), "{uri} references {from}");
@@ -1064,7 +1055,7 @@ mod tests {
 
     /// The inline schema of `CustomerBinding.wsdl` with namespaces carried over.
     fn inline_messages_schema() -> SchemaDoc {
-        let wsdl = read_text("customer/CustomerBinding.wsdl");
+        let wsdl = read_fixture("customer/CustomerBinding.wsdl");
         let parsed = roxmltree::Document::parse(&wsdl).expect("wsdl parses");
         let schema = parsed
             .descendants()
