@@ -1,12 +1,17 @@
 //! Request validation: `washboard_core::validate`'s pipeline, and the one place `send` goes
 //! through before it sends anything.
 
+use std::io::IsTerminal;
+use std::ops::Range;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 
+use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
 use anyhow::bail;
-use washboard_core::diag::{self, Diagnostic, Severity};
+use washboard_core::diag::{self, Diagnostic, Severity, TextPos};
 use washboard_core::model::RequestMeta;
+use washboard_core::schema::SchemaModel;
 use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::wsdl::Wsdl;
 
@@ -16,11 +21,12 @@ use crate::support;
 /// diagnostic, warnings included, to stderr. Whether the request may be sent is
 /// [`Validation::has_errors`]; the `Err` case means the project itself is broken.
 ///
-/// The schema is compiled per call: the CLI is one command per process, where the app
-/// compiles once in the background when the project opens.
+/// The schema (and the model that explains abstract-type errors) is built per call: the CLI is
+/// one command per process, where the app builds both once in the background when the project
+/// opens.
 pub fn check(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> anyhow::Result<Validation> {
     let schema = match RequestSchema::compile(&wsdl.bundle) {
-        Ok(s) => s,
+        Ok(s) => s.with_model(Arc::new(SchemaModel::build(&wsdl.bundle))),
         Err(diagnostics) => {
             for d in &diagnostics {
                 eprintln!("{d}");
@@ -29,48 +35,74 @@ pub fn check(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> anyhow::Result<V
         }
     };
     let result = validate::validate_request(wsdl, &schema, text, request.operation.as_ref());
+    let renderer = if std::io::stderr().is_terminal() {
+        Renderer::styled()
+    } else {
+        Renderer::plain()
+    };
     for d in &result.diagnostics {
-        eprint!("{}", render(&request.name, text, d));
+        eprint!("{}", render(&renderer, &request.name, text, d));
     }
     Ok(result)
 }
 
-/// A diagnostic as rustc prints one: message, location, and the source line with a caret
-/// under the column, followed by a blank line.
-///
-/// Diagnostics carry a start position only, so the caret marks where the problem starts (for
-/// schema errors, the `<` of the element) rather than underlining a span. PLAN §5.2 has what
-/// a span would need.
-fn render(name: &str, text: &str, d: &Diagnostic) -> String {
-    let severity = match d.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
+/// A diagnostic as rustc prints one, followed by a blank line: message, location, and the
+/// source lines with the diagnostic's span underlined. Without a span a single caret marks
+/// `pos` (for schema errors, the `<` of the element).
+fn render(renderer: &Renderer, name: &str, text: &str, d: &Diagnostic) -> String {
+    let level = match d.severity {
+        Severity::Error => Level::ERROR,
+        Severity::Warning => Level::WARNING,
     };
-    let mut out = format!("{severity}: {}\n", d.message);
-    let Some(pos) = d.pos else {
-        out.push_str(&format!("  --> {name}\n\n"));
-        return out;
+    let title = level.primary_title(d.message.as_str());
+    let range = match (d.span, d.pos) {
+        (Some(span), _) => byte_at(text, span.start)
+            .zip(byte_at(text, span.end))
+            .filter(|(start, end)| start <= end)
+            .map(|(start, end)| start..end),
+        (None, Some(pos)) => byte_at(text, pos).map(|b| point(text, b)),
+        (None, None) => None,
     };
-    out.push_str(&format!("  --> {name}:{}:{}\n", pos.line, pos.column));
-    let Some(line) = usize::try_from(pos.line)
-        .ok()
-        .and_then(|l| text.lines().nth(l.saturating_sub(1)))
-    else {
-        out.push('\n');
-        return out;
+    let report = match (range, d.pos) {
+        (Some(range), _) => [title.element(
+            Snippet::source(text)
+                .path(name)
+                .annotation(AnnotationKind::Primary.span(range)),
+        )],
+        (None, Some(pos)) => [title.element(
+            Origin::path(name)
+                .line(usize::try_from(pos.line).unwrap_or(usize::MAX))
+                .char_column(usize::try_from(pos.column).unwrap_or(1)),
+        )],
+        (None, None) => [title.element(Origin::path(name))],
     };
-    let number = pos.line.to_string();
-    let gutter = " ".repeat(number.len());
-    // Keep tabs so the caret lines up however the terminal expands them.
-    let indent: String = line
-        .chars()
-        .take(usize::try_from(pos.column).unwrap_or(1).saturating_sub(1))
-        .map(|c| if c == '\t' { '\t' } else { ' ' })
-        .collect();
-    out.push_str(&format!(
-        "{gutter} |\n{number} | {line}\n{gutter} | {indent}^\n\n"
-    ));
-    out
+    format!("{}\n\n", renderer.render(&report))
+}
+
+/// The byte offset of `pos` in `text`, or `None` if it is outside the text. A column one past
+/// the end of a line is the line's end.
+fn byte_at(text: &str, pos: TextPos) -> Option<usize> {
+    let line = usize::try_from(pos.line).ok()?.checked_sub(1)?;
+    let column = usize::try_from(pos.column).ok()?.checked_sub(1)?;
+    let start = if line == 0 {
+        0
+    } else {
+        text.match_indices('\n').nth(line - 1)?.0 + 1
+    };
+    let content = &text[start..];
+    let content = &content[..content.find('\n').unwrap_or(content.len())];
+    let offset = content
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(content.len()))
+        .nth(column)?;
+    Some(start + offset)
+}
+
+/// The char at `byte`, as a range a caret can mark.
+fn point(text: &str, byte: usize) -> Range<usize> {
+    let len = text[byte..].chars().next().map_or(0, char::len_utf8);
+    byte..byte + len
 }
 
 pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
@@ -93,29 +125,59 @@ pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
 
 #[cfg(test)]
 mod tests {
-    use washboard_core::diag::{DiagSource, TextPos};
+    use washboard_core::diag::{DiagSource, TextSpan};
 
     use super::*;
 
+    fn plain(name: &str, text: &str, d: &Diagnostic) -> String {
+        render(&Renderer::plain(), name, text, d)
+    }
+
     #[test]
     fn excerpt_puts_the_caret_under_the_column() {
-        let text = "<a>\n\t  <b>x</b>\n</a>\n";
+        let text = "<a>\n  ü<b>x</b>\n</a>\n";
         let d = Diagnostic::error(
             DiagSource::Schema,
             Some(TextPos { line: 2, column: 4 }),
             "bad b",
         );
         assert_eq!(
-            render("Req 1", text, &d),
-            "error: bad b\n  --> Req 1:2:4\n  |\n2 | \t  <b>x</b>\n  | \t  ^\n\n"
+            plain("Req 1", text, &d),
+            "error: bad b\n --> Req 1:2:4\n  |\n2 |   ü<b>x</b>\n  |    ^\n\n"
+        );
+    }
+
+    #[test]
+    fn excerpt_underlines_the_span() {
+        let text = "<a>\n  <b c=\"x\">x</b>\n</a>\n";
+        let p = |line, column| TextPos { line, column };
+        let d = Diagnostic::error(DiagSource::Schema, Some(p(2, 3)), "bad c").with_span(TextSpan {
+            start: p(2, 6),
+            end: p(2, 11),
+        });
+        assert_eq!(
+            plain("R", text, &d),
+            "error: bad c\n --> R:2:6\n  |\n2 |   <b c=\"x\">x</b>\n  |      ^^^^^\n\n"
         );
     }
 
     #[test]
     fn no_position_or_line_out_of_range_prints_no_excerpt() {
         let d = Diagnostic::warning(DiagSource::Soap, None, "w");
-        assert_eq!(render("R", "<a/>", &d), "warning: w\n  --> R\n\n");
+        assert_eq!(plain("R", "<a/>", &d), "warning: w\n --> R\n\n");
         let d = Diagnostic::error(DiagSource::Soap, Some(TextPos { line: 9, column: 1 }), "e");
-        assert_eq!(render("R", "<a/>", &d), "error: e\n  --> R:9:1\n\n");
+        assert_eq!(plain("R", "<a/>", &d), "error: e\n --> R:9:1\n\n");
+    }
+
+    #[test]
+    fn byte_at_counts_chars() {
+        let t = "ab\nüx\n";
+        let p = |line, column| TextPos { line, column };
+        assert_eq!(byte_at(t, p(1, 1)), Some(0));
+        assert_eq!(byte_at(t, p(2, 2)), Some(5));
+        assert_eq!(byte_at(t, p(2, 3)), Some(6));
+        assert_eq!(byte_at(t, p(2, 4)), None);
+        assert_eq!(byte_at(t, p(3, 1)), Some(7));
+        assert_eq!(byte_at(t, p(4, 1)), None);
     }
 }
