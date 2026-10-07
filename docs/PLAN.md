@@ -50,7 +50,8 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 
 ## 2. Architecture
 
-Cargo workspace, three crates. The split keeps everything except AppKit testable on Linux CI.
+Cargo workspace. The split keeps everything except the AppKit layer testable on Linux CI, and
+keeps the door open for a Windows or Linux GUI later (§2.1).
 
 ```
 washboard/
@@ -66,8 +67,9 @@ washboard/
 │  │   ├─ soap/               envelope/version detection, SOAPAction, fault parsing
 │  │   ├─ http/               client, TLS policy, exchange capture for the log
 │  │   └─ secrets/            trait SecretStore { get/set/delete } (Keychain impl behind cfg)
-│  ├─ washboard-cli/          dev harness: import, list, validate, send — drives core without UI
-│  └─ washboard-app/          objc2 AppKit app, bundle metadata, assets
+│  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs (§2.1)
+│  ├─ washboard-cli/          command-line tool on the same project folders, drives core without UI
+│  └─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; bundle, assets
 └─ xtask/                     build .app bundle, codesign, (later) notarize, DMG
 ```
 
@@ -80,13 +82,15 @@ washboard/
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see §5 for the gotchas |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Verify in M0 that raw-ish header capture is adequate. |
 | Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
-| IDs / time | `uuid`, `time` | |
+| IDs / time | `uuid`, `jiff` | |
 | File watching (M5) | `notify` (FSEvents backend) | external edits to request files |
 
-No `tokio`. Threads + channels; results are posted to the main queue via `dispatch2`.
+No `tokio`. Threads + channels; results are posted back to the UI thread through the front
+end's `MainThread` implementation (§2.1; `dispatch2` main queue on macOS).
 
 ### Threading model
-- **Main thread**: all AppKit, all project state mutation (`Rc<RefCell<ProjectState>>` per window).
+- **Main thread**: all AppKit, and the `washboard-ui-model` state, which is only touched there
+  (`Rc<RefCell<…>>`, deliberately not `Send`).
 - **Validation thread** (one per app): owns all libxml2 schema work. If the pinned release only
   offers the process-global external-entity loader, serializing all schema compiles on one
   thread avoids races; if it has per-context resource loaders, this can become a small pool.
@@ -94,6 +98,54 @@ No `tokio`. Threads + channels; results are posted to the main queue via `dispat
 - **HTTP workers**: one short-lived thread per send. "Cancel" detaches and ignores the result
   (blocking ureq can't be interrupted mid-read; a per-server timeout bounds it).
 - Workers receive immutable snapshots (`Arc<…>`), never project state.
+
+### 2.1 `washboard-ui-model`: the app without the toolkit
+Everything the app *does*, as opposed to how it *looks*, lives in a crate with no UI toolkit
+dependency. The AppKit front end only draws state and forwards user input. A Windows or Linux
+GUI later reimplements the front end and reuses this crate unchanged.
+
+**Name:** `washboard-ui-model`, as in "view model": it models the UI's state and behaviour,
+and the word "model" keeps it apart from `washboard-core` (domain logic) and from the widgets.
+
+**Owns (all toolkit-independent):**
+- App state: open projects, recent projects, restore on launch (`project::AppState`), the
+  welcome-window condition, the HTTP log ring buffer (50).
+- Per project window: the sidebar tree (requests with dirty/invalid markers, operations
+  incl. unsupported ones), selection, the server popup's items and selection, the response
+  pane's state, history list, issues list, project settings form state.
+- Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
+  autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
+  completion and hover requests answered from `schema::SchemaModel`.
+- Commands: new/rename/duplicate/delete request, validate, send (validate first, refuse on
+  errors), save all, new project / replace WSDL with the import check, server CRUD.
+- Background jobs: schema compile per project, validation, sends; cancellation and
+  "stale result" handling (results for a buffer version that has since changed are dropped).
+
+**Interface to a front end:**
+- The front end calls commands and reports input (`edit(range, text)`, `select(request)`,
+  `send()`, …). Text positions cross the boundary as UTF-16 offsets, the native unit of AppKit
+  and Win32 text APIs (a GTK front end converts to its char offsets); the model converts to
+  byte offsets with `xml::utf16`.
+- The model reports changes as a list of small, typed events (`SidebarChanged`,
+  `TokensChanged(range)`, `DiagnosticsChanged`, `ResponseChanged`, `LogAppended`, …), which
+  the front end applies to its widgets. No toolkit types cross the boundary.
+- The front end provides three traits: `MainThread` (post a closure to the UI thread;
+  `dispatch2` on macOS, `glib::idle_add` on GTK, a window message on Win32), `Timers`
+  (one-shot timers for autosave and debounce) and `Dialogs` (open/save panels, confirmations,
+  alerts), plus a `SecretStore` (Keychain on macOS).
+
+**Stays per toolkit:** windows, menus and shortcuts, toolbar, split views, the text editor widget
+(applying token spans as attributes, the line-number ruler, the completion popup), table and
+outline views, sheets, the app bundle and platform integration (recent documents, Dock).
+
+**Why now:** the behaviour has to be written once either way. Writing it into a toolkit-free
+crate costs little more than writing it into AppKit controllers, and it buys tests: autosave
+timing, validate-before-send, stale-result dropping and restore-on-launch run on Linux CI with a
+fake front end. Extracting it later from finished AppKit code would mean rewriting it.
+
+**Rough reuse for a second GUI:** `washboard-core` and `washboard-ui-model` unchanged; the
+front end is new. For GTK4 the editor would be `GtkSourceView` (XML highlighting and a line
+gutter included); on Windows, Scintilla or a RichEdit-based control.
 
 ### Why not NSDocument
 NSDocument assumes "one file, dirty flag, save prompts". A project is many files plus a DB with
@@ -443,9 +495,11 @@ exercises all of it. Unit tests + fixture WSDL corpus + local HTTPS test server.
 `washboard-cli inspect <wsdl> [xsd-dir]` prints the structural report from §5.1 (counts, depths,
 flags; no names or contents), so it can be run on WSDLs that can't leave your machine.
 
-**M2 — App shell**
+**M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
-new-project sheet, request CRUD in the sidebar, autosave/Save All, reopen projects on launch.
+new-project sheet. In parallel, `washboard-ui-model` (Linux-testable): app and window state,
+request CRUD, editor buffers, autosave/Save All, reopen projects on launch, with a fake front
+end in tests. Then wire the AppKit shell to it.
 
 **M3 — Send loop**
 Server popup, send with pre-validation, response pane with tabs, history, HTTP log panel,
@@ -459,8 +513,9 @@ Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, ac
 (VoiceOver labels on toolbar/sidebar), app icon, `xtask bundle`, codesign, notarization, DMG.
 
 ### CI
-- Linux: `cargo test -p washboard-core -p washboard-cli`, clippy, fmt, `cargo deny`.
-- macOS runner: build `washboard-app`, produce unsigned `.app` artifact.
+- Linux: fmt, clippy, tests for every crate except the AppKit front end (including
+  `washboard-ui-model` with its fake front end), the fixture oracle; `cargo deny` to add.
+- macOS runner: clippy and tests for everything; later an unsigned `.app` artifact.
 
 ---
 
