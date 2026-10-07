@@ -11,6 +11,8 @@
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod editor;
+#[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
 mod project_window;
@@ -18,11 +20,16 @@ mod project_window;
 mod sidebar;
 #[cfg(target_os = "macos")]
 mod welcome;
+// Used by the editor; built everywhere so its tests run on Linux.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod text_diff;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, toolbar_identifiers};
+pub use editor::{EditorController, LineNumberRuler};
+#[cfg(target_os = "macos")]
+pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
 #[cfg(target_os = "macos")]
 pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]

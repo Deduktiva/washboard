@@ -9,7 +9,7 @@ use std::cell::OnceCell;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSColor, NSFont, NSImage, NSLayoutAttribute, NSPopUpButton,
     NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView,
@@ -23,6 +23,7 @@ use objc2_foundation::{
     NSString, ns_string,
 };
 
+use crate::editor::EditorController;
 use crate::sidebar::SidebarController;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
@@ -43,6 +44,18 @@ const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 const SERVER_ITEM: &str = "server";
+
+/// Shown in the editor until requests are loaded from the project.
+pub const SAMPLE_REQUEST: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:cus="urn:example:customer">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <cus:GetCustomer>
+      <cus:customerId>?</cus:customerId>
+    </cus:GetCustomer>
+  </soapenv:Body>
+</soapenv:Envelope>
+"#;
 
 /// Placeholder until the server list comes from the project.
 const SAMPLE_SERVERS: &[&str] = &["Staging", "Production"];
@@ -80,6 +93,7 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
 pub struct ProjectIvars {
     name: String,
     sidebar: Retained<SidebarController>,
+    editor: Retained<EditorController>,
     split: OnceCell<Retained<NSSplitViewController>>,
 }
 
@@ -192,6 +206,7 @@ impl ProjectWindowController {
         let this = Self::alloc(mtm).set_ivars(ProjectIvars {
             name: name.to_owned(),
             sidebar: SidebarController::new(mtm),
+            editor: EditorController::new(mtm),
             split: OnceCell::new(),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
@@ -222,6 +237,10 @@ impl ProjectWindowController {
         &self.ivars().sidebar
     }
 
+    pub fn editor(&self) -> &EditorController {
+        &self.ivars().editor
+    }
+
     pub fn split_view(&self) -> &NSSplitViewController {
         self.ivars().split.get().expect("set in new()")
     }
@@ -247,7 +266,10 @@ impl ProjectWindowController {
         split.addSplitViewItem(&sidebar_item);
 
         let content_vc = NSViewController::new(mtm);
-        content_vc.setView(&content_pane(mtm));
+        let editor = &self.ivars().editor;
+        editor.set_text(SAMPLE_REQUEST);
+        editor.ruler().set_error_lines(vec![6]);
+        content_vc.setView(&content_pane(editor.view(), mtm));
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content_vc);
         split.addSplitViewItem(&content_item);
         split
@@ -351,10 +373,10 @@ fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NS
     button
 }
 
-/// Editor, issues bar and response pane. Placeholders: the editor arrives in step 4, the real
-/// issues bar and response pane in step 5.
-fn content_pane(mtm: MainThreadMarker) -> Retained<NSView> {
-    let editor = placeholder("Editor", mtm);
+/// Editor, issues bar and response pane. The issues bar and response pane are placeholders
+/// until step 5.
+fn content_pane(editor: &NSScrollView, mtm: MainThreadMarker) -> Retained<NSView> {
+    let editor: Retained<NSView> = Retained::into_super(editor.retain());
     let issues = NSTextField::labelWithString(
         ns_string!("⚠ 1 error  line 6: 'customerId': '?' is not a valid xs:long"),
         mtm,
