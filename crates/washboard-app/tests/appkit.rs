@@ -222,6 +222,10 @@ mod checks {
     }
 
     /// Titles, shortcuts and actions of every menu item, and the menus AppKit manages.
+    ///
+    /// AppKit adds items of its own (Close All as an alternate of Close, Emoji & Symbols and
+    /// AutoFill in Edit, window tiling in Window), varying by macOS release. Only our items
+    /// are compared, in order; separators are not compared.
     pub fn main_menu(ctx: &Ctx) {
         let main = ctx.app.mainMenu().expect("a main menu");
         let items = main.itemArray();
@@ -231,9 +235,18 @@ mod checks {
             assert_eq!(submenu.title().to_string(), *title);
             let expected: Vec<_> = expected
                 .iter()
+                .filter(|(t, ..)| *t != "-")
                 .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
                 .collect();
-            assert_eq!(rows(&submenu), expected, "{title} menu");
+            let (ours, added): (Vec<_>, Vec<_>) = rows(&submenu)
+                .into_iter()
+                .filter(|(t, ..)| t != "-")
+                .partition(|(t, ..)| expected.iter().any(|(e, ..)| e == t));
+            assert_eq!(ours, expected, "{title} menu");
+            if !added.is_empty() {
+                let titles: Vec<_> = added.iter().map(|(t, ..)| t.as_str()).collect();
+                print!("({title}: AppKit added {titles:?}) ");
+            }
         }
 
         let windows = ctx
