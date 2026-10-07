@@ -281,8 +281,8 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 - **Well-formedness**: on every edit (debounced 150 ms), libxml2 parse (same parser and options
   as validation) → red underline at the error position + message in the issues bar. This is the
   "not valid XML is visible" requirement. ~15 ms for 1 MB.
-- **Schema validation**: Validate button (⌘B), automatically before send, and optionally live
-  (debounced 1 s) once we know it's fast enough on large schemas.
+- **Schema validation**: Validate button (⌘B), automatically before send, and live (debounced
+  1 s); fast enough on large schemas per the measurements in §5.1.
 - **Completion**: native `NSTextView` completion (`textView:completions:forPartialWordRange:…`)
   fed by the Rust schema model: element names allowed at the cursor path, attribute names,
   enumeration values. Triggered on `<`, space inside a tag, `="`, and ⌥⎋.
@@ -406,8 +406,12 @@ Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
 - **Template generation is bounded**: recursion depth limit (default 6) and a node budget; when
   cut, a `<!-- … truncated: type Foo -->` comment is emitted instead of silently stopping.
 - **Validation of a request** reuses the compiled schema; cost is proportional to the request,
-  not the schema. Live validation is enabled only if it measures under ~100 ms
-  (WP-VALIDATE-PERF in `docs/TASKS.md`).
+  not the schema. Live validation is enabled only if it measures under ~100 ms. Measured
+  (`crates/washboard-core/tests/validate_perf.rs`, release build, median of 5, 4-core 2.1 GHz
+  Xeon on Linux, vendored libxml2 2.15.4) on the synthetic 2.1 MB set: compile 340–370 ms;
+  `validate_request` 0.1 ms for 1 KB, 0.7 ms for 14 KB, 3.6 ms for 81 KB, 12 ms for 257 KB,
+  80 ms for 1.6 MB, and 9 ms for 81 KB with 500 errors. Live validation is therefore on; both
+  targets are asserted in release builds. Not yet measured on a Mac.
 - **Fixture corpus**: since real WSDLs can't be shared, CI uses public WSDLs of similar shape plus
   a generator that synthesises large schema sets (N files, depth D, namespaces split across files,
   recursive types, deep derivation chains, substitution groups across namespaces, `xs:any`,
@@ -536,8 +540,8 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 
 Each milestone ends in something runnable.
 
-M0 (libxml2 and ureq spikes) and M1 (core library and the `washboard` CLI) are done; what is
-left of them is in `docs/TASKS.md` (libxml2 timings: WP-VALIDATE-PERF).
+M0 (libxml2 and ureq spikes) and M1 (core library and the `washboard` CLI) are done; follow-up
+work is in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
