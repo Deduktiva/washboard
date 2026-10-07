@@ -180,6 +180,33 @@ impl<'a> LineIndex<'a> {
             column: u32::try_from(column + 1).unwrap_or(u32::MAX),
         }
     }
+
+    /// The span covering the byte range `bytes`.
+    pub fn span(&self, bytes: std::ops::Range<usize>) -> TextSpan {
+        TextSpan {
+            start: self.pos(bytes.start),
+            end: self.pos(bytes.end),
+        }
+    }
+
+    /// The inverse of [`Self::pos`]: the byte offset of `pos`, or `None` if it is not in the
+    /// text. A column one past the end of a line is that line's end.
+    pub fn byte(&self, pos: TextPos) -> Option<usize> {
+        let line = usize::try_from(pos.line).ok()?.checked_sub(1)?;
+        let column = usize::try_from(pos.column).ok()?.checked_sub(1)?;
+        let start = *self.starts.get(line)?;
+        let end = self
+            .starts
+            .get(line + 1)
+            .map_or(self.text.len(), |&s| s - 1);
+        let content = self.text.get(start..end)?;
+        let offset = content
+            .char_indices()
+            .map(|(i, _)| i)
+            .chain(std::iter::once(content.len()))
+            .nth(column)?;
+        Some(start + offset)
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +222,18 @@ mod tests {
                 assert_eq!(li.pos(b), pos_at_byte(t, b), "byte {b}");
             }
         }
+    }
+
+    #[test]
+    fn byte_inverts_pos() {
+        let t = "ab\nüx\n";
+        let li = LineIndex::new(t);
+        for b in [0, 1, 2, 3, 5, 6, 7] {
+            assert_eq!(li.byte(li.pos(b)), Some(b), "byte {b}");
+        }
+        assert_eq!(li.byte(TextPos { line: 2, column: 4 }), None);
+        assert_eq!(li.byte(TextPos { line: 4, column: 1 }), None);
+        assert_eq!(li.byte(TextPos { line: 0, column: 1 }), None);
     }
 
     #[test]
