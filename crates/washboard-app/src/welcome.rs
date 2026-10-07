@@ -4,7 +4,7 @@
 use std::cell::OnceCell;
 
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSColor,
@@ -93,9 +93,30 @@ define_class!(
             project.map(|p| Retained::into_super(row_view(p, self.mtm())))
         }
     }
+
+    impl WelcomeController {
+        // SAFETY: action methods take the sender and return nothing.
+        #[unsafe(method(openRecent:))]
+        fn open_recent_action(&self, _sender: Option<&AnyObject>) {
+            let row = self.ivars().table.get().map(|t| t.clickedRow());
+            if let Some(row) = row.and_then(|r| usize::try_from(r).ok()) {
+                self.open_recent(row);
+            }
+        }
+    }
 );
 
 impl WelcomeController {
+    /// Opens the recent project in `row`; the double-click action of the table.
+    pub fn open_recent(&self, row: usize) {
+        let Some(project) = self.ivars().recent.get(row) else {
+            return;
+        };
+        crate::app::with_delegate(self.mtm(), |app| {
+            app.open_project_window(&project.name);
+        });
+    }
+
     pub fn new(recent: Vec<RecentProject>, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(WelcomeIvars {
             recent,
@@ -112,10 +133,12 @@ impl WelcomeController {
         content.addSubview(&left_pane(mtm));
         let (scroll, table) = recent_table(mtm);
         // SAFETY: the controller owns the window, which owns the table, so it outlives the
-        // table's weak references to its data source and delegate.
+        // table's weak references to its data source, delegate and target.
         unsafe {
             table.setDataSource(Some(ProtocolObject::from_ref(&*this)));
             table.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+            table.setTarget(Some(&this));
+            table.setDoubleAction(Some(sel!(openRecent:)));
         }
         content.addSubview(&scroll);
         let _ = this.ivars().window.set(window);

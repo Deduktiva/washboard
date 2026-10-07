@@ -17,6 +17,7 @@ fn main() {
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
+        ("project_window", checks::project_window),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -36,13 +37,13 @@ mod checks {
     use std::time::Duration;
 
     use block2::RcBlock;
-    use objc2::rc::Retained;
+    use objc2::rc::{Retained, autoreleasepool};
     use objc2::{MainThreadMarker, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSEvent, NSEventModifierFlags,
-        NSEventType, NSMenu, NSStackView, NSTextField, NSView,
+        NSEventType, NSMenu, NSSplitViewItemBehavior, NSStackView, NSTextField, NSView,
     };
-    use objc2_foundation::{NSNotification, NSNotificationCenter, NSPoint};
+    use objc2_foundation::{NSIndexSet, NSNotification, NSNotificationCenter, NSPoint};
     use washboard_app::AppDelegate;
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
@@ -297,5 +298,75 @@ mod checks {
             })
             .collect();
         assert_eq!(labels, [sample[0].name.as_str(), sample[0].path.as_str()]);
+    }
+
+    /// Opening a project replaces the welcome window with a project window whose toolbar,
+    /// sidebar and split are built, and closing it brings the welcome window back.
+    pub fn project_window(ctx: &Ctx) {
+        let project = ctx.delegate.open_project_window("Customer API");
+        let window = project.project_window();
+        assert!(window.isVisible(), "project window shown");
+        assert!(
+            !ctx.delegate.welcome().window().isVisible(),
+            "welcome window hidden"
+        );
+        assert_eq!(window.title().to_string(), "Customer API");
+
+        let toolbar = window.toolbar().expect("a toolbar");
+        let ids: Vec<String> = toolbar
+            .items()
+            .iter()
+            .map(|i| i.itemIdentifier().to_string())
+            .collect();
+        let expected: Vec<String> = washboard_app::toolbar_identifiers()
+            .iter()
+            .map(|i| i.to_string())
+            .collect();
+        assert_eq!(ids, expected, "toolbar items");
+
+        let split = project.split_view();
+        let items = split.splitViewItems();
+        assert_eq!(items.len(), 2, "sidebar and content");
+        assert_eq!(
+            items.firstObject().expect("sidebar item").behavior(),
+            NSSplitViewItemBehavior::Sidebar
+        );
+
+        // Two groups, the requests, and every service, port and operation, all expanded.
+        let operations: usize = washboard_app::SAMPLE_OPERATIONS
+            .iter()
+            .map(|(_, _, ops)| 2 + ops.len())
+            .sum();
+        let rows = 2 + washboard_app::SAMPLE_REQUESTS.len() + operations;
+        let outline = project.sidebar().outline().expect("outline built");
+        assert_eq!(outline.numberOfRows() as usize, rows, "sidebar rows");
+
+        // AppKit holds data sources and delegates weakly: they must survive a pool drain.
+        autoreleasepool(|_| outline.reloadData());
+        // SAFETY: reading the weak properties; nothing is called on the results.
+        let (data_source, delegate) = unsafe { (outline.dataSource(), outline.delegate()) };
+        assert!(data_source.is_some(), "outline data source alive");
+        assert!(delegate.is_some(), "outline delegate alive");
+        assert_eq!(
+            outline.numberOfRows() as usize,
+            rows,
+            "sidebar rows after reload"
+        );
+
+        // The first request is selectable, group rows are not.
+        let request_row = 1;
+        outline.selectRowIndexes_byExtendingSelection(
+            &NSIndexSet::indexSetWithIndex(request_row),
+            false,
+        );
+        assert_eq!(outline.selectedRow() as usize, request_row);
+
+        autoreleasepool(|_| window.performClose(None));
+        assert!(!window.isVisible(), "project window closed");
+        assert!(ctx.delegate.projects().is_empty(), "controller released");
+        assert!(
+            ctx.delegate.welcome().window().isVisible(),
+            "welcome window back"
+        );
     }
 }

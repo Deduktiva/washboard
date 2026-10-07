@@ -1,6 +1,6 @@
 //! Application lifecycle: the `NSApplication` delegate and launching.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -9,11 +9,13 @@ use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationD
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
 
 use crate::menu;
+use crate::project_window::ProjectWindowController;
 use crate::welcome::{WelcomeController, sample_recent_projects};
 
 #[derive(Debug, Default)]
 pub struct AppDelegateIvars {
     welcome: OnceCell<Retained<WelcomeController>>,
+    projects: RefCell<Vec<Retained<ProjectWindowController>>>,
 }
 
 define_class!(
@@ -89,11 +91,57 @@ impl AppDelegate {
         unsafe { msg_send![super(this), init] }
     }
 
+    /// Opens a project window (sample content for now) and hides the welcome window, which
+    /// is shown only while no project is open.
+    pub fn open_project_window(&self, name: &str) -> Retained<ProjectWindowController> {
+        let project = ProjectWindowController::new(name, self.mtm());
+        // SAFETY: `showWindow:` takes any sender.
+        unsafe { project.showWindow(None) };
+        self.ivars().projects.borrow_mut().push(project.clone());
+        self.welcome().window().orderOut(None);
+        project
+    }
+
+    /// The open project windows' controllers, in opening order.
+    pub fn projects(&self) -> Vec<Retained<ProjectWindowController>> {
+        self.ivars().projects.borrow().clone()
+    }
+
+    /// Called from the project window's `windowWillClose:`.
+    pub(crate) fn project_closed(&self, project: &ProjectWindowController) {
+        // Keep the controller alive until AppKit is done closing its window; the run loop's
+        // autorelease pool releases it afterwards.
+        let closed: Vec<_> = {
+            let mut projects = self.ivars().projects.borrow_mut();
+            let (closed, open) = projects
+                .drain(..)
+                .partition(|p| std::ptr::eq(&**p, project));
+            *projects = open;
+            closed
+        };
+        for project in closed {
+            let _ = Retained::autorelease_ptr(project);
+        }
+        if self.ivars().projects.borrow().is_empty() {
+            self.welcome().show();
+        }
+    }
+
     /// The welcome window's controller, created on first use.
     pub fn welcome(&self) -> &WelcomeController {
         self.ivars()
             .welcome
             .get_or_init(|| WelcomeController::new(sample_recent_projects(), self.mtm()))
+    }
+}
+
+/// Runs `f` with the app delegate, if it is ours (it is, unless a test installed another).
+pub(crate) fn with_delegate(mtm: MainThreadMarker, f: impl FnOnce(&AppDelegate)) {
+    if let Some(delegate) = NSApplication::sharedApplication(mtm).delegate() {
+        let delegate: &AnyObject = delegate.as_ref();
+        if let Some(delegate) = delegate.downcast_ref::<AppDelegate>() {
+            f(delegate);
+        }
     }
 }
 
