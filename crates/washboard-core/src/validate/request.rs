@@ -10,12 +10,20 @@
 //! validated fully, and blocks it does not know (WS-Security and friends) are left alone. No
 //! block is cut out of the document, so there is nothing to re-declare and no line mapping
 //! beyond the start-tag adjustment in [`super::xsd`].
+//!
+//! With a [`SchemaModel`] attached ([`RequestSchema::with_model`]), libxml2's terse errors
+//! about abstract elements and types get the concrete alternatives appended (PLAN §5.2
+//! "Validation errors"). The error kind and element come from the diagnostic's
+//! [`crate::diag::DiagDetail`], never from its message.
+
+use std::sync::Arc;
 
 use roxmltree::Node;
 
-use crate::diag::{DiagSource, Diagnostic, TextPos, pos_at_byte};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
-use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
+use crate::schema::{PathStep, SchemaModel, SuggestionSource};
+use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS, XSI_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
 
@@ -34,12 +42,24 @@ const REQUEST_ROOT_NS: &str = "urn:washboard:request-root";
 #[derive(Debug)]
 pub struct RequestSchema {
     schema: CompiledSchema,
+    model: Option<Arc<SchemaModel>>,
 }
 
 impl RequestSchema {
     /// Compiles [`request_bundle`]`(bundle)`. Errors are [`CompiledSchema::compile`]'s.
     pub fn compile(bundle: &SchemaBundle) -> Result<Self, Vec<Diagnostic>> {
-        CompiledSchema::compile(&request_bundle(bundle)).map(|schema| Self { schema })
+        CompiledSchema::compile(&request_bundle(bundle)).map(|schema| Self {
+            schema,
+            model: None,
+        })
+    }
+
+    /// Uses `model` (built from the same project bundle) to name the concrete types and
+    /// substitution group members in errors about abstract types and elements. The app builds
+    /// the model anyway for completion, so it is shared rather than built here.
+    pub fn with_model(mut self, model: Arc<SchemaModel>) -> Self {
+        self.model = Some(model);
+        self
     }
 
     /// Compile warnings, for the import report.
@@ -216,11 +236,15 @@ pub fn validate_request(
     // 4. One libxml2 pass: envelope shape, headers and body together.
     // SOAP's own header-block attributes are taken out of libxml2's copy first (see
     // `HEADER_BLOCK_ATTRIBUTES`) and checked here instead.
-    out.diagnostics.extend(
-        schema
-            .schema
-            .validate_text_stripping(text, &STRIP_HEADER_BLOCK_ATTRIBUTES),
-    );
+    let mut schema_diags = schema
+        .schema
+        .validate_text_stripping(text, &STRIP_HEADER_BLOCK_ATTRIBUTES);
+    if let Some(model) = &schema.model {
+        for d in &mut schema_diags {
+            explain_abstract(model, &doc, text, d);
+        }
+    }
+    out.diagnostics.extend(schema_diags);
     for block in header_blocks(env) {
         check_must_understand(text, block, &mut out.diagnostics);
     }
@@ -276,11 +300,124 @@ fn check_must_understand(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagno
         return;
     };
     if !matches!(value.trim(), "0" | "1") {
-        diags.push(Diagnostic::error(
+        let mut d = Diagnostic::error(
             DiagSource::Schema,
             Some(pos_of(text, block)),
             format!("soapenv:mustUnderstand must be 0 or 1, not {value:?}"),
-        ));
+        );
+        if let Some(attr) = block
+            .attributes()
+            .find(|a| a.namespace() == Some(SOAP11_ENV_NS) && a.name() == "mustUnderstand")
+        {
+            let lines = LineIndex::new(text);
+            d = d.with_span(TextSpan {
+                start: lines.pos(attr.range().start),
+                end: lines.pos(attr.range().end),
+            });
+        }
+        diags.push(d);
+    }
+}
+
+/// libxml2's `XML_SCHEMAV_CVC_ELT_2`: "The element declaration is abstract".
+const ABSTRACT_ELEMENT: i32 = 1846;
+/// libxml2's `XML_SCHEMAV_CVC_TYPE_2`: "The type definition is abstract".
+const ABSTRACT_TYPE: i32 = 1876;
+
+/// Appends the concrete alternatives to an abstract element or type error: the substitution
+/// group members that may stand in for the element, or the types `xsi:type` may name.
+/// Anything that cannot be resolved leaves the message as it is.
+fn explain_abstract(
+    model: &SchemaModel,
+    doc: &roxmltree::Document<'_>,
+    text: &str,
+    d: &mut Diagnostic,
+) {
+    let Some(detail) = &d.detail else {
+        return;
+    };
+    if !matches!(detail.code, ABSTRACT_ELEMENT | ABSTRACT_TYPE) {
+        return;
+    }
+    let Some(node) = detail
+        .element_index
+        .and_then(|i| doc.descendants().filter(Node::is_element).nth(i))
+    else {
+        return;
+    };
+    // libxml2 does not count elements inside entity references; roxmltree expands them. The
+    // position check makes sure both mean the same element.
+    if d.pos != Some(pos_of(text, node)) {
+        return;
+    }
+    let Some(path) = block_path(node) else {
+        return;
+    };
+    let (names, lead) = if detail.code == ABSTRACT_ELEMENT {
+        let Some((last, parent)) = path.split_last().filter(|(_, p)| !p.is_empty()) else {
+            return;
+        };
+        let members = model
+            .child_elements(parent)
+            .elements
+            .into_iter()
+            .filter(|c| matches!(&c.source, SuggestionSource::Substitution { head } if *head == last.name))
+            .map(|c| written(node, &c.name))
+            .collect::<Vec<_>>();
+        (members, "Use one of its substitution group members instead")
+    } else {
+        let types = model
+            .xsi_type_candidates(&path)
+            .into_iter()
+            .map(|t| written(node, &t.name))
+            .collect::<Vec<_>>();
+        (types, "Set xsi:type to one of")
+    };
+    if !names.is_empty() {
+        d.message = format!("{} {lead}: {}.", d.message, names.join(", "));
+    }
+}
+
+/// The schema path of `node`: from the `Header` or `Body` child it is in down to `node`,
+/// with each step's `xsi:type`. `None` outside header and body blocks.
+fn block_path(node: Node<'_, '_>) -> Option<Vec<PathStep>> {
+    let mut path = Vec::new();
+    for n in node.ancestors() {
+        let parent = n.parent_element()?;
+        path.push(path_step(n));
+        if in_env(&parent, "Body") || in_env(&parent, "Header") {
+            path.reverse();
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn path_step(n: Node<'_, '_>) -> PathStep {
+    let step = PathStep::new(qname(n));
+    let xsi_type = n.attribute((XSI_NS, "type")).and_then(|v| {
+        let ns = |prefix| n.lookup_namespace_uri(prefix);
+        Some(match v.trim().split_once(':') {
+            Some((prefix, local)) => QName::new(ns(Some(prefix))?, local),
+            None => QName::new(ns(None).unwrap_or_default(), v.trim()),
+        })
+    });
+    match xsi_type {
+        Some(t) => step.with_xsi_type(t),
+        None => step,
+    }
+}
+
+/// `name` as the request at `node` would write it: with a prefix in scope there, else in
+/// Clark notation.
+fn written(node: Node<'_, '_>, name: &QName) -> String {
+    match node.namespaces().find(|ns| ns.uri() == name.ns) {
+        Some(ns) => match ns.name() {
+            Some(prefix) => format!("{prefix}:{}", name.local),
+            None => name.local.clone(),
+        },
+        None if name.ns.is_empty() => name.local.clone(),
+        None => name.to_string(),
     }
 }
 
@@ -322,6 +459,12 @@ mod tests {
 
     fn run(text: &str) -> Validation {
         let (w, s) = customer();
+        validate_request(&w, &s, text, None)
+    }
+
+    fn run_with_model(text: &str) -> Validation {
+        let (w, s) = customer();
+        let s = s.with_model(Arc::new(SchemaModel::build(&w.bundle)));
         validate_request(&w, &s, text, None)
     }
 
@@ -523,6 +666,59 @@ mod tests {
         assert!(
             e.iter().any(|m| m.starts_with("5:41:")),
             "expected an error at 5:41 (the `<` of `<cus:nope/>`), got {e:#?}"
+        );
+    }
+
+    #[test]
+    fn abstract_type_errors_list_the_concrete_types() {
+        let text = crate::test_support::read_fixture("customer/requests/invalid-abstract-type.xml");
+        let without = errors(&run(&text));
+        let with = errors(&run_with_model(&text));
+        assert_eq!(with.len(), without.len(), "{with:#?}");
+        let e = with
+            .iter()
+            .find(|m| m.contains("abstract"))
+            .unwrap_or_else(|| panic!("{with:#?}"));
+        assert!(e.starts_with("11:9:"), "{e}");
+        assert!(
+            e.ends_with("Set xsi:type to one of: com:Person, com:Company, com:PublicCompany."),
+            "{e}"
+        );
+        assert!(
+            without.iter().all(|m| !m.contains("xsi:type to")),
+            "{without:#?}"
+        );
+    }
+
+    #[test]
+    fn abstract_element_errors_list_the_substitution_group() {
+        let text =
+            crate::test_support::read_fixture("customer/requests/invalid-abstract-element.xml");
+        let e = errors(&run_with_model(&text));
+        assert!(
+            e.iter().any(|m| m.starts_with("14:9:")
+                && m.ends_with(
+                    "Use one of its substitution group members instead: com:Email, com:Phone."
+                )),
+            "{e:#?}"
+        );
+    }
+
+    #[test]
+    fn soap_attribute_errors_span_the_attribute() {
+        let text = GET_CUSTOMER.replace(
+            "<msg:RequestContext>",
+            "<msg:RequestContext soapenv:mustUnderstand=\"yes\">",
+        );
+        let v = run(&text);
+        let d = v.diagnostics.iter().find(|d| d.is_error()).expect("error");
+        let p = |line, column| TextPos { line, column };
+        assert_eq!(
+            d.span,
+            Some(TextSpan {
+                start: p(4, 25),
+                end: p(4, 53)
+            })
         );
     }
 
