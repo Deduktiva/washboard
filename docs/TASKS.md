@@ -143,11 +143,11 @@ Owns: `crates/washboard-app/**`.
 | Package | Depends on | Scope |
 |---|---|---|
 | WP-VALIDATE | LIBXML2, WSDL, XML | Full pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 envelope → dispatch → header/body block validation, positions mapped to the request file. Must reproduce every fixture expectation. |
-| WP-CLI | all core | In progress; see the WP-CLI section below. `validate` and validation before `send` are wired after WP-VALIDATE. |
+| WP-CLI | all core | Done; see the WP-CLI section below. `request validate` and validation before `request send` are wired after WP-VALIDATE (one call site: `crates/washboard-cli/src/validation.rs`). |
 | WP-APP-INTEGRATION | APP-SHELL + core | Wire project, editor, completion, validation, send, history, log, autosave. |
 | WP-DIST | APP-SHELL | Codesign, notarize, DMG via `xtask`. |
 
-### WP-CLI — `washboard` command-line tool (started after wave 1)
+### WP-CLI — `washboard` command-line tool (done)
 Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-core/src/project/`.
 - Same project folders as the app, through `washboard_core::project` and `wsdl` — no separate
   formats or logic in the CLI.
