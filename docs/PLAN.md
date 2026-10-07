@@ -152,6 +152,15 @@ fake front end. Extracting it later from finished AppKit code would mean rewriti
 front end is new. For GTK4 the editor would be `GtkSourceView` (XML highlighting and a line
 gutter included); on Windows, Scintilla or a RichEdit-based control.
 
+### Packaging
+`cargo-packager` builds `Washboard.app` from configuration (`Info.plist`:
+`CFBundleIdentifier` `at.deduktiva.washboard`, `LSMinimumSystemVersion`, `NSHighResolutionCapable`,
+version from Cargo); WP-DIST adds the DMG, signing and notarization. The app's Cargo binary stays
+`washboard-app`: the CLI is `washboard`, and on case-insensitive APFS a binary named `Washboard`
+would overwrite it in `target/release/`. Inside the bundle the executable is `Washboard`
+(`CFBundleExecutable`), in `Washboard.app/Contents/MacOS/`. The macOS CI job builds the bundle,
+but only a Mac with a display can show it.
+
 ### Why not NSDocument
 NSDocument assumes "one file, dirty flag, save prompts". A project is many files plus a DB with
 continuous autosave, so we use our own `ProjectWindowController`. We still call

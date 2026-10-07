@@ -43,17 +43,54 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 
 ## Open
 
-### WP-APP-SHELL — AppKit skeleton (macOS; needs a Mac — see `docs/handoff/APP-SHELL.md`)
+### WP-APP-SHELL — AppKit skeleton
 Owns: `crates/washboard-app/**`.
-- App delegate via `define_class!`, main menu (File/Edit/View/Project/Window/Help with the
-  shortcuts from the plan), welcome window, project window with toolbar, split view, sidebar
-  `NSOutlineView` (requests + operations sections, static data for now), `NSTextView` editor on
-  TextKit 1 with a line-number `NSRulerView` and a highlighting hook that takes token spans,
-  response pane, HTTP log panel. No core integration beyond types yet.
-- `cargo-packager` configuration that produces an unsigned `.app` bundle with `Info.plist`
-  (`LSMinimumSystemVersion` 27.0); no hand-written bundling code.
-- Acceptance: `cargo clippy -p washboard-app --target aarch64-apple-darwin` clean; CI macOS build
-  green; list in the final report exactly what must be eyeballed on a Mac.
+
+A runnable skeleton matching `docs/gui-draft.html` (the visual target) and PLAN §8, proving the
+objc2 patterns the app will use everywhere. No project logic, persistence, validation, HTTP,
+autosave or dirty tracking: those live in `washboard-ui-model` (PLAN §2.1), so controllers stay
+thin (views, layout, forwarding input). Static sample data shaped like the core types. Can be
+done in the cloud: the macOS CI job compiles, tests and packages it; looking at it needs a Mac
+(checklist below).
+- **Lifecycle:** `AppDelegate` via `define_class!`, kept alive for the app's lifetime;
+  `applicationShouldTerminateAfterLastWindowClosed` returns `false` (the welcome window takes
+  over).
+- **Main menu in code**, no nib. App: About, Settings… (disabled), Hide, Quit. File: New
+  Project… ⇧⌘N, Open Project… ⌘O, Open Recent (`NSDocumentController`), Close ⌘W, Save All ⌘S.
+  Edit: standard first-responder items (Undo/Redo, Cut/Copy/Paste, Select All, Find). Project:
+  New Request ⌘N, Duplicate ⌘D, Rename, Delete ⌘⌫, Validate ⌘B, Send ⌘↩, Replace WSDL…,
+  Project Settings…. Window: HTTP Log ⌥⌘L plus the window list. Stub handlers log.
+- **Welcome window** when no project is open: icon, name, New/Open; `NSTableView` of recent
+  projects.
+- **Project window**, one controller per project: unified `NSToolbar` via a delegate (sidebar
+  toggle, server popup, Validate, Send, Save All, HTTP Log); `NSSplitViewController` with a
+  source-list `NSOutlineView` (REQUESTS, and OPERATIONS as service › port › operation; unsaved
+  dot and ⚠ markers; inline rename on Return; +/−/⋯ footer) and a content split of editor,
+  collapsible issues bar and response pane.
+- **Editor:** `NSTextView` on TextKit 1 (`initUsingTextLayoutManager(false)` or an explicit
+  `NSLayoutManager` stack); monospaced system font; smart quotes, dashes and text replacement
+  off. Line numbers and error markers from an `NSRulerView` subclass over the visible glyph
+  range. Highlighting from `washboard_core::xml`'s tokenizer, applied as temporary attributes on
+  the layout manager for the edited range extended to line boundaries, so undo and the saved
+  text are unaffected. Undo stays with `NSTextView`. Issues bar: click selects the line.
+- **Response pane:** status label, Response/Headers/History tabs, read-only highlighted text
+  view, history table.
+- **HTTP log panel:** one `NSPanel` for the app; exchange table over request/response side by
+  side; `Authorization` masked with click to reveal.
+- **Sheets:** New Project (fields, references with ✓/✗, Create disabled on ✗) and Project
+  Settings › Servers.
+- **Threading pattern:** a fake Send runs on a `std::thread` and posts back to the main queue
+  with `dispatch2`; this is the pattern every background job uses.
+- **Bundle:** `cargo-packager` builds `Washboard.app` (PLAN §2 "Packaging"), unsigned, with a
+  placeholder icon; no hand-written bundling code.
+- **Acceptance (CI):** clippy clean natively on macOS and with `--target
+  aarch64-apple-darwin` from Linux; the macOS job builds the `.app` with `cargo-packager` and
+  uploads it as an artifact; a test measures `NSLayoutManager` layout of a 1 MB XML document on
+  the runner and prints the time.
+- **Needs a Mac (the user, from the CI artifact):** launches from Finder; matches the GUI
+  draft in light and dark mode; menus, shortcuts, sidebar rename, ruler, highlighting,
+  issue click-to-line, fake send, log panel and both sheets behave; typing stays responsive in a
+  1 MB file.
 
 ### Later packages
 
