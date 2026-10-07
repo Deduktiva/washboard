@@ -29,3 +29,20 @@ objc2 = "0.6.5"
 objc2-app-kit = "0.3.2"
 objc2-foundation = "0.3.2"
 
+# `cargo packager --release -p washboard-app` from the workspace root builds `Washboard.app` in
+# `target/packager/` (PLAN §2 "Packaging"). Paths are relative to this crate: cargo-packager
+# changes into it. The binary is copied to `Washboard` in a directory of its own because on
+# case-insensitive APFS it would overwrite the CLI (`washboard`) in `target/release/`.
+[package.metadata.packager]
+product-name = "Washboard"
+identifier = "at.deduktiva.washboard"
+formats = ["app"]
+before-packaging-command = """
+MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release -p washboard-app \
+&& mkdir -p ../../target/packager/bin \
+&& cp ../../target/release/washboard-app ../../target/packager/bin/Washboard"""
+binaries-dir = "../../target/packager/bin"
+binaries = [{ path = "Washboard", main = true }]
+out-dir = "../../target/packager"
+icons = ["icons/icon.png"]
+macos = { minimum-system-version = "26.0" }
