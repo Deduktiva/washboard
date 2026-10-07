@@ -11,7 +11,8 @@ use crate::soap::{WSDL_NS, XSD_NS};
 use crate::xml::{self, Encoding};
 
 use super::source::{FileIndex, Location, Match, MatchedBy, SourceFile, classify};
-use super::text::{LineIndex, start_tag};
+use crate::diag::LineIndex;
+use crate::xml::start_tag_at;
 
 /// WSDL 2.0 namespace; such files are recognized only to give a clear error.
 pub(crate) const WSDL20_NS: &str = "http://www.w3.org/ns/wsdl";
@@ -462,7 +463,7 @@ fn add_ref(
     name: &str,
 ) {
     let start = el.range().start;
-    let name_end = start_tag(text, start).map_or(start, |t| t.name_end);
+    let name_end = start_tag_at(text, start).map_or(start, |t| t.name.end);
     let loc = el.attribute_node(loc_attr);
     w.refs.push(Reference {
         kind,

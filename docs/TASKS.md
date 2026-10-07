@@ -133,8 +133,8 @@ Owns: `crates/washboard-app/**`.
   `NSOutlineView` (requests + operations sections, static data for now), `NSTextView` editor on
   TextKit 1 with a line-number `NSRulerView` and a highlighting hook that takes token spans,
   response pane, HTTP log panel. No core integration beyond types yet.
-- `xtask` or script to produce an unsigned `.app` bundle with `Info.plist`
-  (`LSMinimumSystemVersion` 27.0).
+- `cargo-packager` configuration that produces an unsigned `.app` bundle with `Info.plist`
+  (`LSMinimumSystemVersion` 27.0); no hand-written bundling code.
 - Acceptance: `cargo clippy -p washboard-app --target aarch64-apple-darwin` clean; CI macOS build
   green; list in the final report exactly what must be eyeballed on a Mac.
 
@@ -142,11 +142,11 @@ Owns: `crates/washboard-app/**`.
 
 | Package | Depends on | Scope |
 |---|---|---|
-| WP-VALIDATE | LIBXML2, WSDL, XML | Full pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 envelope → dispatch → header/body block validation, positions mapped to the request file. Must reproduce every fixture expectation. |
+| WP-VALIDATE | LIBXML2, WSDL, XML | Pipeline from PLAN §4 "Validation semantics": well-formedness → SOAP 1.1 root → dispatch of `Body` children → **one** libxml2 pass over the whole document against the bundle plus a shipped SOAP 1.1 envelope schema with lax `Header`/`Body` wildcards (no block extraction). Must reproduce every fixture expectation; replaces `tests/pipeline.rs`. Wires `request validate` and validation before `request send` in the CLI. |
 | WP-CLI | all core | Done; see the WP-CLI section below. `request validate` and validation before `request send` are wired after WP-VALIDATE (one call site: `crates/washboard-cli/src/validation.rs`). |
 | WP-UI-MODEL | core, VALIDATE | New crate `washboard-ui-model` (PLAN §2.1): app/window state, commands, editor buffers, autosave, background jobs, events to the front end; front-end traits (`MainThread`, `Timers`, `Dialogs`). Tested on Linux with a fake front end. No toolkit dependency. |
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
-| WP-DIST | APP-SHELL | Codesign, notarize, DMG via `xtask`. |
+| WP-DIST | APP-SHELL | DMG via `cargo-packager`; codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 27. |
 
 ### WP-CLI — `washboard` command-line tool (done)
 Owns: `crates/washboard-cli/**`; additive read-only open in `crates/washboard-core/src/project/`.

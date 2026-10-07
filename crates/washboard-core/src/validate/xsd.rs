@@ -55,7 +55,7 @@ use std::sync::Once;
 
 use libxml2_sys as ffi;
 
-use crate::diag::{DiagSource, Diagnostic, Severity, TextPos};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, Severity, TextPos};
 use crate::model::SchemaBundle;
 
 /// Base URI given to every bundle document; see the module docs.
@@ -204,43 +204,10 @@ impl CompiledSchema {
     /// violations are [`DiagSource::Schema`]. Element positions point at the start tag's `<`
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
-        init();
-        let Ok(len) = c_int::try_from(xml.len()) else {
-            return vec![Diagnostic::error(
-                DiagSource::WellFormedness,
-                None,
-                "document too large to validate",
-            )];
+        let (doc, parse_errors) = match parse_instance(xml, None) {
+            Ok(parsed) => parsed,
+            Err(d) => return vec![d],
         };
-        let collector = Collector::new(false);
-        let options = ffi::XML_PARSE_NONET | ffi::XML_PARSE_NO_XXE | ffi::XML_PARSE_BIG_LINES;
-
-        // SAFETY: `xml` outlives the parse (libxml2 copies or reads it during the call);
-        // `collector` outlives both contexts, which are freed before this block ends.
-        let doc = unsafe {
-            let ctxt = ffi::xmlNewParserCtxt();
-            if ctxt.is_null() {
-                return vec![oom()];
-            }
-            ffi::xmlCtxtSetErrorHandler(
-                ctxt,
-                Some(on_error),
-                ptr::from_ref(&collector).cast_mut().cast(),
-            );
-            ffi::xmlCtxtSetResourceLoader(ctxt, Some(refuse_all), ptr::null_mut());
-            let doc = ffi::xmlCtxtReadMemory(
-                ctxt,
-                xml.as_ptr().cast::<c_char>(),
-                len,
-                INSTANCE_URL.as_ptr(),
-                ptr::null(),
-                options,
-            );
-            ffi::xmlFreeParserCtxt(ctxt);
-            doc
-        };
-
-        let parse_errors = collector.finish();
         let not_well_formed = doc.is_null() || parse_errors.iter().any(RawError::is_error);
         if not_well_formed {
             if !doc.is_null() {
@@ -436,6 +403,74 @@ impl RawError {
             Diagnostic::warning(source, pos, self.message)
         }
     }
+}
+
+/// Parses an instance document with the safe options (no network, no external entities, a
+/// loader that refuses everything). Returns the document, null if parsing failed outright,
+/// and the parse errors in document order. The caller owns and frees the document.
+///
+/// `encoding` overrides the document's own declaration; `None` lets libxml2 detect it.
+fn parse_instance(
+    xml: &[u8],
+    encoding: Option<&CStr>,
+) -> Result<(*mut ffi::xmlDoc, Vec<RawError>), Diagnostic> {
+    init();
+    let Ok(len) = c_int::try_from(xml.len()) else {
+        return Err(Diagnostic::error(
+            DiagSource::WellFormedness,
+            None,
+            "document too large to parse",
+        ));
+    };
+    let collector = Collector::new(false);
+    let options = ffi::XML_PARSE_NONET | ffi::XML_PARSE_NO_XXE | ffi::XML_PARSE_BIG_LINES;
+
+    // SAFETY: `xml` outlives the parse (libxml2 copies or reads it during the call);
+    // `collector` outlives the context, which is freed before this block ends.
+    let doc = unsafe {
+        let ctxt = ffi::xmlNewParserCtxt();
+        if ctxt.is_null() {
+            return Err(oom());
+        }
+        ffi::xmlCtxtSetErrorHandler(
+            ctxt,
+            Some(on_error),
+            ptr::from_ref(&collector).cast_mut().cast(),
+        );
+        ffi::xmlCtxtSetResourceLoader(ctxt, Some(refuse_all), ptr::null_mut());
+        let doc = ffi::xmlCtxtReadMemory(
+            ctxt,
+            xml.as_ptr().cast::<c_char>(),
+            len,
+            INSTANCE_URL.as_ptr(),
+            encoding.map_or(ptr::null(), CStr::as_ptr),
+            options,
+        );
+        ffi::xmlFreeParserCtxt(ctxt);
+        doc
+    };
+    Ok((doc, collector.finish()))
+}
+
+/// The first well-formedness error in already decoded `text`, as libxml2 reports it:
+/// `(line, column, message)`, 1-based, 0 when unknown. The text is parsed as UTF-8 whatever
+/// its XML declaration says. Used by [`crate::xml::check_well_formed`], so the editor and the
+/// validation pipeline judge documents with the same parser.
+pub(crate) fn first_well_formedness_error(text: &str) -> Option<(u32, u32, String)> {
+    let (doc, errors) = match parse_instance(text.as_bytes(), Some(c"UTF-8")) {
+        Ok(parsed) => parsed,
+        Err(d) => return Some((0, 0, d.message)),
+    };
+    let failed = doc.is_null();
+    if !failed {
+        // SAFETY: returned by xmlCtxtReadMemory and not used afterwards.
+        unsafe { ffi::xmlFreeDoc(doc) };
+    }
+    errors
+        .into_iter()
+        .find(RawError::is_error)
+        .map(|e| (e.line, e.column, e.message))
+        .or_else(|| failed.then(|| (0, 0, "document is not well-formed".to_owned())))
 }
 
 /// Receives libxml2's structured errors for one context.
@@ -810,137 +845,19 @@ struct StartTag {
     local: String,
 }
 
-/// Lists all start tags (including empty-element tags) in document order.
-///
-/// Assumes well-formed input; on anything else it returns a best-effort list.
+/// Lists all start tags (including empty-element tags) in document order, with the positions
+/// `map_pos` needs. Uses the editor's tokenizer, so comments, CDATA, PIs and the DOCTYPE are
+/// skipped the same way everywhere.
 fn scan_start_tags(text: &str) -> Vec<StartTag> {
-    let mut c = Cursor {
-        b: text.as_bytes(),
-        i: 0,
-        line: 1,
-        column: 1,
-    };
-    let mut out = Vec::new();
-    while c.i < c.b.len() {
-        if c.b[c.i] != b'<' {
-            c.bump();
-        } else if c.at(b"<!--") {
-            c.skip_past(b"-->");
-        } else if c.at(b"<![CDATA[") {
-            c.skip_past(b"]]>");
-        } else if c.at(b"<?") {
-            c.skip_past(b"?>");
-        } else if c.at(b"<!") {
-            c.skip_declaration();
-        } else if c.at(b"</") {
-            c.skip_past(b">");
-        } else {
-            let pos = TextPos {
-                line: c.line,
-                column: c.column,
-            };
-            c.bump();
-            let start = c.i;
-            while c.i < c.b.len() && !matches!(c.b[c.i], b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'>')
-            {
-                c.bump();
-            }
-            let name = &text[start..c.i];
-            let local = name.rsplit(':').next().unwrap_or(name).to_owned();
-            c.skip_tag_rest();
-            out.push(StartTag {
-                pos,
-                end_line: c.line,
-                local,
-            });
-            c.bump(); // the '>'
-        }
-    }
-    out
-}
-
-struct Cursor<'a> {
-    b: &'a [u8],
-    i: usize,
-    line: u32,
-    column: u32,
-}
-
-impl Cursor<'_> {
-    fn at(&self, s: &[u8]) -> bool {
-        self.b[self.i..].starts_with(s)
-    }
-
-    /// Advances one byte, counting lines and chars (not UTF-8 continuation bytes).
-    fn bump(&mut self) {
-        let Some(&b) = self.b.get(self.i) else {
-            return;
-        };
-        self.i += 1;
-        if b == b'\n' {
-            self.line += 1;
-            self.column = 1;
-        } else if b & 0xC0 != 0x80 {
-            self.column += 1;
-        }
-    }
-
-    fn skip_past(&mut self, end: &[u8]) {
-        while self.i < self.b.len() && !self.at(end) {
-            self.bump();
-        }
-        for _ in 0..end.len() {
-            self.bump();
-        }
-    }
-
-    fn skip_quoted(&mut self) {
-        let q = self.b[self.i];
-        self.bump();
-        while self.i < self.b.len() && self.b[self.i] != q {
-            self.bump();
-        }
-        self.bump();
-    }
-
-    /// Stops on the tag's closing `>`.
-    fn skip_tag_rest(&mut self) {
-        while self.i < self.b.len() {
-            match self.b[self.i] {
-                b'"' | b'\'' => self.skip_quoted(),
-                b'>' => return,
-                _ => self.bump(),
-            }
-        }
-    }
-
-    /// `<!DOCTYPE …>` including an internal subset.
-    fn skip_declaration(&mut self) {
-        let mut depth = 0u32;
-        self.bump();
-        while self.i < self.b.len() {
-            if self.at(b"<!--") {
-                self.skip_past(b"-->");
-                continue;
-            }
-            match self.b[self.i] {
-                b'"' | b'\'' => self.skip_quoted(),
-                b'[' => {
-                    depth += 1;
-                    self.bump();
-                }
-                b']' => {
-                    depth = depth.saturating_sub(1);
-                    self.bump();
-                }
-                b'>' if depth == 0 => {
-                    self.bump();
-                    return;
-                }
-                _ => self.bump(),
-            }
-        }
-    }
+    let lines = LineIndex::new(text);
+    crate::xml::start_tags(text)
+        .into_iter()
+        .map(|t| StartTag {
+            pos: lines.pos(t.start),
+            end_line: lines.pos(t.end.saturating_sub(1)).line,
+            local: t.local(text).to_owned(),
+        })
+        .collect()
 }
 
 /// Start-tag position for an error, if it can be determined.

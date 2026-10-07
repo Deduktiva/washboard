@@ -68,6 +68,9 @@ Each step ends in something you can launch and look at. Commit after each step.
      tokens as **temporary attributes** on the layout manager, so undo and the saved text stay
      unaffected. A dumb placeholder tokenizer is fine; the real one comes from WP-XML
      (`washboard_core::xml`).
+   - Undo/redo stays with `NSTextView`'s undo manager. Don't build an undo stack in Rust; later,
+     changes the app makes to the text (format, templates, completion) go through the text view
+     so they are undoable too (PLAN §2.1).
    - Re-highlight on `textStorage:didProcessEditing:` (or `textDidChange:`), limited to the
      edited range extended to line boundaries.
    - Measure with a ~1 MB XML file: typing must stay responsive. Note the numbers in your
@@ -89,10 +92,15 @@ Each step ends in something you can launch and look at. Commit after each step.
    500 ms, then posts the result back to the main thread with `dispatch2` (main queue) and
    updates the response pane. This is the pattern every later background job will use; prove
    that `MainThreadMarker` and `Retained` work cleanly with it.
-10. **Bundle.** Add an `xtask` crate (or `scripts/bundle.sh`) that builds release and assembles
-    `target/Washboard.app`:
+10. **Bundle.** Configure `cargo-packager` (in `crates/washboard-app/Cargo.toml` metadata or a
+    `Packager.toml`) to build release and assemble `Washboard.app`; no hand-written bundling
+    code:
     - `Info.plist` with `CFBundleIdentifier` `at.deduktiva.washboard`,
       `LSMinimumSystemVersion` 27.0, `NSHighResolutionCapable`, and a version taken from Cargo.
+    - Keep the app's Cargo binary named `washboard-app`. The CLI's binary is `washboard`, and
+      APFS is case-insensitive, so an app binary named `Washboard` would overwrite the CLI in
+      `target/release/`. Inside the bundle the executable can be called `Washboard`
+      (`CFBundleExecutable`), because it lives in `Washboard.app/Contents/MacOS/`.
     - A placeholder icon.
     - Unsigned for now. WP-DIST adds signing and notarization.
 
