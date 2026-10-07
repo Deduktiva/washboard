@@ -14,7 +14,9 @@ use super::graph::{FileKind, RefKind, Walk};
 use super::source::{MatchedBy, SourceFile};
 use super::{ImportCheck, Resolution, Unresolved};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Serializes with the field names as keys (`washboard inspect --json`); renaming a field
+/// changes that output.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct StructuralReport {
     pub files_supplied: usize,
     pub files_used: usize,

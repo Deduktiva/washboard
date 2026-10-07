@@ -184,6 +184,37 @@ fn second_open_is_refused_until_first_closes() {
 }
 
 #[test]
+fn read_only_open_works_while_locked_and_cannot_write() {
+    let (_tmp, folder, mut p) = new_project();
+    let r = p
+        .create_request(&op("GetCustomer"), "<a/>")
+        .expect("create");
+    let ro = Project::open_read_only(&folder).expect("read-only open while locked");
+    assert_eq!(ro.id(), p.id());
+    assert_eq!(ro.name().expect("name"), "Customer API");
+    assert_eq!(ro.requests().expect("requests"), vec![r.clone()]);
+    assert_eq!(ro.read_request(r.id).expect("read"), "<a/>");
+    // Sees the writer's later changes.
+    p.rename_request(r.id, "Renamed").expect("rename");
+    assert_eq!(ro.request(r.id).expect("request").name, "Renamed");
+    // Writes fail, and the read-only handle does not hold the lock.
+    let mut ro = ro;
+    assert!(matches!(ro.set_name("x"), Err(ProjectError::Db(_))));
+    drop(p);
+    Project::open(&folder).expect("open while a read-only handle exists");
+}
+
+#[test]
+fn read_only_open_refuses_non_projects_and_creates_nothing() {
+    let tmp = TempDir::new().expect("tempdir");
+    match Project::open_read_only(tmp.path()) {
+        Err(ProjectError::NotAProject(_)) => {}
+        other => panic!("expected NotAProject, got {other:?}"),
+    }
+    assert_eq!(fs::read_dir(tmp.path()).expect("read_dir").count(), 0);
+}
+
+#[test]
 fn create_refuses_non_empty_folder_and_bad_names() {
     let tmp = TempDir::new().expect("tempdir");
     fs::write(tmp.path().join("x"), "x").expect("write");
