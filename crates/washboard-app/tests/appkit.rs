@@ -16,6 +16,7 @@ fn main() {
     let checks: &[Check] = &[
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
+        ("welcome_window", checks::welcome_window),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -39,7 +40,7 @@ mod checks {
     use objc2::{MainThreadMarker, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSEvent, NSEventModifierFlags,
-        NSEventType, NSMenu,
+        NSEventType, NSMenu, NSStackView, NSTextField, NSView,
     };
     use objc2_foundation::{NSNotification, NSNotificationCenter, NSPoint};
     use washboard_app::AppDelegate;
@@ -103,10 +104,10 @@ mod checks {
         }
     }
 
-    /// Launching opens the main window, and closing the last window does not quit.
+    /// Launching shows the welcome window, and closing the last window does not quit.
     pub fn lifecycle(ctx: &Ctx) {
-        let window = ctx.delegate.main_window().expect("a window after launch");
-        assert!(window.isVisible(), "the window is shown");
+        let welcome = ctx.delegate.welcome().window();
+        assert!(welcome.isVisible(), "welcome window after launch");
 
         // Ask through the Objective-C runtime, as AppKit does, so this also checks the
         // selector is registered.
@@ -257,5 +258,31 @@ mod checks {
             !settings.expect("Settings item").isEnabled(),
             "Settings is disabled"
         );
+    }
+
+    /// The recent-projects table shows the sample rows through its data source and delegate.
+    pub fn welcome_window(ctx: &Ctx) {
+        let welcome = ctx.delegate.welcome();
+        let table = welcome.table();
+        let sample = washboard_app::sample_recent_projects();
+        assert_eq!(table.numberOfRows() as usize, sample.len());
+
+        let view = table
+            .viewAtColumn_row_makeIfNecessary(0, 0, true)
+            .expect("row 0 view");
+        let stack = view
+            .downcast::<NSStackView>()
+            .expect("rows are stack views");
+        let labels: Vec<String> = stack
+            .arrangedSubviews()
+            .iter()
+            .map(|v: Retained<NSView>| {
+                v.downcast::<NSTextField>()
+                    .expect("labels")
+                    .stringValue()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(labels, [sample[0].name.as_str(), sample[0].path.as_str()]);
     }
 }
