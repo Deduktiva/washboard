@@ -204,7 +204,7 @@ impl CompiledSchema {
     /// violations are [`DiagSource::Schema`]. Element positions point at the start tag's `<`
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
-        self.validate_with(xml, None, || {
+        self.validate_with(xml, None, None, || {
             crate::xml::decode(xml)
                 .map(|d| scan_start_tags(&d.text))
                 .unwrap_or_default()
@@ -215,13 +215,29 @@ impl CompiledSchema {
     /// XML declaration says, the same way [`crate::xml::check_well_formed`] parses it. This is
     /// what the editor and the request pipeline hold.
     pub fn validate_text(&self, text: &str) -> Vec<Diagnostic> {
-        self.validate_with(text.as_bytes(), Some(c"UTF-8"), || scan_start_tags(text))
+        self.validate_with(text.as_bytes(), Some(c"UTF-8"), None, || {
+            scan_start_tags(text)
+        })
+    }
+
+    /// Like [`Self::validate_text`], but removes the attributes `strip` names from the parsed
+    /// document before validating it, so the schema never sees them. Positions are unaffected:
+    /// elements keep their line numbers and document order.
+    pub fn validate_text_stripping(
+        &self,
+        text: &str,
+        strip: &StripAttributes<'_>,
+    ) -> Vec<Diagnostic> {
+        self.validate_with(text.as_bytes(), Some(c"UTF-8"), Some(strip), || {
+            scan_start_tags(text)
+        })
     }
 
     fn validate_with(
         &self,
         xml: &[u8],
         encoding: Option<&CStr>,
+        strip: Option<&StripAttributes<'_>>,
         start_tags: impl FnOnce() -> Vec<StartTag>,
     ) -> Vec<Diagnostic> {
         let (doc, parse_errors) = match parse_instance(xml, encoding) {
@@ -246,6 +262,11 @@ impl CompiledSchema {
                 ));
             }
             return diags;
+        }
+
+        if let Some(strip) = strip {
+            // SAFETY: `doc` is a valid, well-formed document owned here and not shared.
+            unsafe { strip_attributes(doc, strip) };
         }
 
         let collector = Collector::new(false);
@@ -302,6 +323,81 @@ impl CompiledSchema {
             ));
         }
         diags
+    }
+}
+
+/// Attributes to remove before validation: those in `namespace` named in `names`, on every
+/// element child of an element named `parent` (namespace URI, local name; `""` for no
+/// namespace).
+///
+/// For attributes a protocol allows on elements whose schema types do not, such as SOAP's
+/// `mustUnderstand` on header blocks.
+#[derive(Debug, Clone, Copy)]
+pub struct StripAttributes<'a> {
+    pub parent: (&'a str, &'a str),
+    pub namespace: &'a str,
+    pub names: &'a [&'a str],
+}
+
+/// Removes the attributes `strip` names (see [`StripAttributes`]).
+///
+/// # Safety
+/// `doc` must be a live document that nothing else uses during the call.
+unsafe fn strip_attributes(doc: *mut ffi::xmlDoc, strip: &StripAttributes<'_>) {
+    let (Ok(ns), Ok(names)) = (
+        CString::new(strip.namespace),
+        strip
+            .names
+            .iter()
+            .map(|n| CString::new(*n))
+            .collect::<Result<Vec<_>, _>>(),
+    ) else {
+        return; // A NUL byte cannot match any name libxml2 parsed.
+    };
+    let mut targets = Vec::new();
+    // SAFETY: guaranteed by the caller; collecting first keeps the walk off a tree that is
+    // being changed.
+    unsafe {
+        walk_elements(doc, |n, _| {
+            let parent = (*n).parent;
+            if !parent.is_null()
+                && (*parent).type_ == ffi::XML_ELEMENT_NODE
+                && element_is(parent, strip.parent.0, strip.parent.1)
+            {
+                targets.push(n);
+            }
+            false
+        });
+        for node in targets {
+            for name in &names {
+                let attr = ffi::xmlHasNsProp(node, name.as_ptr().cast(), ns.as_ptr().cast());
+                if !attr.is_null() {
+                    ffi::xmlRemoveProp(attr);
+                }
+            }
+        }
+    }
+}
+
+/// Whether `node` is the element `{ns}local`.
+///
+/// # Safety
+/// `node` must point to a live element.
+unsafe fn element_is(node: *const ffi::xmlNode, ns: &str, local: &str) -> bool {
+    // SAFETY: a live element's name is a NUL-terminated string, and its `ns` is null or a
+    // live `xmlNs` with a NUL-terminated `href`.
+    unsafe {
+        let name = (*node).name;
+        if name.is_null() || CStr::from_ptr(name.cast()).to_bytes() != local.as_bytes() {
+            return false;
+        }
+        let node_ns = (*node).ns.cast::<ffi::xmlNs>();
+        let href = if node_ns.is_null() || (*node_ns).href.is_null() {
+            &b""[..]
+        } else {
+            CStr::from_ptr((*node_ns).href.cast()).to_bytes()
+        };
+        href == ns.as_bytes()
     }
 }
 
@@ -1217,6 +1313,38 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(1, 1));
         assert!(diags[0].message.contains("count"), "{diags:#?}");
+    }
+
+    /// Only the named attributes in the named namespace on children of the named parent go;
+    /// everything else is still validated, and positions do not move.
+    #[test]
+    fn stripped_attributes_are_not_validated() {
+        let strip = StripAttributes {
+            parent: ("urn:t", "r"),
+            namespace: "urn:x",
+            names: &["flag"],
+        };
+        let schema = small();
+        let ok = "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">1</n>\n</r>";
+        assert_eq!(schema.validate_text(ok).len(), 1);
+        assert_eq!(schema.validate_text_stripping(ok, &strip), Vec::new());
+
+        // Another name, another namespace, or on the parent itself: still an error.
+        for bad in [
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:other=\"1\">1</n>\n</r>",
+            "<r xmlns=\"urn:t\" xmlns:y=\"urn:y\">\n  <n y:flag=\"1\">1</n>\n</r>",
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\" x:flag=\"1\">\n  <n>1</n>\n</r>",
+        ] {
+            let diags = schema.validate_text_stripping(bad, &strip);
+            assert_eq!(diags.len(), 1, "{bad}: {diags:#?}");
+        }
+
+        let diags = schema.validate_text_stripping(
+            "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">no</n>\n</r>",
+            &strip,
+        );
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert_eq!(diags[0].pos, pos(2, 3));
     }
 
     #[test]

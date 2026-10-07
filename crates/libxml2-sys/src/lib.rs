@@ -32,6 +32,7 @@ macro_rules! opaque {
 }
 
 opaque!(
+    xmlAttr,
     xmlParserCtxt,
     xmlParserInput,
     xmlSchema,
@@ -116,6 +117,18 @@ pub struct xmlNode {
     pub psvi: *mut c_void,
     pub line: c_ushort,
     pub extra: c_ushort,
+}
+
+/// Leading fields of `struct _xmlNs` up to `prefix`; what `xmlNode::ns` points at. Never use
+/// by value.
+#[repr(C)]
+#[derive(Debug)]
+pub struct xmlNs {
+    pub next: *mut xmlNs,
+    pub type_: c_int,
+    /// Namespace URI.
+    pub href: *const xmlChar,
+    pub prefix: *const xmlChar,
 }
 
 /// Leading fields of `struct _xmlDoc` up to `URL`. Never use by value.
@@ -231,6 +244,14 @@ unsafe extern "C" {
     pub fn xmlFreeDoc(doc: *mut xmlDoc);
     pub fn xmlDocGetRootElement(doc: *const xmlDoc) -> *mut xmlNode;
     pub fn xmlGetLineNo(node: *const xmlNode) -> c_long;
+    /// The attribute `name` in namespace `ns` (null: no namespace) of `node`, or null.
+    pub fn xmlHasNsProp(
+        node: *const xmlNode,
+        name: *const xmlChar,
+        ns: *const xmlChar,
+    ) -> *mut xmlAttr;
+    /// Unlinks and frees `cur`. 0 on success.
+    pub fn xmlRemoveProp(cur: *mut xmlAttr) -> c_int;
 
     // xmlschemas.h
     pub fn xmlSchemaNewParserCtxt(url: *const c_char) -> *mut xmlSchemaParserCtxt;
