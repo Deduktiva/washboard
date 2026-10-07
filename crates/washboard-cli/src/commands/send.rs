@@ -1,0 +1,121 @@
+//! `send`: validate, send through `washboard_core::http::send` (the only networking code),
+//! record the exchange in the request's history (which also sets its last server), print the
+//! status line to stderr and the response body, byte-exact, to stdout.
+
+use std::io::{self, Write};
+use std::path::Path;
+use std::process::ExitCode;
+
+use anyhow::bail;
+use washboard_core::http::{self, SendRequest};
+use washboard_core::model::{Auth, RequestMeta, Server};
+use washboard_core::project::Project;
+use washboard_core::soap;
+use washboard_core::wsdl::Wsdl;
+
+use crate::{passwords, support, validation};
+
+pub fn run(
+    dir: &Path,
+    name: &str,
+    server_name: Option<&str>,
+    skip_validation: bool,
+    fail_on_fault: bool,
+) -> anyhow::Result<ExitCode> {
+    let mut project = support::open_write(dir)?;
+    let request = support::find_request(&project, name)?;
+    let text = project.read_request(request.id)?;
+    let wsdl = support::load_project_wsdl(&project)?;
+    if skip_validation {
+        eprintln!("note: sending without validation");
+    } else {
+        validation::check(&project, &wsdl, &request, &text).map_err(|e| {
+            e.context("not sent; pass --skip-validation to send without validating")
+        })?;
+    }
+    let server = choose_server(&project, &request, server_name)?;
+    let password = match &server.auth {
+        Auth::Basic { username } => Some(passwords::for_send(&project, &server, username)?),
+        Auth::None => None,
+    };
+    let soap_action = soap_action(&wsdl, &request, &text);
+
+    let exchange = http::send(&SendRequest {
+        server: server.clone(),
+        password,
+        soap_action,
+        body: text,
+    });
+    let fault = exchange
+        .response
+        .as_ref()
+        .and_then(|r| http::detect_fault(&r.body));
+    project.record_exchange(request.id, &server, &exchange, fault.is_some())?;
+
+    let Some(response) = &exchange.response else {
+        let err = exchange.error.as_deref().unwrap_or("no response");
+        eprintln!("{} → {err}", server.url);
+        return Ok(ExitCode::from(1));
+    };
+    eprintln!(
+        "{}  {} ms  {} bytes",
+        response.start_line,
+        exchange.duration.as_millis(),
+        response.body.len()
+    );
+    if let Some(e) = &exchange.error {
+        // E.g. a truncated oversized body: a response arrived but is incomplete.
+        eprintln!("warning: {e}");
+    }
+    let mut out = io::stdout().lock();
+    out.write_all(&response.body)?;
+    if !response.body.ends_with(b"\n") {
+        out.write_all(b"\n")?;
+    }
+    out.flush()?;
+    if let Some(f) = fault {
+        eprintln!("SOAP fault: {}: {}", f.code, f.string);
+        if fail_on_fault {
+            return Ok(ExitCode::from(1));
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `--server`, else the request's last server, else the project's most recently used one,
+/// else the only server.
+fn choose_server(
+    project: &Project,
+    request: &RequestMeta,
+    name: Option<&str>,
+) -> anyhow::Result<Server> {
+    if let Some(n) = name {
+        return support::find_server(project, n);
+    }
+    if let Some(id) = request.last_server.or(project.last_used_server()?) {
+        return Ok(project.server(id)?);
+    }
+    let mut all = project.servers()?;
+    match all.len() {
+        0 => bail!("the project has no servers; add one with `washboard server add`"),
+        1 => Ok(all.remove(0)),
+        _ => bail!("the request has no last server; choose one with --server"),
+    }
+}
+
+/// From the operation the Body content dispatches to, using the request's operation hint to
+/// choose among operations sharing a body element; falls back to the hint alone (e.g. for a
+/// body that does not parse). `None` sends `SOAPAction: ""`.
+fn soap_action(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> Option<String> {
+    let hint = request.operation.as_ref();
+    let dispatched = soap::body_elements(text)
+        .and_then(|els| els.into_iter().next())
+        .and_then(|first| wsdl.dispatch(&first, hint))
+        .map(|d| d.soap_action.clone());
+    match dispatched {
+        Some(action) => action,
+        None => hint
+            .and_then(|h| wsdl.operation(h))
+            .and_then(|(_, op)| op.soap_action.clone()),
+    }
+}
