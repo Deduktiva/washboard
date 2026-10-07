@@ -24,6 +24,20 @@ jobs:
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
 
+  deny:
+    name: cargo deny (banned crates)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+      # Bans only (deny.toml, PLAN §6); the dependency-graph and source checks for the network
+      # boundary run as tests (crates/washboard-core/tests/network_boundary.rs).
+      - run: cargo deny check bans
+
   fixtures:
     name: Fixture oracle (lxml)
     runs-on: ubuntu-latest
