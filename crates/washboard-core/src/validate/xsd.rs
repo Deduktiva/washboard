@@ -77,18 +77,19 @@ const INSTANCE_URL: &CStr = c"washboard-instance:/document.xml";
 /// broken request can produce thousands of follow-up errors.
 const MAX_DIAGNOSTICS: usize = 500;
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
-/// `XML_WAR_ENCODING_MISMATCH`: the declaration names another encoding than the BOM we add.
-const WAR_ENCODING_MISMATCH: c_int = 113;
 
-/// libxml2 schema validity codes (`xmlParserErrors`, numbered in `xmlerror.h`) for a value
-/// that does not fit its simple type: `XML_SCHEMAV_VALUE` (1822) to
-/// `XML_SCHEMAV_CVC_DATATYPE_VALID_1_2_3` (1826), `XML_SCHEMAV_CVC_TYPE_3_1_2` (1828, element
-/// children in a simple type) to `XML_SCHEMAV_CVC_ENUMERATION_VALID` (1840, all facets),
-/// `XML_SCHEMAV_CVC_COMPLEX_TYPE_2_2` (1842, simple content), `XML_SCHEMAV_CVC_ELT_5_2_1`
-/// (1855) to `XML_SCHEMAV_CVC_ELT_5_2_2_2_2` (1858, fixed values) and `XML_SCHEMAV_CVC_AU`
-/// (1874, fixed attribute value). Their span is the element's text, or the attribute.
+/// Schema validity codes for a value that does not fit its simple type: the value and
+/// datatype errors, element children in a simple type, all facets, simple content, fixed
+/// values and a fixed attribute value. Their span is the element's text, or the attribute.
 fn is_value_error(code: c_int) -> bool {
-    matches!(code, 1822..=1826 | 1828..=1840 | 1842 | 1855..=1858 | 1874)
+    matches!(
+        code,
+        ffi::XML_SCHEMAV_VALUE..=ffi::XML_SCHEMAV_CVC_DATATYPE_VALID_1_2_3
+            | ffi::XML_SCHEMAV_CVC_TYPE_3_1_2..=ffi::XML_SCHEMAV_CVC_ENUMERATION_VALID
+            | ffi::XML_SCHEMAV_CVC_COMPLEX_TYPE_2_2
+            | ffi::XML_SCHEMAV_CVC_ELT_5_2_1..=ffi::XML_SCHEMAV_CVC_ELT_5_2_2_2_2
+            | ffi::XML_SCHEMAV_CVC_AU
+    )
 }
 
 /// A libxml2 schema compiled from a [`SchemaBundle`]. See the module docs for thread rules.
@@ -896,7 +897,7 @@ fn compile_diagnostics(raw: Vec<RawError>, bundle: &SchemaBundle) -> Vec<Diagnos
     raw.into_iter()
         // Our loader's refusals are reported separately, once per location.
         .filter(|e| e.domain != ffi::XML_FROM_IO)
-        .filter(|e| !(e.domain == ffi::XML_FROM_PARSER && e.code == WAR_ENCODING_MISMATCH))
+        .filter(|e| !(e.domain == ffi::XML_FROM_PARSER && e.code == ffi::XML_WAR_ENCODING_MISMATCH))
         .map(|mut e| {
             let doc_url = e
                 .node
@@ -1076,6 +1077,8 @@ struct StartTag {
     local: String,
     /// From the `<` to just past the closing `>` or `/>`.
     bytes: Range<usize>,
+    /// Attribute names and values as [`crate::xml::StartTag`] has them.
+    attrs: Vec<(Range<usize>, Option<Range<usize>>)>,
 }
 
 /// Lists all start tags (including empty-element tags) in document order, with the positions
@@ -1093,6 +1096,7 @@ fn scan_start_tags_with(text: &str, lines: &LineIndex<'_>) -> Vec<StartTag> {
             end_line: lines.pos(t.end.saturating_sub(1)).line,
             local: t.local(text).to_owned(),
             bytes: t.start..t.end,
+            attrs: t.attr_names.into_iter().zip(t.attr_values).collect(),
         })
         .collect()
 }
@@ -1154,26 +1158,11 @@ impl<'t> Source<'t> {
 
     /// The attribute written as `name` on `tag`, from its name to the closing quote.
     fn attribute(&self, tag: &StartTag, name: &str) -> Option<Range<usize>> {
-        let parsed = crate::xml::start_tag_at(self.text, tag.bytes.start)?;
-        let name = parsed
-            .attr_names
-            .into_iter()
-            .find(|r| self.text.get(r.clone()) == Some(name))?;
-        let tokens = crate::xml::tokenize_range(self.text, tag.bytes.start, tag.bytes.start + 1);
-        let end = tokens
-            .tokens
+        let (name, value) = tag
+            .attrs
             .iter()
-            .skip_while(|t| t.start < name.end)
-            .skip_while(|t| t.kind == TokenKind::Punct && &self.text[t.span()] == "=")
-            .take_while(|t| {
-                matches!(
-                    t.kind,
-                    TokenKind::AttrValue | TokenKind::EntityRef | TokenKind::CharRef
-                )
-            })
-            .last()
-            .map_or(name.end, |t| t.end);
-        Some(name.start..end)
+            .find(|(n, _)| self.text.get(n.clone()) == Some(name))?;
+        Some(name.start..value.as_ref().map_or(name.end, |v| v.end))
     }
 
     /// The text between `tag` and its end tag, without surrounding whitespace. `None` for an

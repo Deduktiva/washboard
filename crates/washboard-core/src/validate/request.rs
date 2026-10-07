@@ -315,10 +315,8 @@ fn check_must_understand(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagno
     }
 }
 
-/// libxml2's `XML_SCHEMAV_CVC_ELT_2`: "The element declaration is abstract".
-const ABSTRACT_ELEMENT: i32 = 1846;
-/// libxml2's `XML_SCHEMAV_CVC_TYPE_2`: "The type definition is abstract".
-const ABSTRACT_TYPE: i32 = 1876;
+const ABSTRACT_ELEMENT: i32 = libxml2_sys::XML_SCHEMAV_CVC_ELT_2;
+const ABSTRACT_TYPE: i32 = libxml2_sys::XML_SCHEMAV_CVC_TYPE_2;
 
 /// Appends the concrete alternatives to an abstract element or type error: the substitution
 /// group members that may stand in for the element, or the types `xsi:type` may name.
