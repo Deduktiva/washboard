@@ -1,0 +1,39 @@
+<!-- expect: valid -->
+<!-- xsi:type on an abstract type (two derivation levels), substitution group members,
+     xs:any lax with a known (validated) and an unknown (accepted) element. -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xmlns:msg="urn:example:customer:messages"
+                  xmlns:cus="urn:example:customer"
+                  xmlns:com="urn:example:common">
+  <soapenv:Body>
+    <msg:CreateOrder>
+      <cus:Customer>
+        <cus:id>100231</cus:id>
+        <cus:party xsi:type="com:PublicCompany">
+          <com:displayName>Huber Logistik AG</com:displayName>
+          <com:country>AT</com:country>
+          <com:vatId>ATU12345678</com:vatId>
+          <com:isin>AT0000000001</com:isin>
+        </cus:party>
+        <com:Email preferred="true">
+          <com:address>office@huber.example</com:address>
+        </com:Email>
+        <com:Phone>
+          <com:number>+43 1 234567</com:number>
+        </com:Phone>
+        <cus:extensions>
+          <audit:AuditInfo xmlns:audit="urn:example:audit">
+            <audit:user>svc-tester</audit:user>
+            <audit:at>2026-10-06T14:03:12Z</audit:at>
+          </audit:AuditInfo>
+          <x:Whatever xmlns:x="urn:example:unknown">anything</x:Whatever>
+        </cus:extensions>
+      </cus:Customer>
+      <cus:Order>
+        <cus:line sku="A-1009" qty="3"/>
+        <cus:status>NEW</cus:status>
+      </cus:Order>
+    </msg:CreateOrder>
+  </soapenv:Body>
+</soapenv:Envelope>

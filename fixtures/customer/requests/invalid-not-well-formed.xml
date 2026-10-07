@@ -1,0 +1,12 @@
+<!-- expect: error line 9: well-formed -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:cus="urn:example:customer"
+                  xmlns:msg="urn:example:customer:messages">
+  <soapenv:Body>
+    <msg:CreateOrder>
+      <cus:Order>
+        <cus:line sku="B-2200" qty="1">
+      </cus:Order>
+    </msg:CreateOrder>
+  </soapenv:Body>
+</soapenv:Envelope>

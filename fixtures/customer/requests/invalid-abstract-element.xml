@@ -1,0 +1,21 @@
+<!-- expect: error line 14: ContactMethod -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xmlns:msg="urn:example:customer:messages"
+                  xmlns:cus="urn:example:customer"
+                  xmlns:com="urn:example:common">
+  <soapenv:Body>
+    <msg:CreateOrder>
+      <cus:Customer>
+        <cus:id>1</cus:id>
+        <cus:party xsi:type="com:Person">
+          <com:displayName>X</com:displayName><com:country>AT</com:country>
+          <com:firstName>A</com:firstName><com:lastName>B</com:lastName></cus:party>
+        <com:ContactMethod/>
+      </cus:Customer>
+      <cus:Order>
+        <cus:line sku="A" qty="1"/>
+      </cus:Order>
+    </msg:CreateOrder>
+  </soapenv:Body>
+</soapenv:Envelope>

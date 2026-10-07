@@ -1,0 +1,77 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!-- Fixture level 3. Starts with a UTF-8 BOM. Includes level 4 (same namespace). -->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:com="urn:example:common"
+           targetNamespace="urn:example:common"
+           elementFormDefault="qualified">
+  <xs:include schemaLocation="party-ids.xsd"/>
+
+  <xs:complexType name="Party" abstract="true">
+    <xs:sequence>
+      <xs:element name="displayName" type="xs:string"/>
+      <xs:element name="country" type="com:CountryCode"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="Person">
+    <xs:complexContent>
+      <xs:extension base="com:Party">
+        <xs:sequence>
+          <xs:element name="firstName" type="xs:string"/>
+          <xs:element name="lastName" type="xs:string"/>
+          <xs:element name="birthDate" type="xs:date" minOccurs="0"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="Company">
+    <xs:complexContent>
+      <xs:extension base="com:Party">
+        <xs:sequence>
+          <xs:element name="vatId" type="com:VatId"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <!-- Derived two levels deep: Company -> PublicCompany. -->
+  <xs:complexType name="PublicCompany">
+    <xs:complexContent>
+      <xs:extension base="com:Company">
+        <xs:sequence>
+          <xs:element name="isin" type="xs:string"/>
+        </xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:complexType name="ContactMethodType" abstract="true">
+    <xs:attribute name="preferred" type="xs:boolean" default="false"/>
+  </xs:complexType>
+  <xs:element name="ContactMethod" type="com:ContactMethodType" abstract="true"/>
+
+  <xs:element name="Email" substitutionGroup="com:ContactMethod">
+    <xs:complexType>
+      <xs:complexContent>
+        <xs:extension base="com:ContactMethodType">
+          <xs:sequence>
+            <xs:element name="address" type="xs:string"/>
+          </xs:sequence>
+        </xs:extension>
+      </xs:complexContent>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="Phone" substitutionGroup="com:ContactMethod">
+    <xs:complexType>
+      <xs:complexContent>
+        <xs:extension base="com:ContactMethodType">
+          <xs:sequence>
+            <xs:element name="number" type="xs:string"/>
+          </xs:sequence>
+        </xs:extension>
+      </xs:complexContent>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

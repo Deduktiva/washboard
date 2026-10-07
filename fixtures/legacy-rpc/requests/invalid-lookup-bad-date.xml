@@ -1,0 +1,10 @@
+<!-- expect: error line 7: asOf -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:leg="urn:example:legacy">
+  <soapenv:Body>
+    <leg:Lookup>
+      <customerNo>42</customerNo>
+      <asOf>01.01.2026</asOf>
+    </leg:Lookup>
+  </soapenv:Body>
+</soapenv:Envelope>

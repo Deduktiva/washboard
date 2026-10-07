@@ -1,0 +1,18 @@
+[package]
+name = "libxml2-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "xml2"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+cmake = "0.1.58"
+pkg-config = "0.3.34"
+
+[lints]
+workspace = true

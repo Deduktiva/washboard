@@ -1,0 +1,10 @@
+<!-- expect: error line 7: customerId -->
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:msg="urn:example:customer:messages">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <msg:GetCustomer>
+      <msg:customerId>?</msg:customerId>
+    </msg:GetCustomer>
+  </soapenv:Body>
+</soapenv:Envelope>
