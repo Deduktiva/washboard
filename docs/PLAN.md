@@ -445,6 +445,10 @@ Behaviour:
     optional span (start and end `TextPos`) next to `pos`, so the editor underlines exactly
     the bad value and the CLI prints `^^^^` under it; diagnostics without a span keep
     today's single caret.
+  - When spans land, replace the CLI's hand-written excerpt (`render` in
+    `washboard-cli/src/validation.rs`) with `annotate-snippets`, the renderer rustc uses: it
+    gives multi-character and multi-line underlines and labels without our own layout code.
+    Not worth it while diagnostics carry a single point.
   - Where libxml2 must not complain about something the protocol allows, remove it from the
     parsed tree before validating (`CompiledSchema::validate_text_stripping`, used for SOAP
     header-block attributes) rather than filtering errors afterwards.
