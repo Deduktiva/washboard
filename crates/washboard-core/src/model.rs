@@ -141,9 +141,13 @@ pub enum SchemaOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDoc {
     /// The URI other documents use to reference this one, and the only thing the libxml2
-    /// resource loader resolves. Files: their project-relative path. Inline/generated:
-    /// `washboard:/inline/<n>.xsd`, `washboard:/rpc/<n>.xsd`, `washboard:/root.xsd`.
-    /// All `schemaLocation`s inside `text` are rewritten to these URIs.
+    /// resource loader resolves. Files: `washboard:/wsdl/<project-relative path>`
+    /// (percent-encoded, see `wsdl::file_uri`). Inline/generated:
+    /// `washboard:/inline/<n>.xsd`, `washboard:/rpc/<n>.xsd`, `washboard:/ns/<n>.xsd`,
+    /// `washboard:/root.xsd`. All `schemaLocation`s inside `text` are rewritten to these URIs.
+    /// They are absolute on purpose: libxml2 resolves a `schemaLocation` against the
+    /// including document's URI before asking the loader, which would mangle relative paths.
+    /// The loader should therefore look up the URI it is given verbatim.
     pub uri: String,
     /// Empty for no-namespace (chameleon) schemas.
     pub target_ns: String,
