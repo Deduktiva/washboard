@@ -3,7 +3,7 @@
 use std::cell::OnceCell;
 
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSBackingStoreType,
@@ -12,6 +12,8 @@ use objc2_app_kit::{
 use objc2_foundation::{
     NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, ns_string,
 };
+
+use crate::menu;
 
 #[derive(Debug, Default)]
 pub struct AppDelegateIvars {
@@ -50,6 +52,31 @@ define_class!(
             false
         }
     }
+
+    // Menu actions that reach the app delegate through the responder chain. Stubs until
+    // WP-APP-INTEGRATION binds them to `washboard-ui-model`.
+    impl AppDelegate {
+        // SAFETY (all below): action methods take the sender and return nothing.
+        #[unsafe(method(newProject:))]
+        fn new_project(&self, _sender: Option<&AnyObject>) {
+            not_implemented("New Project");
+        }
+
+        #[unsafe(method(openProject:))]
+        fn open_project(&self, _sender: Option<&AnyObject>) {
+            not_implemented("Open Project");
+        }
+
+        #[unsafe(method(saveAll:))]
+        fn save_all(&self, _sender: Option<&AnyObject>) {
+            not_implemented("Save All");
+        }
+
+        #[unsafe(method(showHttpLog:))]
+        fn show_http_log(&self, _sender: Option<&AnyObject>) {
+            not_implemented("HTTP Log");
+        }
+    }
 );
 
 impl AppDelegate {
@@ -65,12 +92,17 @@ impl AppDelegate {
     }
 }
 
-/// Creates the shared application and installs a new delegate. `NSApplication` holds its
+fn not_implemented(what: &str) {
+    eprintln!("washboard-app: {what} is not implemented yet");
+}
+
+/// Creates the shared application, its main menu and a new delegate. `NSApplication` holds its
 /// delegate weakly, so the caller must keep the returned delegate alive for as long as the app
 /// runs.
 pub fn install(mtm: MainThreadMarker) -> Retained<AppDelegate> {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    menu::install(&app, mtm);
     let delegate = AppDelegate::new(mtm);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     delegate

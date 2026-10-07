@@ -10,6 +10,8 @@
 
 #[cfg(target_os = "macos")]
 mod app;
+#[cfg(target_os = "macos")]
+mod menu;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};
