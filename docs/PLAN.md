@@ -70,7 +70,7 @@ washboard/
 │  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs (§2.1)
 │  ├─ washboard-cli/          command-line tool on the same project folders, drives core without UI
 │  └─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; bundle, assets
-└─ xtask/                     build .app bundle, codesign, (later) notarize, DMG
+└─ packaging                  `cargo-packager` config (.app, DMG) + `rcodesign` for signing/notarizing
 ```
 
 ### Key crates
@@ -78,7 +78,7 @@ washboard/
 |---|---|---|
 | AppKit | `objc2`, `objc2-foundation`, `objc2-app-kit`, `block2`, `dispatch2` | `define_class!` for delegates/controllers, `MainThreadMarker` everywhere |
 | SQLite | `rusqlite` (`bundled`) | bundled = known version, no surprises from system sqlite |
-| XML parsing (fast, Rust) | `quick-xml` for tokenizing/well-formedness, `roxmltree` for WSDL/XSD model | both give byte offsets → line/col |
+| XML parsing | own tolerant tokenizer for highlighting and start tags, `roxmltree` for the WSDL/XSD model, libxml2 for well-formedness and validation, `quick-xml` for escaping | one well-formedness verdict for editor and validation |
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see §5 for the gotchas |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Verify in M0 that raw-ish header capture is adequate. |
 | Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
@@ -116,6 +116,10 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
   completion and hover requests answered from `schema::SchemaModel`.
+- **Not undo/redo.** The native text widget owns undo (`NSTextView`'s undo manager, later
+  `GtkSourceView`'s or the Windows control's); the model only receives the resulting edits
+  like any other edit. Programmatic changes the model makes (format XML, insert template,
+  completion) are applied through the widget so they land on its undo stack too.
 - Commands: new/rename/duplicate/delete request, validate, send (validate first, refuse on
   errors), save all, new project / replace WSDL with the import check, server CRUD.
 - Background jobs: schema compile per project, validation, sends; cancellation and
@@ -263,8 +267,9 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 - Line-number ruler (`NSRulerView` subclass) with error/warning markers in the gutter.
 - Highlighting: Rust tokenizer, applied as temporary attributes on the layout manager for the
   edited range expanded to the enclosing tag boundaries. Full pass only on load.
-- **Well-formedness**: on every edit (debounced 150 ms), `quick-xml` pass → red underline at the
-  error position + message in the issues bar. This is the "not valid XML is visible" requirement.
+- **Well-formedness**: on every edit (debounced 150 ms), libxml2 parse (same parser and options
+  as validation) → red underline at the error position + message in the issues bar. This is the
+  "not valid XML is visible" requirement. ~15 ms for 1 MB.
 - **Schema validation**: Validate button (⌘B), automatically before send, and optionally live
   (debounced 1 s) once we know it's fast enough on large schemas.
 - **Completion**: native `NSTextView` completion (`textView:completions:forPartialWordRange:…`)
@@ -276,21 +281,19 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 ### Validation semantics
 1. Must be well-formed.
 2. Root must be a SOAP 1.1 `soap:Envelope`. A SOAP 1.2 envelope gets a specific error.
-3. The envelope's own shape — an optional `Header` before exactly one `Body`, nothing else
-   from the SOAP namespace, namespace-qualified header blocks — is checked in Rust rather
-   than against the bundled SOAP envelope XSD. Same content model, but the messages name
-   what is wrong instead of reading like a content-model violation, the positions come
-   straight from the request text, and no second schema has to be compiled and shipped.
-4. Each `Body` child is matched to a binding operation by QName; unknown → error. An empty
-   `Body` is an error: there is nothing to send.
-5. Body content is validated against the compiled project schema with libxml2
-   (`xmlSchemaValidateDoc` on a sub-document); line numbers mapped back to the editor.
-   Each block is cut out as a standalone document whose preceding text is replaced by
-   newlines and spaces, so line *and* column match the request file, with the namespaces it
-   inherited added to its start tag.
-6. Header blocks declared in the binding (`soap:header`) are validated the same way. Blocks
-   the binding does not declare (WS-Security and friends) are not in the project schema;
-   they are reported as a warning and left unvalidated, so they do not block sending.
+3. Each `Body` child is matched to a binding operation by QName; unknown → error. (Schema
+   validation alone would not catch this: the envelope schema allows any `Body` content.)
+4. **One libxml2 pass over the whole document** validates envelope, headers and body together.
+   The bundle includes a SOAP 1.1 envelope schema (shipped in the app, never fetched) whose
+   `Header` and `Body` contain `xs:any processContents="lax"`: every block with a global
+   declaration in the project schema is validated fully, and positions refer directly to the
+   user's document. Blocks are never cut out, so there is no namespace re-declaration and no
+   line mapping beyond the start-tag adjustment in `validate::xsd`.
+   Verified with libxml2 2.14 against all schema-level fixtures, including `xsi:type`, abstract
+   elements, substitution groups, `xs:any` and rpc/literal wrappers.
+5. Header blocks the binding declares (`soap:header`) but that are missing → warning; header
+   blocks the binding doesn't declare are validated if the schema knows them (lax), otherwise
+   left alone, as SOAP intends.
 
 Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
 **Send is blocked** while any error exists; the send attempt itself shows the issues bar.
@@ -520,7 +523,8 @@ Completion, hover docs, gutter markers, issues bar, format XML, live validation 
 
 **M5 — Polish & distribution**
 Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, accessibility pass
-(VoiceOver labels on toolbar/sidebar), app icon, `xtask bundle`, codesign, notarization, DMG.
+(VoiceOver labels on toolbar/sidebar), app icon; `.app`, DMG, codesign and notarization from
+`cargo-packager` configuration plus `rcodesign` (no hand-written bundling or signing scripts).
 
 ### CI
 - Linux: fmt, clippy, tests for every crate except the AppKit front end (including

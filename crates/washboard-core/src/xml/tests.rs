@@ -302,10 +302,19 @@ fn fixtures_are_well_formed_except_the_broken_one() {
             let d = result.expect_err("must fail");
             assert_eq!(d.source, DiagSource::WellFormedness);
             // Fixture expectation: `<!-- expect: error line 9: well-formed -->`.
-            assert_eq!(d.pos, Some(TextPos { line: 9, column: 7 }), "{d}");
+            assert_eq!(
+                d.pos,
+                Some(TextPos {
+                    line: 9,
+                    column: 19
+                }),
+                "{d}"
+            );
             assert!(d.message.contains("well-formed"), "{d}");
-            assert!(d.message.contains("</cus:Order>") && d.message.contains("<cus:line>"));
-            assert!(d.message.contains("line 8"), "{d}");
+            assert!(
+                d.message.contains("tag mismatch") && d.message.contains("line 8"),
+                "{d}"
+            );
         } else {
             assert_eq!(result, Ok(()), "{path:?}");
         }
@@ -315,91 +324,160 @@ fn fixtures_are_well_formed_except_the_broken_one() {
 #[test]
 fn well_formedness_errors_and_positions() {
     let cases: &[(&str, u32, u32, &str)] = &[
-        ("<a><b></a>", 1, 7, "does not match start tag `<b>`"),
-        ("<a>\n  <b>\n</a>", 3, 1, "`</a>` does not match"),
-        ("<a>\n  <b>\n  <c/>", 2, 3, "`<b>` is not closed"),
-        ("<a>", 1, 1, "`<a>` is not closed"),
-        ("</a>", 1, 1, "no matching start tag"),
-        ("<p:a/>", 1, 2, "prefix `p` is not declared"),
+        (
+            "<a><b></a>",
+            1,
+            11,
+            "Opening and ending tag mismatch: b line 1 and a",
+        ),
+        (
+            "<a>\n  <b>\n</a>",
+            3,
+            5,
+            "Opening and ending tag mismatch: b line 2 and a",
+        ),
+        (
+            "<a>\n  <b>\n  <c/>",
+            3,
+            7,
+            "Premature end of data in tag b line 2",
+        ),
+        ("<a>", 1, 4, "Premature end of data in tag a line 1"),
+        ("</a>", 1, 2, "StartTag: invalid element name"),
+        ("<p:a/>", 1, 5, "Namespace prefix p on a is not defined"),
         (
             "<a xmlns:q='u'><q:b/><p:c/></a>",
             1,
-            23,
-            "prefix `p` is not declared",
+            26,
+            "Namespace prefix p on c is not defined",
         ),
-        ("<a\n   p:x='1'/>", 2, 4, "prefix `p` is not declared"),
         (
-            "<a x='1' x='2'/>",
-            1,
-            10,
-            "duplicate attribute `x` (first on line 1)",
+            "<a\n   p:x='1'/>",
+            2,
+            11,
+            "Namespace prefix p for x on a is not defined",
         ),
+        ("<a x='1' x='2'/>", 1, 15, "Attribute x redefined"),
         (
             "<a xmlns:p='u' xmlns:q='u' p:x='1' q:x='2'/>",
             1,
-            36,
-            "`p:x` and `q:x` have the same namespace",
+            43,
+            "Namespaced Attribute x in 'u' redefined",
         ),
-        ("<a/><b/>", 1, 5, "only one root element"),
-        ("hello<a/>", 1, 1, "text is not allowed before the root"),
-        ("<a/>\n  x", 2, 3, "text is not allowed after the root"),
-        ("", 1, 1, "no root element"),
-        ("<!-- only -->\n", 2, 1, "no root element"),
-        ("<a>&nbsp;</a>", 1, 4, "undefined entity `&nbsp;`"),
-        ("<a>&#0;</a>", 1, 4, "not a valid character reference"),
-        ("<a>&#xD800;</a>", 1, 4, "not a valid character reference"),
-        ("<a>AT&T</a>", 1, 6, "write `&amp;`"),
-        ("<a x='AT&T'/>", 1, 9, "write `&amp;`"),
-        ("<a x='&bogus;'/>", 1, 7, "undefined entity"),
+        ("<a/><b/>", 1, 5, "Extra content at the end of the document"),
+        ("hello<a/>", 1, 1, "Start tag expected, '<' not found"),
+        (
+            "<a/>\n  x",
+            2,
+            3,
+            "Extra content at the end of the document",
+        ),
+        ("", 1, 1, "Document is empty"),
+        ("<!-- only -->\n", 2, 1, "Start tag expected, '<' not found"),
+        ("<a>&nbsp;</a>", 1, 10, "Entity 'nbsp' not defined"),
+        (
+            "<a>&#0;</a>",
+            1,
+            8,
+            "xmlParseCharRef: invalid xmlChar value 0",
+        ),
+        (
+            "<a>&#xD800;</a>",
+            1,
+            12,
+            "xmlParseCharRef: invalid xmlChar value 55296",
+        ),
+        ("<a>AT&T</a>", 1, 8, "EntityRef: expecting ';'"),
+        ("<a x='AT&T'/>", 1, 11, "EntityRef: expecting ';'"),
+        ("<a x='&bogus;'/>", 1, 14, "Entity 'bogus' not defined"),
         (
             "<a x='a<b'/>",
             1,
             8,
-            "`<` is not allowed in attribute values",
+            "Unescaped '<' not allowed in attributes values",
         ),
-        ("<a x='1'y='2'/>", 1, 9, "separated by whitespace"),
-        ("<a x/>", 1, 4, "attribute `x` needs"),
-        ("<a x=1/>", 1, 6, "must be quoted"),
-        ("<a>]]></a>", 1, 4, "`]]>` is not allowed"),
-        ("<a><!-- a -- b --></a>", 1, 11, "`--` is not allowed"),
-        ("<a><!-- x", 1, 4, "comment is not closed"),
-        ("<a><![CDATA[x</a>", 1, 4, "CDATA section is not closed"),
-        ("<a x='1'", 1, 1, "tag is not closed"),
-        ("<a>\u{1}</a>", 1, 4, "U+0001 is not allowed"),
-        ("<a>\u{FFFE}</a>", 1, 4, "U+FFFE is not allowed"),
+        ("<a x='1'y='2'/>", 1, 9, "attributes construct error"),
+        (
+            "<a x/>",
+            1,
+            5,
+            "Specification mandates value for attribute x",
+        ),
+        ("<a x=1/>", 1, 6, "AttValue: \" or ' expected"),
+        ("<a>]]></a>", 1, 4, "Sequence ']]>' not allowed in content"),
+        (
+            "<a><!-- a -- b --></a>",
+            1,
+            11,
+            "Double hyphen within comment: <!-- a",
+        ),
+        ("<a><!-- x", 1, 10, "Comment not terminated"),
+        ("<a><![CDATA[x</a>", 1, 18, "CData section not finished"),
+        ("<a x='1'", 1, 9, "attributes construct error"),
+        ("<a>\u{1}</a>", 1, 4, "PCDATA invalid Char value 1"),
+        ("<a>\u{fffe}</a>", 1, 4, "PCDATA invalid Char value 65534"),
         (
             "<a/>\n<?xml version='1.0'?>",
             2,
-            1,
-            "only allowed at the very start",
+            6,
+            "XML declaration allowed only at the start of the document",
         ),
-        ("< a/>", 1, 2, "is not a valid element name"),
-        ("<1a/>", 1, 2, "`1a` is not a valid element name"),
-        ("<a:b:c xmlns:a='u'/>", 1, 2, "not a valid element name"),
-        ("<a xmlns:p=''/>", 1, 4, "cannot undeclare"),
+        ("< a/>", 1, 2, "StartTag: invalid element name"),
+        ("<1a/>", 1, 2, "StartTag: invalid element name"),
+        (
+            "<a:b:c xmlns:a='u'/>",
+            1,
+            7,
+            "Failed to parse QName 'a:b:c'",
+        ),
+        (
+            "<a xmlns:p=''/>",
+            1,
+            14,
+            "xmlns:p: Empty XML namespace is not allowed",
+        ),
         (
             "<a xmlns:xml='urn:x'/>",
             1,
-            4,
-            "`xml` prefix can only be bound",
+            21,
+            "xml namespace prefix mapped to wrong URI",
         ),
         (
             "<a xmlns:xmlns='urn:x'/>",
             1,
-            4,
-            "`xmlns` prefix cannot be declared",
+            23,
+            "redefinition of the xmlns prefix is forbidden",
         ),
-        ("<xmlns:a/>", 1, 2, "prefix `xmlns` is not declared"),
-        ("<a/><!DOCTYPE a>", 1, 5, "DOCTYPE must come before"),
+        (
+            "<xmlns:a/>",
+            1,
+            9,
+            "Namespace prefix xmlns on a is not defined",
+        ),
+        (
+            "<a/><!DOCTYPE a>",
+            1,
+            5,
+            "Extra content at the end of the document",
+        ),
         (
             "<a><?xml-stylesheet x?><?XML x?></a>",
             1,
-            24,
-            "`xml` is reserved",
+            29,
+            "Invalid PI name",
         ),
-        ("<a>&#x41;ü</a>\u{1}", 1, 15, "U+0001"),
-        // Columns count chars, not bytes.
-        ("<a>üü€😀</b>", 1, 8, "`</b>` does not match"),
+        (
+            "<a>&#x41;ü</a>\u{1}",
+            1,
+            15,
+            "Extra content at the end of the document",
+        ),
+        (
+            "<a>üü€😀</b>",
+            1,
+            12,
+            "Opening and ending tag mismatch: a line 1 and b",
+        ),
     ];
     for &(input, line, column, needle) in cases {
         let e = well_formedness_error(input).unwrap_or_else(|| panic!("{input:?} must fail"));
@@ -822,6 +900,8 @@ fn exercise(s: &str, rng: &mut fastrand::Rng) {
 #[test]
 fn deep_nesting_does_not_overflow() {
     let depth = 100_000;
+    // libxml2 refuses nesting deeper than 256 (raising that needs XML_PARSE_HUGE, which also
+    // lifts its limits on text and entity sizes); the editor and validation agree on that.
     let mut s = String::new();
     for _ in 0..depth {
         s.push_str("<a>");
@@ -830,12 +910,12 @@ fn deep_nesting_does_not_overflow() {
     for _ in 0..depth {
         s.push_str("</a>");
     }
-    assert_eq!(check_well_formed(&s), Ok(()));
+    let e = check_well_formed(&s).expect_err("too deep");
+    assert!(e.message.contains("Excessive depth"), "{e}");
     assert_eq!(cursor_context(&s, depth * 3).path.len(), depth);
     assert_eq!(tokenize(&s).len(), depth * 6 + 1);
-    // Indentation makes formatted output quadratic in depth, so format a shallower document;
-    // still deep enough to overflow the stack of a recursive printer in a debug build.
-    let depth = 3_000;
+    // The formatter only accepts well-formed input, so its depth is bounded by the same limit.
+    let depth = 250;
     let s = format!("{}x{}", "<a><b/>".repeat(depth), "</a>".repeat(depth));
     let out = pretty_print(&s).expect("well-formed");
     assert_eq!(check_well_formed(&out), Ok(()));

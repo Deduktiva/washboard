@@ -94,9 +94,47 @@ pub fn pos_at_byte(text: &str, byte: usize) -> TextPos {
     TextPos { line, column }
 }
 
+/// Precomputed line starts, so many positions in one large text stay cheap.
+#[derive(Debug)]
+pub struct LineIndex<'a> {
+    text: &'a str,
+    starts: Vec<usize>,
+}
+
+impl<'a> LineIndex<'a> {
+    pub fn new(text: &'a str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+        Self { text, starts }
+    }
+
+    /// Same semantics as [`pos_at_byte`].
+    pub fn pos(&self, byte: usize) -> TextPos {
+        let byte = byte.min(self.text.len());
+        let line = self.starts.partition_point(|&s| s <= byte).max(1);
+        let start = self.starts[line - 1];
+        let column = self.text.get(start..byte).map_or(0, |s| s.chars().count());
+        TextPos {
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            column: u32::try_from(column + 1).unwrap_or(u32::MAX),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_index_matches_pos_at_byte() {
+        let t = "ab\nüx<\n\nz";
+        let li = LineIndex::new(t);
+        for b in 0..=t.len() + 2 {
+            if t.is_char_boundary(b.min(t.len())) {
+                assert_eq!(li.pos(b), pos_at_byte(t, b), "byte {b}");
+            }
+        }
+    }
 
     #[test]
     fn pos_counts_chars_not_bytes() {

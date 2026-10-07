@@ -59,6 +59,12 @@ must likewise skip its build when cross-checking for macOS from another host (se
 - **Style:** match the surrounding code; doc comments on public items explain *why* and
   constraints, not restate the signature. Keep `max_width = 100`.
 
+## Commits
+
+- One logical change per commit. Never mix code and plan/docs changes, and keep refactors,
+  behaviour changes and dependency swaps apart, even inside one PR.
+- The message says what changed and why; mention behaviour changes explicitly.
+
 ## Working as a parallel agent
 
 - You get one work package from `docs/TASKS.md`. Read its section, `docs/PLAN.md` sections it

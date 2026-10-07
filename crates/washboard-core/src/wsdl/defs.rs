@@ -11,7 +11,7 @@ use crate::model::QName;
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, WSDL_SOAP12_NS};
 
 use super::graph::parse;
-use super::text::LineIndex;
+use crate::diag::LineIndex;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Definitions {
