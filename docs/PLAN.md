@@ -437,6 +437,14 @@ Behaviour:
     element's path in the request with the Rust model, and appends the candidates.
   - Same `detail` lets the editor underline the offending attribute instead of the whole
     start tag (today attribute errors point at the element's `<`).
+  - Spans: `Diagnostic` has a start position only, so the editor can mark a point and the
+    CLI (`request validate`, `request send`) prints the source line with a single `^` at the
+    element's `<`. With `detail`, the wrapper can resolve a byte range in the request text:
+    the attribute (name to closing quote) for attribute errors, the element's text content
+    for simple-type and facet errors, the start tag for content-model errors. Carry it as an
+    optional span (start and end `TextPos`) next to `pos`, so the editor underlines exactly
+    the bad value and the CLI prints `^^^^` under it; diagnostics without a span keep
+    today's single caret.
   - Where libxml2 must not complain about something the protocol allows, remove it from the
     parsed tree before validating (`CompiledSchema::validate_text_stripping`, used for SOAP
     header-block attributes) rather than filtering errors afterwards.
