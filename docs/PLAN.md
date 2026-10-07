@@ -78,7 +78,7 @@ washboard/
 |---|---|---|
 | AppKit | `objc2`, `objc2-foundation`, `objc2-app-kit`, `block2`, `dispatch2` | `define_class!` for delegates/controllers, `MainThreadMarker` everywhere |
 | SQLite | `rusqlite` (`bundled`) | bundled = known version, no surprises from system sqlite |
-| XML parsing (fast, Rust) | `quick-xml` for tokenizing/well-formedness, `roxmltree` for WSDL/XSD model | both give byte offsets → line/col |
+| XML parsing | own tolerant tokenizer for highlighting and start tags, `roxmltree` for the WSDL/XSD model, libxml2 for well-formedness and validation, `quick-xml` for escaping | one well-formedness verdict for editor and validation |
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see §5 for the gotchas |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Verify in M0 that raw-ish header capture is adequate. |
 | Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
@@ -267,8 +267,9 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 - Line-number ruler (`NSRulerView` subclass) with error/warning markers in the gutter.
 - Highlighting: Rust tokenizer, applied as temporary attributes on the layout manager for the
   edited range expanded to the enclosing tag boundaries. Full pass only on load.
-- **Well-formedness**: on every edit (debounced 150 ms), `quick-xml` pass → red underline at the
-  error position + message in the issues bar. This is the "not valid XML is visible" requirement.
+- **Well-formedness**: on every edit (debounced 150 ms), libxml2 parse (same parser and options
+  as validation) → red underline at the error position + message in the issues bar. This is the
+  "not valid XML is visible" requirement. ~15 ms for 1 MB.
 - **Schema validation**: Validate button (⌘B), automatically before send, and optionally live
   (debounced 1 s) once we know it's fast enough on large schemas.
 - **Completion**: native `NSTextView` completion (`textView:completions:forPartialWordRange:…`)
