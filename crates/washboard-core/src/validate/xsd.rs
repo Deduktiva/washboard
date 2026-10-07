@@ -1,8 +1,8 @@
 //! XSD compilation and validation with libxml2 (WP-LIBXML2).
 //!
 //! [`CompiledSchema::compile`] turns a [`SchemaBundle`] into a libxml2 schema;
-//! [`CompiledSchema::validate`] checks one standalone document (a header or body block the
-//! caller has cut out of the envelope, with its in-scope namespace declarations carried over).
+//! [`CompiledSchema::validate`] and [`CompiledSchema::validate_text`] check one document; the
+//! request pipeline (`validate::request`) passes the whole SOAP envelope.
 //!
 //! # Resource loading
 //!
@@ -204,7 +204,27 @@ impl CompiledSchema {
     /// violations are [`DiagSource::Schema`]. Element positions point at the start tag's `<`
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
-        let (doc, parse_errors) = match parse_instance(xml, None) {
+        self.validate_with(xml, None, || {
+            crate::xml::decode(xml)
+                .map(|d| scan_start_tags(&d.text))
+                .unwrap_or_default()
+        })
+    }
+
+    /// Like [`Self::validate`] for already decoded text, which is parsed as UTF-8 whatever its
+    /// XML declaration says, the same way [`crate::xml::check_well_formed`] parses it. This is
+    /// what the editor and the request pipeline hold.
+    pub fn validate_text(&self, text: &str) -> Vec<Diagnostic> {
+        self.validate_with(text.as_bytes(), Some(c"UTF-8"), || scan_start_tags(text))
+    }
+
+    fn validate_with(
+        &self,
+        xml: &[u8],
+        encoding: Option<&CStr>,
+        start_tags: impl FnOnce() -> Vec<StartTag>,
+    ) -> Vec<Diagnostic> {
+        let (doc, parse_errors) = match parse_instance(xml, encoding) {
             Ok(parsed) => parsed,
             Err(d) => return vec![d],
         };
@@ -258,9 +278,7 @@ impl CompiledSchema {
         let tags = if raw.is_empty() {
             Vec::new()
         } else {
-            crate::xml::decode(xml)
-                .map(|d| scan_start_tags(&d.text))
-                .unwrap_or_default()
+            start_tags()
         };
         let mut diags: Vec<Diagnostic> = raw
             .into_iter()
