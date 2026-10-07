@@ -47,8 +47,9 @@ jobs:
       - run: uv run --script fixtures/check_fixtures.py
 
   macos:
-    name: macOS (clippy, tests)
-    runs-on: macos-latest
+    name: macOS (clippy, tests, app bundle)
+    # Pinned: the minimum OS is macOS 26 (PLAN §1), and the app checks must run on it.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
         with:
@@ -59,3 +60,21 @@ jobs:
       # Also lints the macOS-only code (app, Keychain) that the Linux job never compiles.
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-packager@0.11.8
+      # Builds target/packager/Washboard.app from crates/washboard-app/Cargo.toml (PLAN §2
+      # "Packaging"); unsigned.
+      - run: cargo packager --release -p washboard-app
+      - name: Check Info.plist
+        run: |
+          plist=target/packager/Washboard.app/Contents/Info.plist
+          plutil -lint "$plist"
+          test "$(plutil -extract CFBundleExecutable raw "$plist")" = Washboard
+          test "$(plutil -extract CFBundleIdentifier raw "$plist")" = at.deduktiva.washboard
+          test "$(plutil -extract LSMinimumSystemVersion raw "$plist")" = 26.0
+          test -x target/packager/Washboard.app/Contents/MacOS/Washboard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Washboard.app
+          path: target/packager/Washboard.app
