@@ -83,7 +83,7 @@ fn errors(w: &Wsdl) -> Vec<&str> {
     w.check
         .diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| d.is_error())
         .map(|d| d.message.as_str())
         .collect()
 }

@@ -7,6 +7,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::bail;
+use washboard_core::diag;
 use washboard_core::http::{self, SendRequest};
 use washboard_core::model::{Auth, RequestMeta, Server};
 use washboard_core::project::Project;
@@ -30,7 +31,7 @@ pub fn run(
     // but nothing stops the send: sending broken requests on purpose is how servers get tested.
     let validation = match validation::check(&wsdl, &request, &text) {
         Ok(v) => {
-            let errors = validation::error_count(&v);
+            let errors = diag::error_count(&v.diagnostics);
             let s = if errors == 1 { "" } else { "s" };
             if errors > 0 && !skip_validation {
                 eprintln!(

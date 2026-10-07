@@ -13,7 +13,7 @@
 
 use roxmltree::Node;
 
-use crate::diag::{DiagSource, Diagnostic, Severity, TextPos, pos_at_byte};
+use crate::diag::{DiagSource, Diagnostic, TextPos, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
@@ -113,9 +113,7 @@ pub struct Validation {
 impl Validation {
     /// Send is blocked while this is true (PLAN §4). Warnings do not block.
     pub fn has_errors(&self) -> bool {
-        self.diagnostics
-            .iter()
-            .any(|d| d.severity == Severity::Error)
+        crate::diag::has_errors(&self.diagnostics)
     }
 
     /// The operation the request will be sent as: the first `Body` child's.
@@ -330,7 +328,7 @@ mod tests {
     fn errors(v: &Validation) -> Vec<String> {
         v.diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Error)
+            .filter(|d| d.is_error())
             .map(ToString::to_string)
             .collect()
     }
@@ -338,7 +336,7 @@ mod tests {
     fn warnings(v: &Validation) -> Vec<String> {
         v.diagnostics
             .iter()
-            .filter(|d| d.severity == Severity::Warning)
+            .filter(|d| !d.is_error())
             .map(ToString::to_string)
             .collect()
     }

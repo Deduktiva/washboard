@@ -7,7 +7,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use washboard_core::diag::Severity;
 use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::{wsdl, xml};
 
@@ -35,7 +34,7 @@ fn expectation(text: &str) -> Option<(u32, String)> {
 fn errors(v: &Validation) -> Vec<(u32, &str)> {
     v.diagnostics
         .iter()
-        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| d.is_error())
         .map(|d| (d.pos.map_or(0, |p| p.line), d.message.as_str()))
         .collect()
 }

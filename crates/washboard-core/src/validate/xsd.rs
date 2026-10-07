@@ -55,7 +55,7 @@ use std::sync::Once;
 
 use libxml2_sys as ffi;
 
-use crate::diag::{DiagSource, Diagnostic, LineIndex, Severity, TextPos};
+use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, has_errors};
 use crate::model::SchemaBundle;
 
 /// Base URI given to every bundle document; see the module docs.
@@ -168,7 +168,7 @@ impl CompiledSchema {
             .collect();
         diags.extend(compile_diagnostics(collector.finish(), bundle));
 
-        let failed = diags.iter().any(|d| d.severity == Severity::Error);
+        let failed = has_errors(&diags);
         match NonNull::new(schema) {
             Some(schema) if !failed => Ok(CompiledSchema {
                 schema,
@@ -254,7 +254,7 @@ impl CompiledSchema {
                 .into_iter()
                 .map(|e| e.into_diagnostic(DiagSource::WellFormedness, None))
                 .collect();
-            if !diags.iter().any(|d| d.severity == Severity::Error) {
+            if !has_errors(&diags) {
                 diags.push(Diagnostic::error(
                     DiagSource::WellFormedness,
                     None,
@@ -311,7 +311,7 @@ impl CompiledSchema {
                 e.into_diagnostic(DiagSource::Schema, pos)
             })
             .collect();
-        if ret != 0 && !diags.iter().any(|d| d.severity == Severity::Error) {
+        if ret != 0 && !has_errors(&diags) {
             diags.push(Diagnostic::error(
                 DiagSource::Schema,
                 None,
@@ -1211,7 +1211,7 @@ mod tests {
             None => assert!(diags.is_empty(), "{name}: {diags:#?}"),
             Some((line, needle)) => assert!(
                 diags.iter().any(|d| d.source == DiagSource::Schema
-                    && d.severity == Severity::Error
+                    && d.is_error()
                     && d.pos.map(|p| p.line) == Some(line)
                     && d.message.to_lowercase().contains(&needle.to_lowercase())),
                 "{name}: expected line {line} `{needle}`, got {diags:#?}"
@@ -1291,7 +1291,7 @@ mod tests {
         let diags = schema.validate(&bytes);
         assert!(
             diags.iter().any(|d| d.source == DiagSource::WellFormedness
-                && d.severity == Severity::Error
+                && d.is_error()
                 && d.pos.map(|p| p.line) == Some(9)),
             "{diags:#?}"
         );
@@ -1419,7 +1419,7 @@ mod tests {
             "file:///etc/passwd",
         ] {
             assert!(
-                diags.iter().any(|d| d.severity == Severity::Error
+                diags.iter().any(|d| d.is_error()
                     && d.source == DiagSource::Import
                     && d.message.contains(loc)
                     && d.message.contains("not in the schema bundle")),
@@ -1460,7 +1460,7 @@ mod tests {
             };
             let diags = CompiledSchema::compile(&bundle).expect_err("refused");
             assert!(
-                diags.iter().any(|d| d.severity == Severity::Error
+                diags.iter().any(|d| d.is_error()
                     && d.message.contains(path.trim_start_matches('/'))
                     && d.message.contains("not in the schema bundle")),
                 "{loc}: {diags:#?}"
@@ -1565,12 +1565,9 @@ mod tests {
         };
         let schema = CompiledSchema::compile(&bundle).expect("compiles");
         assert!(
-            schema
-                .warnings()
-                .iter()
-                .any(|d| d.severity == Severity::Warning
-                    && d.message.contains("Skipping import")
-                    && d.message.contains("b.xsd")),
+            schema.warnings().iter().any(|d| !d.is_error()
+                && d.message.contains("Skipping import")
+                && d.message.contains("b.xsd")),
             "{:#?}",
             schema.warnings()
         );

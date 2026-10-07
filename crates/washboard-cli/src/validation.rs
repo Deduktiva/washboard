@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::bail;
-use washboard_core::diag::{Diagnostic, Severity};
+use washboard_core::diag::{self, Diagnostic, Severity};
 use washboard_core::model::RequestMeta;
 use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::wsdl::Wsdl;
@@ -73,21 +73,13 @@ fn render(name: &str, text: &str, d: &Diagnostic) -> String {
     out
 }
 
-/// Number of errors, for the summary line. Warnings do not block anything.
-pub fn error_count(v: &Validation) -> usize {
-    v.diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .count()
-}
-
 pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let wsdl = support::load_project_wsdl(&project)?;
     let result = check(&wsdl, &request, &text)?;
-    match error_count(&result) {
+    match diag::error_count(&result.diagnostics) {
         0 => {
             println!("{name}: valid");
             Ok(ExitCode::SUCCESS)

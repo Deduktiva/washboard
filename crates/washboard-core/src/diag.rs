@@ -73,6 +73,23 @@ impl fmt::Display for Diagnostic {
     }
 }
 
+impl Diagnostic {
+    /// Errors block (sending, project creation); warnings never do.
+    pub fn is_error(&self) -> bool {
+        self.severity == Severity::Error
+    }
+}
+
+/// Whether any diagnostic is an error, i.e. whether the thing checked is blocked.
+pub fn has_errors(diags: &[Diagnostic]) -> bool {
+    diags.iter().any(Diagnostic::is_error)
+}
+
+/// Number of errors, for summaries like "3 errors". Warnings are not counted.
+pub fn error_count(diags: &[Diagnostic]) -> usize {
+    diags.iter().filter(|d| d.is_error()).count()
+}
+
 /// Converts a byte offset into `text` to a [`TextPos`].
 ///
 /// Offsets past the end clamp to the end. Offsets inside a multi-byte char point at that char.
