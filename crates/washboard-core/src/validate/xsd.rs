@@ -37,6 +37,14 @@
 //! If that fails (undecodable text, entity-expanded content), the start tag ending on the
 //! reported line is used, and failing that the raw libxml2 line.
 //!
+//! Validation diagnostics also carry a [`DiagDetail`] (libxml2's error code, the element's
+//! index, the attribute) and, when the start tag was found, a span: the attribute from its
+//! name to the closing quote for attribute errors, the element's text (whitespace trimmed) for
+//! errors about a simple-type value, and the start tag for everything else. Both come from
+//! the error's code and node (PLAN §5.2). The one exception is which attribute an error is
+//! about: libxml2 drops the attribute node before we see it, so its name is read from the
+//! message prefix and checked against the element (`reported_attribute`).
+//!
 //! # Threads
 //!
 //! [`CompiledSchema`] is `Send` but not `Sync`: compile on any thread, move it to the thread
@@ -45,18 +53,21 @@
 //! guarantees. Separate `CompiledSchema`s can be compiled and used on different threads at the
 //! same time: per-call state lives in the libxml2 contexts or in thread-locals.
 
-use std::cell::{Cell, RefCell};
+use std::borrow::Cow;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fmt;
+use std::ops::Range;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, NonNull};
 use std::sync::Once;
 
 use libxml2_sys as ffi;
 
-use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, has_errors};
-use crate::model::SchemaBundle;
+use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
+use crate::model::{QName, SchemaBundle};
+use crate::xml::{Token, TokenKind};
 
 /// Base URI given to every bundle document; see the module docs.
 const BASE: &str = "washboard-bundle://bundle/";
@@ -66,8 +77,20 @@ const INSTANCE_URL: &CStr = c"washboard-instance:/document.xml";
 /// broken request can produce thousands of follow-up errors.
 const MAX_DIAGNOSTICS: usize = 500;
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
-/// `XML_WAR_ENCODING_MISMATCH`: the declaration names another encoding than the BOM we add.
-const WAR_ENCODING_MISMATCH: c_int = 113;
+
+/// Schema validity codes for a value that does not fit its simple type: the value and
+/// datatype errors, element children in a simple type, all facets, simple content, fixed
+/// values and a fixed attribute value. Their span is the element's text, or the attribute.
+fn is_value_error(code: c_int) -> bool {
+    matches!(
+        code,
+        ffi::XML_SCHEMAV_VALUE..=ffi::XML_SCHEMAV_CVC_DATATYPE_VALID_1_2_3
+            | ffi::XML_SCHEMAV_CVC_TYPE_3_1_2..=ffi::XML_SCHEMAV_CVC_ENUMERATION_VALID
+            | ffi::XML_SCHEMAV_CVC_COMPLEX_TYPE_2_2
+            | ffi::XML_SCHEMAV_CVC_ELT_5_2_1..=ffi::XML_SCHEMAV_CVC_ELT_5_2_2_2_2
+            | ffi::XML_SCHEMAV_CVC_AU
+    )
+}
 
 /// A libxml2 schema compiled from a [`SchemaBundle`]. See the module docs for thread rules.
 pub struct CompiledSchema {
@@ -205,9 +228,7 @@ impl CompiledSchema {
     /// (module docs). `xml` is passed to libxml2 as is, so BOMs and declared encodings work.
     pub fn validate(&self, xml: &[u8]) -> Vec<Diagnostic> {
         self.validate_with(xml, None, None, || {
-            crate::xml::decode(xml)
-                .map(|d| scan_start_tags(&d.text))
-                .unwrap_or_default()
+            crate::xml::decode(xml).ok().map(|d| Cow::Owned(d.text))
         })
     }
 
@@ -216,7 +237,7 @@ impl CompiledSchema {
     /// what the editor and the request pipeline hold.
     pub fn validate_text(&self, text: &str) -> Vec<Diagnostic> {
         self.validate_with(text.as_bytes(), Some(c"UTF-8"), None, || {
-            scan_start_tags(text)
+            Some(Cow::Borrowed(text))
         })
     }
 
@@ -229,16 +250,18 @@ impl CompiledSchema {
         strip: &StripAttributes<'_>,
     ) -> Vec<Diagnostic> {
         self.validate_with(text.as_bytes(), Some(c"UTF-8"), Some(strip), || {
-            scan_start_tags(text)
+            Some(Cow::Borrowed(text))
         })
     }
 
-    fn validate_with(
+    /// `source` returns the document as text, for positions and spans; it is only called
+    /// when there are errors to place.
+    fn validate_with<'t>(
         &self,
         xml: &[u8],
         encoding: Option<&CStr>,
         strip: Option<&StripAttributes<'_>>,
-        start_tags: impl FnOnce() -> Vec<StartTag>,
+        source: impl FnOnce() -> Option<Cow<'t, str>>,
     ) -> Vec<Diagnostic> {
         let (doc, parse_errors) = match parse_instance(xml, encoding) {
             Ok(parsed) => parsed,
@@ -296,19 +319,29 @@ impl CompiledSchema {
             (ret, raw, ordinals)
         };
 
-        let tags = if raw.is_empty() {
-            Vec::new()
-        } else {
-            start_tags()
-        };
+        let text = if raw.is_empty() { None } else { source() };
+        let source = text.as_deref().map(Source::new);
         let mut diags: Vec<Diagnostic> = raw
             .into_iter()
             .map(|mut e| {
                 if let Some(node) = &mut e.node {
                     node.ordinal = ordinals.get(&node.addr).copied();
                 }
-                let pos = map_pos(&tags, &e);
-                e.into_diagnostic(DiagSource::Schema, pos)
+                let tag = source.as_ref().and_then(|s| find_tag(&s.tags, &e));
+                let span = source.as_ref().zip(tag).map(|(s, tag)| s.span(tag, &e));
+                let detail = (e.code != 0).then(|| DiagDetail {
+                    code: e.code,
+                    element_index: e.node.as_ref().and_then(|n| n.ordinal),
+                    attribute: e
+                        .node
+                        .as_ref()
+                        .and_then(|n| n.attribute.as_ref())
+                        .map(|a| a.name.clone()),
+                });
+                let mut d = e.into_diagnostic(DiagSource::Schema, tag.map(|t| t.pos));
+                d.span = span;
+                d.detail = detail.map(Box::new);
+                d
             })
             .collect();
         if ret != 0 && !has_errors(&diags) {
@@ -485,6 +518,15 @@ struct NodeRef {
     ordinal: Option<usize>,
     /// URL of the node's document (its base URI).
     doc_url: Option<String>,
+    /// Set when libxml2 reported the error on an attribute of the element.
+    attribute: Option<AttrRef>,
+}
+
+#[derive(Debug)]
+struct AttrRef {
+    name: QName,
+    /// The name as written in the document, with its prefix, to find it in the start tag.
+    written: String,
 }
 
 #[derive(Debug)]
@@ -638,12 +680,19 @@ impl Collector {
         }
         // SAFETY: libxml2 strings in the error are NUL-terminated or null.
         let message = unsafe { c_string(err.message) }.unwrap_or_default();
-        let node = if matches!(err.domain, ffi::XML_FROM_SCHEMASP | ffi::XML_FROM_SCHEMASV) {
+        let mut node = if matches!(err.domain, ffi::XML_FROM_SCHEMASP | ffi::XML_FROM_SCHEMASV) {
             // SAFETY: for schema errors `node` is null or an xmlNode/xmlAttr of a live doc.
             unsafe { node_ref(err.node.cast(), self.eager_ordinals) }
         } else {
             None
         };
+        if err.domain == ffi::XML_FROM_SCHEMASV
+            && let Some(node) = &mut node
+            && node.attribute.is_none()
+        {
+            // SAFETY: `node` was resolved from `err.node`, so that is a live element.
+            node.attribute = unsafe { reported_attribute(err.node.cast(), &message) };
+        }
         errors.push(RawError {
             level: err.level,
             domain: err.domain,
@@ -677,7 +726,9 @@ unsafe fn node_ref(node: *const ffi::xmlNode, eager: bool) -> Option<NodeRef> {
     // SAFETY: guaranteed by the caller; attributes' parents are elements of the same doc.
     unsafe {
         let mut node = node;
+        let mut attribute = None;
         if (*node).type_ == ffi::XML_ATTRIBUTE_NODE {
+            attribute = attr_ref(node);
             node = (*node).parent;
             if node.is_null() {
                 return None;
@@ -697,6 +748,73 @@ unsafe fn node_ref(node: *const ffi::xmlNode, eager: bool) -> Option<NodeRef> {
             local: c_string((*node).name.cast()).unwrap_or_default(),
             ordinal: if eager { element_ordinal(node) } else { None },
             doc_url,
+            attribute,
+        })
+    }
+}
+
+/// The attribute of `elem` a validation error is about.
+///
+/// libxml2 2.15.4 does not hand us the attribute node: `xmlVUpdateError` (error.c) replaces
+/// any node with its element before the error is raised. The attribute's name survives only
+/// in the prefix libxml2 puts on every validation message, built from the node's QName in
+/// `xmlSchemaFormatNodeForError`: `Element '{ns}e', attribute '{ns}a': `. We read that prefix
+/// and accept the name only if `elem` has such an attribute, so a changed format loses the
+/// attribute (the span falls back to the start tag) but never names a wrong one.
+///
+/// # Safety
+/// `elem` must be null or point to a live node.
+unsafe fn reported_attribute(elem: *const ffi::xmlNode, message: &str) -> Option<AttrRef> {
+    let (_, rest) = message
+        .strip_prefix("Element '")?
+        .split_once("', attribute '")?;
+    let (name, _) = rest.split_once("': ")?;
+    let (ns, local) = match name.strip_prefix('{') {
+        Some(name) => name.split_once('}')?,
+        None => ("", name),
+    };
+    let local = CString::new(local).ok()?;
+    let ns = CString::new(ns).ok()?;
+    // SAFETY: guaranteed by the caller; the names are NUL-terminated and outlive the call.
+    unsafe {
+        if elem.is_null() || (*elem).type_ != ffi::XML_ELEMENT_NODE {
+            return None;
+        }
+        let ns = if ns.is_empty() {
+            ptr::null()
+        } else {
+            ns.as_ptr().cast()
+        };
+        let attr: *const ffi::xmlNode = ffi::xmlHasNsProp(elem, local.as_ptr().cast(), ns).cast();
+        // A DTD default (`XML_ATTRIBUTE_DECL`) is not written in the document.
+        if attr.is_null() || (*attr).type_ != ffi::XML_ATTRIBUTE_NODE {
+            return None;
+        }
+        attr_ref(attr)
+    }
+}
+
+/// # Safety
+/// `attr` must point to a live `xmlAttr`.
+unsafe fn attr_ref(attr: *const ffi::xmlNode) -> Option<AttrRef> {
+    // SAFETY: guaranteed by the caller. `xmlAttr` shares `xmlNode`'s fields up to `ns`; its
+    // name is NUL-terminated, and `ns` is null or a live `xmlNs` whose strings are null or
+    // NUL-terminated.
+    unsafe {
+        let local = c_string((*attr).name.cast())?;
+        let ns = (*attr).ns.cast::<ffi::xmlNs>();
+        let (href, prefix) = if ns.is_null() {
+            (None, None)
+        } else {
+            (c_string((*ns).href.cast()), c_string((*ns).prefix.cast()))
+        };
+        let written = match prefix {
+            Some(p) => format!("{p}:{local}"),
+            None => local.clone(),
+        };
+        Some(AttrRef {
+            name: QName::new(href.unwrap_or_default(), local),
+            written,
         })
     }
 }
@@ -779,7 +897,7 @@ fn compile_diagnostics(raw: Vec<RawError>, bundle: &SchemaBundle) -> Vec<Diagnos
     raw.into_iter()
         // Our loader's refusals are reported separately, once per location.
         .filter(|e| e.domain != ffi::XML_FROM_IO)
-        .filter(|e| !(e.domain == ffi::XML_FROM_PARSER && e.code == WAR_ENCODING_MISMATCH))
+        .filter(|e| !(e.domain == ffi::XML_FROM_PARSER && e.code == ffi::XML_WAR_ENCODING_MISMATCH))
         .map(|mut e| {
             let doc_url = e
                 .node
@@ -957,43 +1075,127 @@ struct StartTag {
     /// Line of the closing `>`, which is what libxml2 reports.
     end_line: u32,
     local: String,
+    /// From the `<` to just past the closing `>` or `/>`.
+    bytes: Range<usize>,
+    /// Attribute names and values as [`crate::xml::StartTag`] has them.
+    attrs: Vec<(Range<usize>, Option<Range<usize>>)>,
 }
 
 /// Lists all start tags (including empty-element tags) in document order, with the positions
 /// `map_pos` needs. Uses the editor's tokenizer, so comments, CDATA, PIs and the DOCTYPE are
 /// skipped the same way everywhere.
 fn scan_start_tags(text: &str) -> Vec<StartTag> {
-    let lines = LineIndex::new(text);
+    scan_start_tags_with(text, &LineIndex::new(text))
+}
+
+fn scan_start_tags_with(text: &str, lines: &LineIndex<'_>) -> Vec<StartTag> {
     crate::xml::start_tags(text)
         .into_iter()
         .map(|t| StartTag {
             pos: lines.pos(t.start),
             end_line: lines.pos(t.end.saturating_sub(1)).line,
             local: t.local(text).to_owned(),
+            bytes: t.start..t.end,
+            attrs: t.attr_names.into_iter().zip(t.attr_values).collect(),
         })
         .collect()
 }
 
 /// Start-tag position for an error, if it can be determined.
 fn map_pos(tags: &[StartTag], e: &RawError) -> Option<TextPos> {
+    find_tag(tags, e).map(|t| t.pos)
+}
+
+/// The start tag of the element an error refers to, if it can be determined.
+fn find_tag<'a>(tags: &'a [StartTag], e: &RawError) -> Option<&'a StartTag> {
     if let Some(node) = &e.node {
         if let Some(tag) = node.ordinal.and_then(|i| tags.get(i))
             && tag.local == node.local
         {
-            return Some(tag.pos);
+            return Some(tag);
         }
-        if let Some(tag) = tags
-            .iter()
+        tags.iter()
             .find(|t| t.end_line == e.line && t.local == node.local)
-        {
-            return Some(tag.pos);
-        }
-    } else if e.domain == ffi::XML_FROM_SCHEMASV
-        && let Some(tag) = tags.iter().find(|t| t.end_line == e.line)
-    {
-        return Some(tag.pos);
+    } else if e.domain == ffi::XML_FROM_SCHEMASV {
+        tags.iter().find(|t| t.end_line == e.line)
+    } else {
+        None
     }
-    None
+}
+
+/// A validated document's text, for placing errors in it.
+struct Source<'t> {
+    text: &'t str,
+    lines: LineIndex<'t>,
+    tags: Vec<StartTag>,
+    /// The whole text's tokens, only built when an element's content must be found.
+    tokens: OnceCell<Vec<Token>>,
+}
+
+impl<'t> Source<'t> {
+    fn new(text: &'t str) -> Self {
+        let lines = LineIndex::new(text);
+        let tags = scan_start_tags_with(text, &lines);
+        Self {
+            text,
+            lines,
+            tags,
+            tokens: OnceCell::new(),
+        }
+    }
+
+    /// The span for an error on the element whose start tag is `tag` (module docs).
+    fn span(&self, tag: &StartTag, e: &RawError) -> TextSpan {
+        let attribute = e.node.as_ref().and_then(|n| n.attribute.as_ref());
+        let bytes = match attribute {
+            Some(a) => self.attribute(tag, &a.written),
+            None if is_value_error(e.code) => self.content(tag),
+            None => None,
+        }
+        .unwrap_or_else(|| tag.bytes.clone());
+        self.lines.span(bytes)
+    }
+
+    /// The attribute written as `name` on `tag`, from its name to the closing quote.
+    fn attribute(&self, tag: &StartTag, name: &str) -> Option<Range<usize>> {
+        let (name, value) = tag
+            .attrs
+            .iter()
+            .find(|(n, _)| self.text.get(n.clone()) == Some(name))?;
+        Some(name.start..value.as_ref().map_or(name.end, |v| v.end))
+    }
+
+    /// The text between `tag` and its end tag, without surrounding whitespace. `None` for an
+    /// empty element.
+    fn content(&self, tag: &StartTag) -> Option<Range<usize>> {
+        if self.text.get(..tag.bytes.end)?.ends_with("/>") {
+            return None;
+        }
+        let tokens = self.tokens.get_or_init(|| crate::xml::tokenize(self.text));
+        let first = tokens.partition_point(|t| t.start < tag.bytes.end);
+        let mut depth = 0usize;
+        let mut end = None;
+        for t in &tokens[first..] {
+            if t.kind != TokenKind::Punct {
+                continue;
+            }
+            match &self.text[t.span()] {
+                "<" => depth += 1,
+                "/>" => depth = depth.saturating_sub(1),
+                "</" if depth == 0 => {
+                    end = Some(t.start);
+                    break;
+                }
+                "</" => depth -= 1,
+                _ => {}
+            }
+        }
+        let content = &self.text[tag.bytes.end..end?];
+        let is_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+        let start = tag.bytes.end + (content.len() - content.trim_start_matches(is_ws).len());
+        let len = content.trim_matches(is_ws).len();
+        (len > 0).then_some(start..start + len)
+    }
 }
 
 #[cfg(test)]
@@ -1183,6 +1385,59 @@ mod tests {
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(1, 1));
         assert!(diags[0].message.contains("count"), "{diags:#?}");
+    }
+
+    fn span(start: (u32, u32), end: (u32, u32)) -> Option<TextSpan> {
+        let p = |(line, column)| TextPos { line, column };
+        Some(TextSpan {
+            start: p(start),
+            end: p(end),
+        })
+    }
+
+    #[test]
+    fn attribute_errors_span_the_attribute() {
+        let xml = "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\"\n   count=\"0\" x:y='a&amp;b'>\n  <n>1</n>\n</r>\n";
+        let diags = small().validate_text(xml);
+        assert_eq!(diags.len(), 2, "{diags:#?}");
+        assert_eq!(diags[0].span, span((2, 4), (2, 13)), "{diags:#?}");
+        let detail = diags[0].detail.as_ref().expect("detail");
+        assert_eq!(detail.element_index, Some(0));
+        assert_eq!(detail.attribute, Some(QName::new("", "count")));
+        // Prefixed, with an entity reference in the value.
+        assert_eq!(diags[1].span, span((2, 14), (2, 27)), "{diags:#?}");
+        assert_eq!(
+            diags[1].detail.as_ref().and_then(|d| d.attribute.clone()),
+            Some(QName::new("urn:x", "y"))
+        );
+    }
+
+    #[test]
+    fn value_errors_span_the_trimmed_text() {
+        let xml = "<r xmlns=\"urn:t\">\n  <n>1</n><n> <!-- c -->abc\n </n>\n</r>";
+        let diags = small().validate_text(xml);
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert_eq!(diags[0].pos, pos(2, 11));
+        assert_eq!(diags[0].span, span((2, 15), (2, 28)), "{diags:#?}");
+        let detail = diags[0].detail.as_ref().expect("detail");
+        assert_eq!((detail.code, detail.element_index), (1824, Some(2)));
+
+        // Nothing to underline in an empty element: the start tag.
+        let diags = small().validate_text("<r xmlns=\"urn:t\"><n/></r>");
+        assert_eq!(diags[0].span, span((1, 18), (1, 22)), "{diags:#?}");
+    }
+
+    #[test]
+    fn content_model_errors_span_the_start_tag() {
+        let xml = "<r xmlns=\"urn:t\">\n  <n>1</n><a\n  >x</a>\n</r>";
+        let diags = small().validate(xml.as_bytes());
+        assert_eq!(diags.len(), 1, "{diags:#?}");
+        assert_eq!(diags[0].pos, pos(2, 11));
+        assert_eq!(diags[0].span, span((2, 11), (3, 4)), "{diags:#?}");
+        assert_eq!(
+            diags[0].detail.as_ref().map(|d| d.attribute.is_none()),
+            Some(true)
+        );
     }
 
     /// Only the named attributes in the named namespace on children of the named parent go;

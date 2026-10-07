@@ -62,6 +62,22 @@ pub const XML_ERR_NO_MEMORY: xmlParserErrors = 2;
 pub const XML_IO_UNKNOWN: xmlParserErrors = 1500;
 pub const XML_IO_ENOENT: xmlParserErrors = 1524;
 pub const XML_IO_NETWORK_ATTEMPT: xmlParserErrors = 1543;
+/// The XML declaration names another encoding than the input's.
+pub const XML_WAR_ENCODING_MISMATCH: xmlParserErrors = 113;
+// Schema validity errors (`XML_FROM_SCHEMASV`). The numbering is contiguous in `xmlerror.h`,
+// so the first and last of a run also bound it in a range pattern.
+pub const XML_SCHEMAV_VALUE: xmlParserErrors = 1822;
+pub const XML_SCHEMAV_CVC_DATATYPE_VALID_1_2_3: xmlParserErrors = 1826;
+pub const XML_SCHEMAV_CVC_TYPE_3_1_2: xmlParserErrors = 1828;
+pub const XML_SCHEMAV_CVC_ENUMERATION_VALID: xmlParserErrors = 1840;
+pub const XML_SCHEMAV_CVC_COMPLEX_TYPE_2_2: xmlParserErrors = 1842;
+/// "The element declaration is abstract".
+pub const XML_SCHEMAV_CVC_ELT_2: xmlParserErrors = 1846;
+pub const XML_SCHEMAV_CVC_ELT_5_2_1: xmlParserErrors = 1855;
+pub const XML_SCHEMAV_CVC_ELT_5_2_2_2_2: xmlParserErrors = 1858;
+pub const XML_SCHEMAV_CVC_AU: xmlParserErrors = 1874;
+/// "The type definition is abstract".
+pub const XML_SCHEMAV_CVC_TYPE_2: xmlParserErrors = 1876;
 
 /// `struct _xmlError` (public, layout stable since 2.0).
 #[repr(C)]

@@ -314,10 +314,12 @@ fn templates_and_request_management() {
     let o = wb(&e, &["request", "validate", "Order"]);
     assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
     assert!(stderr(&o).contains("Order: 1 error"), "{}", stderr(&o));
-    // rustc-style excerpt: location, the source line, a caret under the element.
-    assert!(stderr(&o).contains("  --> Order:14:11\n"), "{}", stderr(&o));
+    // rustc-style excerpt: location, the source line, the bad value underlined.
+    assert!(stderr(&o).contains("  --> Order:14:24\n"), "{}", stderr(&o));
     assert!(
-        stderr(&o).contains("14 |           <com:country>?</com:country>\n   |           ^\n"),
+        stderr(&o).contains(
+            "14 |           <com:country>?</com:country>\n   |                        ^\n"
+        ),
         "{}",
         stderr(&o)
     );

@@ -17,6 +17,9 @@ pub struct StartTag {
     pub name: Range<usize>,
     /// Attribute names as written, including `xmlns` and `xmlns:p` declarations.
     pub attr_names: Vec<Range<usize>>,
+    /// The value of each attribute in `attr_names` (same index), including its quotes;
+    /// `None` when no value was written.
+    pub attr_values: Vec<Option<Range<usize>>>,
     /// Byte offset just past the closing `>` or `/>`.
     pub end: usize,
 }
@@ -59,6 +62,7 @@ fn collect(text: &str, tokens: &[Token]) -> Vec<StartTag> {
                         start: t.start,
                         name: t.end..t.end,
                         attr_names: Vec::new(),
+                        attr_values: Vec::new(),
                         end: t.end,
                     });
                 }
@@ -85,6 +89,14 @@ fn collect(text: &str, tokens: &[Token]) -> Vec<StartTag> {
                 if let Some(tag) = &mut tag {
                     tag.attr_names
                         .push(attr_start.take().unwrap_or(t.start)..t.end);
+                    tag.attr_values.push(None);
+                }
+            }
+            // A value with references is several tokens; together they cover the value.
+            TokenKind::AttrValue | TokenKind::EntityRef | TokenKind::CharRef => {
+                if let Some(value) = tag.as_mut().and_then(|t| t.attr_values.last_mut()) {
+                    let start = value.as_ref().map_or(t.start, |v| v.start);
+                    *value = Some(start..t.end);
                 }
             }
             _ if t.construct_start => {
@@ -141,6 +153,15 @@ mod tests {
         assert_eq!(&t[2..st.name.end], "<xs:schema");
         let attrs: Vec<&str> = st.attr_names.iter().map(|r| &t[r.clone()]).collect();
         assert_eq!(attrs, ["xmlns:xs", "a", "targetNamespace"]);
+        let values: Vec<Option<&str>> = st
+            .attr_values
+            .iter()
+            .map(|v| v.clone().map(|r| &t[r]))
+            .collect();
+        assert_eq!(values, [Some("'u'"), Some("\"v>w\""), Some("\"t\"")]);
+        let refs = "<a b='x&amp;y&#65;z'/>";
+        let st = start_tag_at(refs, 0).expect("start tag");
+        assert_eq!(st.attr_values, [Some(5..20)]);
         assert!(start_tag_at(t, 0).is_none());
         assert!(start_tag_at("<a b='x", 0).is_none());
         assert_eq!(start_tag_at("<a/>", 0).expect("empty").name.end, 2);
