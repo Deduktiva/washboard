@@ -219,17 +219,15 @@ pub fn validate_request(
     }
 
     // 4. One libxml2 pass: envelope shape, headers and body together.
-    out.diagnostics.extend(schema.schema.validate_text(text));
+    let mut schema_diags = schema.schema.validate_text(text);
+    for block in header_blocks(env) {
+        allow_soap_header_attributes(text, block, &mut schema_diags);
+    }
+    out.diagnostics.extend(schema_diags);
 
     // 5. Headers the binding declares but the request lacks. SOAP makes no header
     // mandatory by itself, so this only warns.
-    let present: Vec<QName> = env
-        .children()
-        .filter(Node::is_element)
-        .filter(|n| in_env(n, "Header"))
-        .flat_map(|h| h.children().filter(Node::is_element))
-        .map(qname)
-        .collect();
+    let present: Vec<QName> = header_blocks(env).map(qname).collect();
     let mut missing: Vec<&QName> = Vec::new();
     for h in out.dispatched.iter().flat_map(|d| &d.header_elements) {
         if !present.contains(h) && !missing.contains(&h) {
@@ -248,6 +246,44 @@ pub fn validate_request(
         .collect();
     out.diagnostics.extend(warnings);
     out
+}
+
+/// SOAP 1.1 attributes any header block may carry (§4.2.2, §4.2.3, §4.1.1).
+const HEADER_BLOCK_ATTRIBUTES: [&str; 3] = ["mustUnderstand", "actor", "encodingStyle"];
+
+/// Element children of the envelope's `Header`s.
+fn header_blocks<'a, 'i>(env: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
+    env.children()
+        .filter(|n| in_env(n, "Header"))
+        .flat_map(|h| h.children().filter(Node::is_element))
+}
+
+/// SOAP 1.1 lets every header block carry `soapenv:mustUnderstand`, `actor` and
+/// `encodingStyle`, but a block the project schema declares has a type that usually allows no
+/// foreign attributes, so libxml2 rejects them. Those errors are dropped here; the one value
+/// with a real constraint, `mustUnderstand` (`0` or `1`), is then checked in its place.
+/// Blocks the schema does not declare are validated laxly by the envelope schema, which
+/// checks the values itself and produces no such error.
+fn allow_soap_header_attributes(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagnostic>) {
+    let pos = Some(pos_of(text, block));
+    for local in HEADER_BLOCK_ATTRIBUTES {
+        let Some(value) = block.attribute((SOAP11_ENV_NS, local)) else {
+            continue;
+        };
+        // libxml2: "Element '…', attribute '{ns}local': The attribute '{ns}local' is not
+        // allowed." The pinned libxml2 is tested against this wording below.
+        let needle = format!("attribute '{{{SOAP11_ENV_NS}}}{local}' is not allowed");
+        let before = diags.len();
+        diags.retain(|d| !(d.pos == pos && d.message.contains(&needle)));
+        let dropped = diags.len() < before;
+        if dropped && local == "mustUnderstand" && !matches!(value.trim(), "0" | "1") {
+            diags.push(Diagnostic::error(
+                DiagSource::Schema,
+                pos,
+                format!("soapenv:mustUnderstand must be 0 or 1, not {value:?}"),
+            ));
+        }
+    }
 }
 
 fn in_env(n: &Node<'_, '_>, local: &str) -> bool {
@@ -427,6 +463,36 @@ mod tests {
         assert!(
             e.iter().any(|m| m.starts_with("5:7:")),
             "expected an error at 5:7: {e:#?}"
+        );
+    }
+
+    /// SOAP allows `mustUnderstand`, `actor` and `encodingStyle` on every header block,
+    /// including blocks whose declared type has no attribute wildcard.
+    #[test]
+    fn soap_attributes_are_allowed_on_declared_header_blocks() {
+        let text = GET_CUSTOMER.replace(
+            "<msg:RequestContext>",
+            "<msg:RequestContext soapenv:mustUnderstand=\"1\" \
+             soapenv:actor=\"http://schemas.xmlsoap.org/soap/actor/next\">",
+        );
+        let v = run(&text);
+        assert!(v.diagnostics.is_empty(), "{:#?}", v.diagnostics);
+
+        let e = errors(&run(
+            &text.replace("mustUnderstand=\"1\"", "mustUnderstand=\"yes\"")
+        ));
+        assert_eq!(e.len(), 1, "{e:#?}");
+        assert!(
+            e[0].starts_with("4:5:") && e[0].contains("must be 0 or 1"),
+            "{e:#?}"
+        );
+
+        // Any other attribute in the SOAP namespace is still an error.
+        let e = errors(&run(&text.replace("soapenv:actor", "soapenv:role")));
+        assert!(
+            e.iter()
+                .any(|m| m.starts_with("4:5:") && m.contains("role")),
+            "{e:#?}"
         );
     }
 
