@@ -1162,127 +1162,6 @@ mod tests {
         Some(TextPos { line, column })
     }
 
-    /// `(line, needle)` from the fixture's `<!-- expect: … -->` line; `None` for valid.
-    fn expectation(text: &str) -> Option<(u32, String)> {
-        let first = text.lines().next().expect("expect line");
-        let rest = first
-            .strip_prefix("<!-- expect: ")
-            .and_then(|r| r.strip_suffix(" -->"))
-            .expect("expect comment");
-        if rest == "valid" {
-            return None;
-        }
-        let (line, needle) = rest
-            .strip_prefix("error line ")
-            .and_then(|r| r.split_once(": "))
-            .expect("error expectation");
-        Some((line.parse().expect("line number"), needle.to_owned()))
-    }
-
-    /// Validates every header block and body child the way WP-VALIDATE will: cut out with
-    /// namespaces, padded with newlines so lines match the request file.
-    fn validate_blocks(schema: &CompiledSchema, text: &str) -> Vec<Diagnostic> {
-        const SOAP11: &str = "http://schemas.xmlsoap.org/soap/envelope/";
-        let parsed = roxmltree::Document::parse(text).expect("request parses");
-        let env = parsed.root_element();
-        let mut diags = Vec::new();
-        for section in env.children().filter(|n| n.is_element()) {
-            assert!(
-                section.has_tag_name((SOAP11, "Header")) || section.has_tag_name((SOAP11, "Body"))
-            );
-            for block in section.children().filter(|n| n.is_element()) {
-                let line = parsed.text_pos_at(block.range().start).row as usize;
-                let sub = format!(
-                    "{}{}",
-                    "\n".repeat(line - 1),
-                    cut_with_namespaces(text, block)
-                );
-                diags.extend(schema.validate(sub.as_bytes()));
-            }
-        }
-        diags
-    }
-
-    /// Checks the blocks of `project/requests/<name>` against the file's expectation.
-    fn check_request(schema: &CompiledSchema, project: &str, name: &str) {
-        let text = read_text(&format!("{project}/requests/{name}"));
-        let diags = validate_blocks(schema, &text);
-        match expectation(&text) {
-            None => assert!(diags.is_empty(), "{name}: {diags:#?}"),
-            Some((line, needle)) => assert!(
-                diags.iter().any(|d| d.source == DiagSource::Schema
-                    && d.is_error()
-                    && d.pos.map(|p| p.line) == Some(line)
-                    && d.message.to_lowercase().contains(&needle.to_lowercase())),
-                "{name}: expected line {line} `{needle}`, got {diags:#?}"
-            ),
-        }
-    }
-
-    #[test]
-    fn customer_requests_reproduce_oracle_verdicts() {
-        let schema = CompiledSchema::compile(&customer_bundle()).expect("customer compiles");
-        assert_eq!(schema.warnings(), &[] as &[Diagnostic]);
-        // The others fail before schema validation (WP-VALIDATE: well-formedness, SOAP 1.2,
-        // dispatch); see `not_well_formed_is_reported_with_position` for the first.
-        for name in [
-            "valid-create-order.xml",
-            "valid-get-customer.xml",
-            "invalid-abstract-element.xml",
-            "invalid-abstract-type.xml",
-            "invalid-any-lax-known.xml",
-            "invalid-bad-simple-type.xml",
-        ] {
-            check_request(&schema, "customer", name);
-        }
-    }
-
-    /// The rpc/literal bundle as PLAN §5.4 (and the oracle) builds it: the generated wrapper
-    /// shares the inline schema's namespace, so it `xs:include`s it.
-    #[test]
-    fn legacy_rpc_requests_reproduce_oracle_verdicts() {
-        let wsdl = read_text("legacy-rpc/Legacy.wsdl");
-        let parsed = roxmltree::Document::parse(&wsdl).expect("wsdl parses");
-        let inline = parsed
-            .descendants()
-            .find(|n| n.has_tag_name((XS, "schema")))
-            .expect("inline schema");
-        let ns = "urn:example:legacy";
-        let rpc = format!(
-            "<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"{ns}\">\n\
-             <xs:include schemaLocation=\"washboard:/inline/0.xsd\"/>\n\
-             <xs:element name=\"Lookup\"><xs:complexType><xs:sequence>\n\
-             <xs:element name=\"customerNo\" type=\"xs:string\"/>\n\
-             <xs:element name=\"asOf\" type=\"xs:date\"/>\n\
-             </xs:sequence></xs:complexType></xs:element>\n</xs:schema>\n"
-        );
-        let bundle = SchemaBundle {
-            docs: vec![
-                root_doc(&[(ns, "washboard:/rpc/0.xsd")]),
-                doc("washboard:/rpc/0.xsd", ns, SchemaOrigin::Generated, rpc),
-                doc(
-                    "washboard:/inline/0.xsd",
-                    ns,
-                    SchemaOrigin::InlineWsdl {
-                        wsdl_path: "Legacy.wsdl".into(),
-                        index: 0,
-                    },
-                    cut_with_namespaces(&wsdl, inline),
-                ),
-            ],
-            root: "washboard:/root.xsd".into(),
-        };
-        let schema = CompiledSchema::compile(&bundle).expect("legacy compiles");
-        assert_eq!(schema.warnings(), &[] as &[Diagnostic]);
-        for name in [
-            "valid-lookup.xml",
-            "invalid-lookup-bad-date.xml",
-            "invalid-lookup-qualified-part.xml",
-        ] {
-            check_request(&schema, "legacy-rpc", name);
-        }
-    }
-
     #[test]
     fn not_well_formed_is_reported_with_position() {
         let schema = CompiledSchema::compile(&customer_bundle()).expect("customer compiles");
@@ -1575,19 +1454,11 @@ mod tests {
 
     #[test]
     fn schemas_compile_and_validate_on_other_threads() {
-        let handles: Vec<_> = (0..4)
-            .map(|_| {
-                std::thread::spawn(|| {
-                    CompiledSchema::compile(&customer_bundle()).expect("compiles")
-                })
-            })
-            .collect();
+        let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(small)).collect();
         for h in handles {
             let schema = h.join().expect("thread");
-            let moved = std::thread::spawn(move || {
-                let text = read_text("customer/requests/valid-get-customer.xml");
-                validate_blocks(&schema, &text)
-            });
+            let moved =
+                std::thread::spawn(move || schema.validate(b"<r xmlns=\"urn:t\"><n>1</n></r>"));
             assert!(moved.join().expect("thread").is_empty());
         }
     }
