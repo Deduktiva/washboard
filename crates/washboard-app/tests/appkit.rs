@@ -18,6 +18,8 @@ fn main() {
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
         ("project_window", checks::project_window),
+        ("editor", checks::editor),
+        ("editor_1mb_layout", checks::editor_1mb_layout),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -34,17 +36,22 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod checks {
     use std::ptr::NonNull;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::AnyObject;
     use objc2::{MainThreadMarker, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSEvent, NSEventModifierFlags,
-        NSEventType, NSMenu, NSSplitViewItemBehavior, NSStackView, NSTextField, NSView,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
+        NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
+        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView,
     };
-    use objc2_foundation::{NSIndexSet, NSNotification, NSNotificationCenter, NSPoint};
-    use washboard_app::AppDelegate;
+    use objc2_foundation::{
+        NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRange,
+        NSString,
+    };
+    use washboard_app::{AppDelegate, EditorController};
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -368,5 +375,174 @@ mod checks {
             ctx.delegate.welcome().window().isVisible(),
             "welcome window back"
         );
+    }
+
+    fn temporary_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {
+        // SAFETY: an immutable AppKit constant; a null out-pointer is allowed.
+        unsafe {
+            editor
+                .layout_manager()
+                .temporaryAttribute_atCharacterIndex_effectiveRange(
+                    NSForegroundColorAttributeName,
+                    index,
+                    std::ptr::null_mut(),
+                )
+        }
+    }
+
+    /// The text view stores its default text colour itself; only the highlight colour must
+    /// stay out of the text storage.
+    fn stored_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {
+        // SAFETY: plain getter; an immutable AppKit constant; a null out-pointer is allowed.
+        unsafe {
+            let storage = editor.text_view().textStorage().expect("a text storage");
+            storage.attribute_atIndex_effectiveRange(
+                NSForegroundColorAttributeName,
+                index,
+                std::ptr::null_mut(),
+            )
+        }
+    }
+
+    fn is_tag_color(color: Option<Retained<AnyObject>>) -> bool {
+        let blue = NSColor::systemBlueColor();
+        let blue: &AnyObject = &blue;
+        color
+            .and_then(|c| c.downcast::<NSColor>().ok())
+            .is_some_and(|c| c.isEqual(Some(blue)))
+    }
+
+    /// TextKit 1, no substitutions, highlighting only as temporary attributes, and undo that
+    /// restores the text and its colours.
+    pub fn editor(ctx: &Ctx) {
+        let project = ctx.delegate.open_project_window("Customer API");
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        // SAFETY: plain getters.
+        assert!(
+            unsafe { text_view.layoutManager() }.is_some(),
+            "TextKit 1 layout manager"
+        );
+        assert!(
+            text_view.textLayoutManager().is_none(),
+            "no TextKit 2 layout manager"
+        );
+        assert!(
+            !text_view.isAutomaticQuoteSubstitutionEnabled(),
+            "smart quotes off"
+        );
+        assert!(
+            !text_view.isAutomaticDashSubstitutionEnabled(),
+            "smart dashes off"
+        );
+        assert!(
+            !text_view.isAutomaticTextReplacementEnabled(),
+            "text replacement off"
+        );
+
+        let sample = washboard_app::SAMPLE_REQUEST;
+        assert_eq!(text_view.string().to_string(), sample);
+        // The sample is ASCII, so byte offsets are UTF-16 offsets.
+        let envelope = sample.find("Envelope").expect("tag name in sample");
+        assert!(
+            is_tag_color(temporary_color(editor, envelope)),
+            "tag name coloured"
+        );
+        assert!(
+            !is_tag_color(stored_color(editor, envelope)),
+            "highlight colour not in the text storage"
+        );
+        assert_eq!(editor.ruler().error_lines(), [6], "error marker on line 6");
+        assert!(
+            editor.ruler().visible_lines().contains(&1),
+            "ruler sees line 1"
+        );
+
+        // Type a new element at the start of line 4, as the keyboard would.
+        let at = sample
+            .find("  <soapenv:Body>")
+            .expect("Body line in sample");
+        // SAFETY: inserting a string at an empty range inside the text.
+        unsafe {
+            text_view
+                .insertText_replacementRange(&NSString::from_str("<new/>"), NSRange::new(at, 0))
+        };
+        assert!(
+            text_view
+                .string()
+                .to_string()
+                .contains("<new/>  <soapenv:Body>")
+        );
+        assert!(
+            is_tag_color(temporary_color(editor, at + 1)),
+            "typed tag name coloured"
+        );
+        assert!(
+            !is_tag_color(stored_color(editor, at + 1)),
+            "typing stores no highlight colour"
+        );
+
+        let undo = text_view
+            .undoManager()
+            .expect("the text view has an undo manager");
+        // Without a run loop, the group AppKit opened for the keystroke is still open.
+        while undo.groupingLevel() > 0 {
+            undo.endUndoGrouping();
+        }
+        undo.undo();
+        assert_eq!(
+            text_view.string().to_string(),
+            sample,
+            "undo restores the text"
+        );
+        assert!(
+            is_tag_color(temporary_color(editor, envelope)),
+            "colours after undo"
+        );
+
+        autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
+    /// responsive in a 1 MB file). Printed, not asserted: runner speed varies.
+    pub fn editor_1mb_layout(_ctx: &Ctx) {
+        let mut text = String::from("<cus:list xmlns:cus=\"urn:example:customer\">\n");
+        let mut n = 0;
+        while text.len() < 1 << 20 {
+            text.push_str(&format!(
+                "  <cus:item id=\"{n}\"><cus:name>Customer {n}</cus:name></cus:item>\n"
+            ));
+            n += 1;
+        }
+        text.push_str("</cus:list>\n");
+
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let editor = EditorController::new(mtm);
+        let started = Instant::now();
+        editor.set_text(&text);
+        let highlighted = started.elapsed();
+        let text_view = editor.text_view();
+        // SAFETY: plain getter.
+        let container = unsafe { text_view.textContainer() }.expect("a text container");
+        editor
+            .layout_manager()
+            .ensureLayoutForTextContainer(&container);
+        let laid_out = started.elapsed();
+        print!(
+            "({} KB, {n} lines: set and highlight {} ms, full layout {} ms) ",
+            text.len() / 1024,
+            highlighted.as_millis(),
+            (laid_out - highlighted).as_millis()
+        );
+
+        // One keystroke in the middle: the incremental path.
+        let middle = text.len() / 2;
+        let at = text[middle..].find('<').map_or(middle, |i| middle + i);
+        let started = Instant::now();
+        // SAFETY: inserting a string at an empty range inside the text.
+        unsafe {
+            text_view.insertText_replacementRange(&NSString::from_str("x"), NSRange::new(at, 0))
+        };
+        print!("(keystroke {} ms) ", started.elapsed().as_millis());
     }
 }

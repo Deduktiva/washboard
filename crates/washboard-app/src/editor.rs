@@ -1,0 +1,394 @@
+//! The request editor: an `NSTextView` on TextKit 1 with a line-number ruler and XML
+//! highlighting (PLAN §4 "Editor").
+//!
+//! TextKit 1, because highlighting uses the layout manager's temporary attributes: they colour
+//! glyphs without touching the text storage, so undo and the saved text never see them.
+//! After each edit only the tokens `xml::TokenBuffer` reports as changed are recoloured, over
+//! whole lines. The text view keeps its own undo manager.
+
+use std::cell::{OnceCell, RefCell};
+use std::ops::Range;
+
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSForegroundColorAttributeName, NSLayoutManager, NSResponder, NSRulerOrientation, NSRulerView,
+    NSScrollView, NSStringDrawing, NSTextDelegate, NSTextView, NSTextViewDelegate, NSView,
+};
+use objc2_foundation::{
+    NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize,
+    NSString,
+};
+use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
+
+use crate::text_diff::changed_range;
+
+const FONT_SIZE: f64 = 12.0;
+const RULER_WIDTH: f64 = 44.0;
+
+/// Colour of a token kind; `None` keeps the text colour.
+fn color(kind: TokenKind) -> Option<Retained<NSColor>> {
+    Some(match kind {
+        TokenKind::TagName => NSColor::systemBlueColor(),
+        TokenKind::TagPrefix | TokenKind::AttrPrefix | TokenKind::NamespaceDecl => {
+            NSColor::systemPurpleColor()
+        }
+        TokenKind::AttrName => NSColor::systemTealColor(),
+        TokenKind::AttrValue => NSColor::systemRedColor(),
+        TokenKind::Punct => NSColor::secondaryLabelColor(),
+        TokenKind::Comment | TokenKind::XmlDecl | TokenKind::ProcessingInstruction => {
+            NSColor::systemGrayColor()
+        }
+        TokenKind::Doctype | TokenKind::CData => NSColor::systemBrownColor(),
+        TokenKind::EntityRef | TokenKind::CharRef => NSColor::systemOrangeColor(),
+        TokenKind::Error => NSColor::systemPinkColor(),
+        TokenKind::Text => return None,
+    })
+}
+
+#[derive(Debug, Default)]
+pub struct RulerIvars {
+    /// UTF-16 offsets of line starts; line `n` (1-based) starts at `line_starts[n - 1]`.
+    line_starts: RefCell<Vec<usize>>,
+    /// 1-based lines with an error, sorted.
+    error_lines: RefCell<Vec<usize>>,
+}
+
+define_class!(
+    // SAFETY:
+    // - NSRulerView has no subclassing requirements; `new` calls its designated initializer.
+    // - `LineNumberRuler` does not implement `Drop`.
+    #[unsafe(super(NSRulerView, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RulerIvars]
+    #[derive(Debug)]
+    pub struct LineNumberRuler;
+
+    impl LineNumberRuler {
+        // SAFETY: the signature matches `drawHashMarksAndLabelsInRect:`.
+        #[unsafe(method(drawHashMarksAndLabelsInRect:))]
+        fn draw_labels(&self, _rect: NSRect) {
+            self.draw_line_numbers();
+        }
+    }
+);
+
+impl LineNumberRuler {
+    fn new(scroll: &NSScrollView, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(RulerIvars::default());
+        // SAFETY: `initWithScrollView:orientation:` is NSRulerView's designated initializer.
+        let this: Retained<Self> = unsafe {
+            msg_send![super(this), initWithScrollView: scroll,
+                orientation: NSRulerOrientation::VerticalRuler]
+        };
+        this.setRuleThickness(RULER_WIDTH);
+        this
+    }
+
+    /// Lines (1-based) to mark with an error.
+    pub fn set_error_lines(&self, mut lines: Vec<usize>) {
+        lines.sort_unstable();
+        lines.dedup();
+        *self.ivars().error_lines.borrow_mut() = lines;
+        self.setNeedsDisplay(true);
+    }
+
+    pub fn error_lines(&self) -> Vec<usize> {
+        self.ivars().error_lines.borrow().clone()
+    }
+
+    /// Line numbers of the lines intersecting the visible rect, from the layout manager.
+    pub fn visible_lines(&self) -> Range<usize> {
+        let Some(text_view) = self.text_view() else {
+            return 0..0;
+        };
+        let chars = visible_chars(&text_view);
+        let starts = self.ivars().line_starts.borrow();
+        let first = starts.partition_point(|&s| s <= chars.location).max(1);
+        let last = starts
+            .partition_point(|&s| s <= chars.location + chars.length)
+            .max(first);
+        first..last + 1
+    }
+
+    fn text_view(&self) -> Option<Retained<NSTextView>> {
+        self.clientView()?.downcast::<NSTextView>().ok()
+    }
+
+    fn draw_line_numbers(&self) {
+        let Some(text_view) = self.text_view() else {
+            return;
+        };
+        // SAFETY: plain getters on a text view we built with a TextKit 1 stack.
+        let Some(layout) = (unsafe { text_view.layoutManager() }) else {
+            return;
+        };
+        let lines = self.visible_lines();
+        let starts = self.ivars().line_starts.borrow();
+        let errors = self.ivars().error_lines.borrow();
+        let font = NSFont::monospacedDigitSystemFontOfSize_weight(FONT_SIZE - 2.0, unsafe {
+            // SAFETY: an immutable AppKit constant.
+            NSFontWeightRegular
+        });
+        let origin_y = text_view.textContainerOrigin().y;
+        let text_len = text_view.string().length();
+        for line in lines {
+            let Some(&start) = starts.get(line - 1) else {
+                break;
+            };
+            let rect = if start >= text_len && start > 0 {
+                layout.extraLineFragmentRect()
+            } else {
+                let glyph = layout.glyphIndexForCharacterAtIndex(start);
+                // SAFETY: a null out-pointer is allowed; the glyph index is in range.
+                unsafe {
+                    layout
+                        .lineFragmentRectForGlyphAtIndex_effectiveRange(glyph, std::ptr::null_mut())
+                }
+            };
+            let point = self.convertPoint_fromView(
+                NSPoint::new(0.0, rect.origin.y + origin_y),
+                Some(&text_view),
+            );
+            let is_error = errors.binary_search(&line).is_ok();
+            let color = if is_error {
+                NSColor::systemOrangeColor()
+            } else {
+                NSColor::secondaryLabelColor()
+            };
+            let label = NSString::from_str(&if is_error {
+                format!("⚠{line}")
+            } else {
+                line.to_string()
+            });
+            let font_obj: &AnyObject = &font;
+            let color_obj: &AnyObject = &color;
+            // SAFETY: AppKit's attribute name constants are immutable statics.
+            let keys = unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
+            let attrs = NSDictionary::from_slices(&keys, &[font_obj, color_obj]);
+            // SAFETY: the dictionary maps attribute names to a font and a colour.
+            let size = unsafe { label.sizeWithAttributes(Some(&attrs)) };
+            let x = RULER_WIDTH - size.width - 6.0;
+            // SAFETY: as above; drawing happens inside AppKit's draw call.
+            unsafe { label.drawAtPoint_withAttributes(NSPoint::new(x, point.y), Some(&attrs)) };
+        }
+    }
+}
+
+/// The UTF-16 character range laid out in the text view's visible rect.
+fn visible_chars(text_view: &NSTextView) -> NSRange {
+    // SAFETY: plain getters on a text view we built with a TextKit 1 stack.
+    let (Some(layout), Some(container)) = (unsafe { text_view.layoutManager() }, unsafe {
+        text_view.textContainer()
+    }) else {
+        return NSRange::new(0, 0);
+    };
+    let glyphs =
+        layout.glyphRangeForBoundingRect_inTextContainer(text_view.visibleRect(), &container);
+    // SAFETY: a null out-pointer is allowed.
+    unsafe { layout.characterRangeForGlyphRange_actualGlyphRange(glyphs, std::ptr::null_mut()) }
+}
+
+#[derive(Debug, Default)]
+pub struct EditorIvars {
+    /// The text as of the last highlight, to find what an edit changed.
+    text: RefCell<String>,
+    tokens: RefCell<TokenBuffer>,
+    scroll: OnceCell<Retained<NSScrollView>>,
+    text_view: OnceCell<Retained<NSTextView>>,
+    ruler: OnceCell<Retained<LineNumberRuler>>,
+}
+
+define_class!(
+    // SAFETY:
+    // - NSObject has no subclassing requirements.
+    // - `EditorController` does not implement `Drop`.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = EditorIvars]
+    #[derive(Debug)]
+    pub struct EditorController;
+
+    // SAFETY: `NSObjectProtocol` has no safety requirements.
+    unsafe impl NSObjectProtocol for EditorController {}
+
+    // SAFETY: `NSTextDelegate` has no safety requirements.
+    unsafe impl NSTextDelegate for EditorController {
+        // SAFETY: the signature matches `textDidChange:`.
+        #[unsafe(method(textDidChange:))]
+        fn text_did_change(&self, _notification: &NSNotification) {
+            self.text_changed();
+        }
+    }
+
+    // SAFETY: `NSTextViewDelegate` has no safety requirements.
+    unsafe impl NSTextViewDelegate for EditorController {}
+);
+
+impl EditorController {
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(EditorIvars::default());
+        // SAFETY: `NSObject`'s `init` has this signature.
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+
+        let scroll = NSScrollView::new(mtm);
+        scroll.setHasVerticalScroller(true);
+        scroll.setHasHorizontalScroller(true);
+        scroll.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+
+        let text_view = text_view(mtm);
+        // SAFETY: this controller owns the text view (through the scroll view), so it outlives
+        // the text view's weak delegate reference.
+        text_view.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        scroll.setDocumentView(Some(&text_view));
+
+        let ruler = LineNumberRuler::new(&scroll, mtm);
+        ruler.setClientView(Some(&text_view));
+        scroll.setVerticalRulerView(Some(&ruler));
+        scroll.setHasVerticalRuler(true);
+        scroll.setRulersVisible(true);
+
+        let _ = this.ivars().scroll.set(scroll);
+        let _ = this.ivars().text_view.set(text_view);
+        let _ = this.ivars().ruler.set(ruler);
+        this
+    }
+
+    /// The scroll view to put into a window.
+    pub fn view(&self) -> &NSScrollView {
+        self.ivars().scroll.get().expect("set in new()")
+    }
+
+    pub fn text_view(&self) -> &NSTextView {
+        self.ivars().text_view.get().expect("set in new()")
+    }
+
+    pub fn ruler(&self) -> &LineNumberRuler {
+        self.ivars().ruler.get().expect("set in new()")
+    }
+
+    pub fn layout_manager(&self) -> Retained<NSLayoutManager> {
+        // SAFETY: a plain getter; the view was built with a TextKit 1 stack.
+        unsafe { self.text_view().layoutManager() }.expect("TextKit 1 text view")
+    }
+
+    /// Replaces the whole text (opening a request), outside undo, and highlights it.
+    pub fn set_text(&self, text: &str) {
+        self.text_view().setString(&NSString::from_str(text));
+        *self.ivars().tokens.borrow_mut() = TokenBuffer::new(text);
+        *self.ivars().text.borrow_mut() = text.to_owned();
+        self.update_line_starts(text);
+        self.highlight(text, 0..text.len());
+    }
+
+    /// Selects line `line` (1-based) and scrolls to it; used by the issues bar.
+    pub fn select_line(&self, line: usize) {
+        let starts = self.ruler().ivars().line_starts.borrow();
+        let Some(&start) = starts.get(line.saturating_sub(1)) else {
+            return;
+        };
+        let end = starts
+            .get(line)
+            .copied()
+            .unwrap_or_else(|| self.text_view().string().length());
+        let range = NSRange::new(start, end - start);
+        self.text_view().setSelectedRange(range);
+        self.text_view().scrollRangeToVisible(range);
+    }
+
+    fn text_changed(&self) {
+        let new = self.text_view().string().to_string();
+        let old = std::mem::take(&mut *self.ivars().text.borrow_mut());
+        let (old_range, new_len) = changed_range(&old, &new);
+        let changed = self
+            .ivars()
+            .tokens
+            .borrow_mut()
+            .edit(&new, old_range, new_len);
+        self.update_line_starts(&new);
+        self.highlight(&new, changed);
+        *self.ivars().text.borrow_mut() = new;
+    }
+
+    fn update_line_starts(&self, text: &str) {
+        let mut starts = vec![0];
+        let mut cursor = Utf16Cursor::new(text);
+        starts.extend(
+            text.match_indices('\n')
+                .map(|(i, _)| cursor.utf16_at(i + 1)),
+        );
+        *self.ruler().ivars().line_starts.borrow_mut() = starts;
+        self.ruler().setNeedsDisplay(true);
+    }
+
+    /// Recolours `bytes` of `text`, widened to whole lines.
+    fn highlight(&self, text: &str, bytes: Range<usize>) {
+        let start = text[..bytes.start.min(text.len())]
+            .rfind('\n')
+            .map_or(0, |i| i + 1);
+        let end = text[bytes.end.min(text.len())..]
+            .find('\n')
+            .map_or(text.len(), |i| bytes.end + i);
+        let layout = self.layout_manager();
+        let lines = Utf16Cursor::new(text).utf16_range(start..end);
+        let mut cursor = Utf16Cursor::new(text);
+        // SAFETY: an immutable AppKit constant.
+        let key = unsafe { NSForegroundColorAttributeName };
+        layout.removeTemporaryAttribute_forCharacterRange(
+            key,
+            NSRange::new(lines.start, lines.end - lines.start),
+        );
+        for token in self.ivars().tokens.borrow().tokens_in(start..end) {
+            let Some(color) = color(token.kind) else {
+                continue;
+            };
+            let span = cursor.utf16_range(token.span());
+            let value: &AnyObject = &color;
+            // SAFETY: the value for the foreground colour attribute is an `NSColor`.
+            unsafe {
+                layout.addTemporaryAttribute_value_forCharacterRange(
+                    key,
+                    value,
+                    NSRange::new(span.start, span.end - span.start),
+                )
+            };
+        }
+    }
+}
+
+fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
+    let text_view = NSTextView::initUsingTextLayoutManager(NSTextView::alloc(mtm), false);
+    text_view.setFrame(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(600.0, 400.0),
+    ));
+    // No wrapping: XML lines keep their shape; the view grows in both directions.
+    text_view.setHorizontallyResizable(true);
+    text_view.setVerticallyResizable(true);
+    text_view.setMaxSize(NSSize::new(f64::MAX, f64::MAX));
+    text_view.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+    // SAFETY: a plain getter; `initUsingTextLayoutManager(false)` builds a TextKit 1 stack.
+    if let Some(container) = unsafe { text_view.textContainer() } {
+        container.setContainerSize(NSSize::new(f64::MAX, f64::MAX));
+        container.setWidthTracksTextView(false);
+    }
+    // SAFETY: an immutable AppKit constant.
+    let weight = unsafe { NSFontWeightRegular };
+    text_view.setFont(Some(&NSFont::monospacedSystemFontOfSize_weight(
+        FONT_SIZE, weight,
+    )));
+    text_view.setRichText(false);
+    text_view.setAllowsUndo(true);
+    text_view.setUsesFindBar(true);
+    text_view.setAutomaticQuoteSubstitutionEnabled(false);
+    text_view.setAutomaticDashSubstitutionEnabled(false);
+    text_view.setAutomaticTextReplacementEnabled(false);
+    text_view.setAutomaticSpellingCorrectionEnabled(false);
+    text_view.setContinuousSpellCheckingEnabled(false);
+    text_view
+}
