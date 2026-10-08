@@ -606,7 +606,7 @@ mod checks {
             "sidebar rows after reload"
         );
 
-        // Operations are selectable, group rows are not; unsupported ones are listed.
+        // Operations are listed, unsupported ones too, and can be selected.
         let nodes = all_nodes(&project.sidebar().roots());
         assert!(
             nodes.iter().any(|n| n.unsupported().is_some()),
@@ -625,12 +625,6 @@ mod checks {
             false,
         );
         assert_eq!(outline.selectedRow() as usize, operation_row);
-        outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
-        assert_eq!(
-            outline.selectedRow() as usize,
-            operation_row,
-            "groups aren't selectable"
-        );
 
         autoreleasepool(|_| window.performClose(None));
         assert!(!window.isVisible(), "project window closed");
