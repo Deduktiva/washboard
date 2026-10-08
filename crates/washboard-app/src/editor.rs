@@ -145,7 +145,7 @@ impl LineNumberRuler {
             let Some(&start) = starts.get(line - 1) else {
                 break;
             };
-            let rect = if start >= text_len && start > 0 {
+            let rect = if start >= text_len {
                 layout.extraLineFragmentRect()
             } else {
                 let glyph = layout.glyphIndexForCharacterAtIndex(start);
