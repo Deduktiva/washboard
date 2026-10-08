@@ -7,10 +7,13 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use thiserror::Error;
+use washboard_core::model::RequestId;
 use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
+use washboard_core::soap::EnvelopeError;
 
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
 #[derive(Debug, Error)]
 pub enum ModelError {
@@ -18,6 +21,16 @@ pub enum ModelError {
     Project(#[from] ProjectError),
     #[error(transparent)]
     AppState(#[from] AppStateError),
+    /// The project was closed while the front end still referred to it.
+    #[error("the project is no longer open")]
+    UnknownProject,
+    /// Commands that need the WSDL (New Request) wait until it has loaded.
+    #[error("the WSDL is still loading")]
+    SchemaNotReady,
+    #[error("the WSDL could not be loaded: {0}")]
+    SchemaFailed(String),
+    #[error(transparent)]
+    Envelope(#[from] EnvelopeError),
 }
 
 /// Identifies an open project for as long as it is open. Not reused within one run, so a
@@ -25,33 +38,14 @@ pub enum ModelError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProjectKey(u64);
 
-/// One open project and the state of its window.
-#[derive(Debug)]
-pub struct ProjectWindow {
-    project: Project,
-    name: String,
-    restore: OpenProject,
-}
-
-impl ProjectWindow {
-    pub fn project(&self) -> &Project {
-        &self.project
-    }
-
-    /// The project's display name, read once when it was opened.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.restore.path
-    }
-}
-
 /// What an outstanding dialog was asked for.
 #[derive(Debug)]
-enum PendingDialog {
+pub(crate) enum PendingDialog {
     OpenProject,
+    DeleteRequest {
+        project: ProjectKey,
+        request: RequestId,
+    },
 }
 
 /// Work finished on a worker thread, to be applied on the main thread.
@@ -59,13 +53,13 @@ type Completion = Box<dyn FnOnce(&mut App) + Send>;
 
 /// The whole model. Owned by the front end and only used on the main thread.
 pub struct App {
-    front: FrontEnd,
+    pub(crate) front: FrontEnd,
     state_dir: PathBuf,
     recent: Vec<PathBuf>,
-    projects: Vec<(ProjectKey, ProjectWindow)>,
+    pub(crate) projects: Vec<(ProjectKey, ProjectWindow)>,
     pub(crate) events: Vec<Event>,
     welcome_visible: Option<bool>,
-    dialogs: HashMap<DialogId, PendingDialog>,
+    pub(crate) dialogs: HashMap<DialogId, PendingDialog>,
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
@@ -241,7 +235,16 @@ impl App {
                     self.alert_error(&format!("Could not open {}", folder.display()), &e);
                 }
             }
+            (PendingDialog::DeleteRequest { project, request }, DialogAnswer::Confirmed) => {
+                match self.delete_request_now(project, request) {
+                    // The window was closed while the sheet was up.
+                    Ok(()) | Err(ModelError::UnknownProject) => {}
+                    Err(e) => self.alert_error("Could not delete the request", &e),
+                }
+            }
             (_, DialogAnswer::Cancelled) => {}
+            // An answer that doesn't fit the question; the front end has a bug, ignore it.
+            (_, DialogAnswer::Folder(_) | DialogAnswer::Confirmed) => {}
         }
     }
 
@@ -255,16 +258,55 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         });
-        self.projects.push((
-            key,
-            ProjectWindow {
-                project,
-                name,
-                restore,
-            },
-        ));
+        let entry = project.entry_wsdl();
+        let wsdl_dir = project.wsdl_dir();
+        let mut window = ProjectWindow {
+            project,
+            name,
+            restore,
+            schema: SchemaState::Loading,
+            sidebar: Sidebar::default(),
+            servers: Vec::new(),
+        };
+        // A database that fails here fails again on the first command, which reports it.
+        let _ = window.reload_requests();
+        let _ = window.reload_servers();
+        if window.selected_request().is_none() {
+            window.restore.last_selected_request = window.sidebar.requests.first().map(|r| r.id);
+        }
+        self.projects.push((key, window));
         self.events.push(Event::ProjectOpened { project: key });
+
+        match entry {
+            Ok(entry) => self.spawn(
+                move || ProjectSchema::load(&entry, wsdl_dir),
+                move |app, loaded| app.schema_loaded(key, loaded),
+            ),
+            Err(e) => self.schema_loaded(key, Err(e.to_string())),
+        }
         key
+    }
+
+    fn schema_loaded(&mut self, key: ProjectKey, loaded: Result<ProjectSchema, String>) {
+        // The project may have been closed while its WSDL loaded.
+        let Some(window) = self.window_mut(key) else {
+            return;
+        };
+        match loaded {
+            Ok(schema) => {
+                window.sidebar.services = operation_tree(&schema.wsdl);
+                window.schema = SchemaState::Ready(std::sync::Arc::new(schema));
+            }
+            Err(message) => window.schema = SchemaState::Failed(message),
+        }
+        self.events.push(Event::SidebarChanged { project: key });
+    }
+
+    pub(crate) fn window_mut(&mut self, key: ProjectKey) -> Option<&mut ProjectWindow> {
+        self.projects
+            .iter_mut()
+            .find(|(k, _)| *k == key)
+            .map(|(_, w)| w)
     }
 
     fn key_for_path(&self, folder: &Path) -> Option<ProjectKey> {
@@ -305,14 +347,14 @@ impl App {
         }
     }
 
-    fn alert_error(&self, title: &str, error: &ModelError) {
+    pub(crate) fn alert_error(&self, title: &str, error: &ModelError) {
         self.front.dialogs.alert(Alert {
             title: title.into(),
             message: error.to_string(),
         });
     }
 
-    fn next(&mut self) -> u64 {
+    pub(crate) fn next(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
     }

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use washboard_core::secrets::MemorySecretStore;
 
-use crate::front_end::{Alert, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers};
+use crate::front_end::{Alert, Confirm, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers};
 use crate::{App, DialogAnswer};
 
 #[derive(Debug, Default)]
@@ -54,6 +54,7 @@ impl Timers for FakeTimers {
 pub struct DialogLog {
     pub folder_requests: Vec<DialogId>,
     pub alerts: Vec<Alert>,
+    pub confirms: Vec<(DialogId, Confirm)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,6 +67,10 @@ impl Dialogs for FakeDialogs {
 
     fn alert(&self, alert: Alert) {
         self.0.borrow_mut().alerts.push(alert);
+    }
+
+    fn confirm(&self, id: DialogId, confirm: Confirm) {
+        self.0.borrow_mut().confirms.push((id, confirm));
     }
 }
 
@@ -118,6 +123,18 @@ impl Fake {
             .pop()
             .expect("an open panel was requested");
         app.dialog_answered(id, answer);
+    }
+
+    /// Answers the most recent confirmation and returns what it asked.
+    pub fn answer_confirm(&self, app: &mut App, answer: DialogAnswer) -> Confirm {
+        let (id, confirm) = self
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("a confirmation was requested");
+        app.dialog_answered(id, answer);
+        confirm
     }
 
     pub fn alerts(&self) -> Vec<Alert> {

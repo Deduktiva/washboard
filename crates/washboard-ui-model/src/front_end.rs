@@ -40,6 +40,8 @@ pub struct DialogId(pub(crate) u64);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAnswer {
     Folder(PathBuf),
+    /// The confirmation's action button.
+    Confirmed,
     Cancelled,
 }
 
@@ -50,6 +52,15 @@ pub struct Alert {
     pub message: String,
 }
 
+/// A question with a destructive action and Cancel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirm {
+    pub title: String,
+    pub message: String,
+    /// The action button's label, e.g. "Delete".
+    pub action: String,
+}
+
 /// Panels and alerts. Answers come back through
 /// [`App::dialog_answered`](crate::App::dialog_answered).
 pub trait Dialogs {
@@ -57,6 +68,8 @@ pub trait Dialogs {
     fn choose_project_folder(&self, id: DialogId);
     /// Shown without waiting for an answer.
     fn alert(&self, alert: Alert);
+    /// Answered with [`DialogAnswer::Confirmed`] or [`DialogAnswer::Cancelled`].
+    fn confirm(&self, id: DialogId, confirm: Confirm);
 }
 
 /// The front end's implementations, handed to [`App::new`](crate::App::new).

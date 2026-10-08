@@ -4,10 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
+use washboard_core::model::Auth;
 use washboard_core::project::{Project, STATE_FILE, WsdlFile, WsdlSet};
 
 use crate::fake::Fake;
-use crate::{App, DialogAnswer, Event};
+use crate::{App, DialogAnswer, Event, ModelError, OperationNode, ProjectKey, SchemaState};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -230,4 +231,271 @@ fn worker_results_are_applied_on_pump() {
     tx.send(()).expect("release worker");
     fake.pump_after_wakes(&mut app, 1);
     assert_eq!(app.take_events(), [Event::RecentProjectsChanged]);
+}
+
+/// Opens a fresh project and waits for its schema.
+fn open_loaded(setup: &Setup, name: &str) -> (Fake, App, ProjectKey) {
+    let folder = make_project(&setup.tmp, name);
+    let (fake, mut app) = setup.launch();
+    app.open_project(&folder).expect("open");
+    fake.pump_after_wakes(&mut app, 1);
+    let key = app.projects().next().expect("open").0;
+    app.take_events();
+    (fake, app, key)
+}
+
+fn names(app: &App, key: ProjectKey) -> Vec<String> {
+    let window = app.project(key).expect("open");
+    window
+        .sidebar()
+        .requests
+        .iter()
+        .map(|r| r.name.clone())
+        .collect()
+}
+
+fn lookup(app: &App, key: ProjectKey, port: &str) -> OperationNode {
+    let window = app.project(key).expect("open");
+    window.sidebar().services[0]
+        .ports
+        .iter()
+        .find(|p| p.name == port)
+        .expect("port")
+        .operations[0]
+        .clone()
+}
+
+#[test]
+fn the_operation_tree_shows_unsupported_operations() {
+    let setup = Setup::new();
+    let (_fake, app, key) = open_loaded(&setup, "Legacy");
+    let services = &app.project(key).expect("open").sidebar().services;
+    assert_eq!(services.len(), 1);
+    assert_eq!(services[0].name, "LegacyService");
+    let ports: Vec<_> = services[0].ports.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(ports, ["LegacyPort", "LegacyEncodedPort"]);
+    let rpc = lookup(&app, key, "LegacyPort");
+    assert_eq!(rpc.name(), "Lookup");
+    assert_eq!(rpc.unsupported, None);
+    assert!(lookup(&app, key, "LegacyEncodedPort").unsupported.is_some());
+}
+
+#[test]
+fn new_request_waits_for_the_schema() {
+    let setup = Setup::new();
+    let folder = make_project(&setup.tmp, "Legacy");
+    let (fake, mut app) = setup.launch();
+    app.open_project(&folder).expect("open");
+    let key = app.projects().next().expect("open").0;
+    assert!(matches!(
+        app.project(key).expect("open").schema(),
+        SchemaState::Loading
+    ));
+    assert!(
+        app.project(key)
+            .expect("open")
+            .sidebar()
+            .services
+            .is_empty()
+    );
+    fake.pump_after_wakes(&mut app, 1);
+    assert!(
+        app.take_events()
+            .contains(&Event::SidebarChanged { project: key })
+    );
+    assert!(matches!(
+        app.project(key).expect("open").schema(),
+        SchemaState::Ready(_)
+    ));
+}
+
+#[test]
+fn new_request_creates_selects_and_starts_rename() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let id = app.new_request(key, &op).expect("new request");
+    assert_eq!(
+        app.take_events(),
+        [
+            Event::SidebarChanged { project: key },
+            Event::SelectionChanged { project: key },
+            Event::ServerSelectionChanged { project: key },
+            Event::BeginRename {
+                project: key,
+                request: id
+            },
+        ]
+    );
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), Some(id));
+    assert_eq!(names(&app, key), ["Lookup 1"]);
+    let text = window.project().read_request(id).expect("read");
+    assert!(text.contains("Lookup"), "{text}");
+}
+
+#[test]
+fn unsupported_operations_get_no_request() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyEncodedPort").operation;
+    assert!(matches!(
+        app.new_request(key, &op),
+        Err(ModelError::Envelope(_))
+    ));
+    assert!(names(&app, key).is_empty());
+}
+
+#[test]
+fn rename_and_duplicate() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let id = app.new_request(key, &op).expect("new request");
+    app.rename_request(key, id, "Find customer")
+        .expect("rename");
+    assert!(matches!(
+        app.rename_request(key, id, ""),
+        Err(ModelError::Project(_))
+    ));
+    let copy = app.duplicate_request(key, id).expect("duplicate");
+    assert_eq!(names(&app, key), ["Find customer", "Find customer copy"]);
+    assert_eq!(
+        app.project(key).expect("open").selected_request(),
+        Some(copy)
+    );
+}
+
+#[test]
+fn delete_asks_first_and_selects_a_neighbour() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let first = app.new_request(key, &op).expect("new");
+    let second = app.new_request(key, &op).expect("new");
+    app.select_request(key, Some(first)).expect("select");
+
+    app.delete_request(key, first).expect("delete");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(confirm.title, "Delete “Lookup 1”?");
+    assert_eq!(names(&app, key), ["Lookup 1", "Lookup 2"]);
+
+    app.take_events();
+    app.delete_request(key, first).expect("delete");
+    fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert_eq!(names(&app, key), ["Lookup 2"]);
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), Some(second));
+    let events = app.take_events();
+    assert!(events.contains(&Event::SidebarChanged { project: key }));
+    assert!(events.contains(&Event::SelectionChanged { project: key }));
+}
+
+#[test]
+fn deleting_the_last_request_clears_the_selection() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let id = app.new_request(key, &op).expect("new");
+    app.delete_request(key, id).expect("delete");
+    fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert_eq!(app.project(key).expect("open").selected_request(), None);
+}
+
+#[test]
+fn the_selection_survives_a_relaunch() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let first = app.new_request(key, &op).expect("new");
+    let _second = app.new_request(key, &op).expect("new");
+    app.select_request(key, Some(first)).expect("select");
+    app.quit().expect("quit");
+    drop(app);
+
+    let (_fake, app) = setup.launch();
+    let (_, window) = app.projects().next().expect("open");
+    assert_eq!(window.selected_request(), Some(first));
+}
+
+#[test]
+fn the_server_popup_follows_the_request() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let a = app.add_server(key).expect("add");
+    let b = app.add_server(key).expect("add");
+    let window = app.project(key).expect("open");
+    assert_eq!(window.servers().len(), 2);
+    assert_eq!(
+        window.selected_server(),
+        Some(a),
+        "first server without a request"
+    );
+
+    let first = app.new_request(key, &op).expect("new");
+    app.choose_server(key, b).expect("choose");
+    let second = app.new_request(key, &op).expect("new");
+    assert_eq!(
+        app.project(key).expect("open").selected_server(),
+        Some(b),
+        "a new request starts with the last used server"
+    );
+    app.choose_server(key, a).expect("choose");
+    app.select_request(key, Some(first)).expect("select");
+    assert_eq!(app.project(key).expect("open").selected_server(), Some(b));
+    app.select_request(key, Some(second)).expect("select");
+    assert_eq!(app.project(key).expect("open").selected_server(), Some(a));
+
+    app.delete_server(key, a).expect("delete");
+    assert_eq!(app.project(key).expect("open").selected_server(), Some(b));
+}
+
+#[test]
+fn server_passwords_go_to_the_secret_store() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let id = app.add_server(key).expect("add");
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    server.name = "Staging".into();
+    server.auth = Auth::Basic {
+        username: "alice".into(),
+    };
+    app.update_server(key, &server, Some("s3cret"))
+        .expect("update");
+    assert_eq!(
+        app.take_events().first(),
+        Some(&Event::ServersChanged { project: key })
+    );
+    assert_eq!(app.project(key).expect("open").servers()[0].name, "Staging");
+    assert_eq!(
+        app.server_password(key, id).expect("pw").as_deref(),
+        Some("s3cret")
+    );
+
+    app.update_server(key, &server, None).expect("update");
+    assert_eq!(
+        app.server_password(key, id).expect("pw").as_deref(),
+        Some("s3cret")
+    );
+
+    server.auth = Auth::None;
+    app.update_server(key, &server, Some("ignored"))
+        .expect("update");
+    assert_eq!(app.server_password(key, id).expect("pw"), None);
+}
+
+#[test]
+fn commands_on_a_closed_project_fail_softly() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    app.close_project(key);
+    assert!(matches!(
+        app.select_request(key, None),
+        Err(ModelError::UnknownProject)
+    ));
+    assert!(matches!(
+        app.add_server(key),
+        Err(ModelError::UnknownProject)
+    ));
 }
