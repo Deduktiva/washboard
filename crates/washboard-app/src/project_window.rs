@@ -39,12 +39,6 @@ use crate::text::replace_summary;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
 const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
-    (
-        "validate",
-        "Validate",
-        "checkmark.circle",
-        "validateRequest:",
-    ),
     ("send", "Send", "paperplane", "sendRequest:"),
     (
         "httpLog",
@@ -66,10 +60,11 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     };
     // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps. The
     // server sits right before Send, which goes to it. No Save All: autosave makes it a no-op
-    // nearly always, and File ▸ Save All (⌘S) remains.
+    // nearly always, and File ▸ Save All (⌘S) remains. No Validate: requests are validated
+    // as they are edited and the issues bar shows the result; Project ▸ Validate (⌘B) skips
+    // the wait.
     vec![
         tracking.copy(),
-        NSString::from_str("validate"),
         NSString::from_str(SERVER_ITEM),
         NSString::from_str("send"),
         flexible.copy(),
