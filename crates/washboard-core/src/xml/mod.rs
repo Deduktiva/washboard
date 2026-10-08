@@ -29,6 +29,7 @@ pub mod utf16;
 mod wellformed;
 
 pub use context::{CursorContext, CursorLocation, PathElement, XsiType, cursor_context};
+pub(crate) use encoding::declared_encoding;
 pub use encoding::{DecodeError, Decoded, Encoding, decode, encode_utf8};
 pub use escape::{escape_attr, escape_text};
 pub use names::NamespaceMap;

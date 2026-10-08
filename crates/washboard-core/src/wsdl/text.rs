@@ -1,4 +1,4 @@
-//! Small text helpers: splicing edits, finding the XML declaration's encoding.
+//! Splicing edits into source text.
 //!
 //! Bundle documents are produced by splicing the decoded source text rather than
 //! re-serializing a tree, so everything except the rewritten attributes stays byte-identical
@@ -39,35 +39,6 @@ pub(crate) fn splice(source: &str, window: Range<usize>, mut edits: Vec<Edit>) -
     out
 }
 
-/// Finds the value range of `encoding="…"` in a leading XML declaration.
-pub(crate) fn xml_decl_encoding(text: &str) -> Option<Range<usize>> {
-    if !text.starts_with("<?xml") {
-        return None;
-    }
-    let end = text.find("?>")?;
-    let decl = &text[..end];
-    let at = decl.find("encoding")?;
-    let mut i = at + "encoding".len();
-    let b = decl.as_bytes();
-    while i < b.len() && b[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    if b.get(i) != Some(&b'=') {
-        return None;
-    }
-    i += 1;
-    while i < b.len() && b[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let q = *b.get(i)?;
-    if q != b'"' && q != b'\'' {
-        return None;
-    }
-    let vstart = i + 1;
-    let vend = vstart + decl.get(vstart..)?.find(q as char)?;
-    Some(vstart..vend)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,14 +65,5 @@ mod tests {
             ],
         );
         assert_eq!(out, "2+34X67");
-    }
-
-    #[test]
-    fn finds_declared_encoding() {
-        let t = "<?xml version='1.0' encoding = 'UTF-16'?><a/>";
-        let r = xml_decl_encoding(t).expect("found");
-        assert_eq!(&t[r], "UTF-16");
-        assert!(xml_decl_encoding("<?xml version='1.0'?><a encoding='x'/>").is_none());
-        assert!(xml_decl_encoding("<a/>").is_none());
     }
 }
