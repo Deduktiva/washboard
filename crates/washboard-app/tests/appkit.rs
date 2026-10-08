@@ -66,6 +66,7 @@ mod checks {
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
         NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
         NSToolbarDisplayMode, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
+        NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -961,6 +962,46 @@ mod checks {
             !text_view.isAutomaticTextReplacementEnabled(),
             "text replacement off"
         );
+        assert!(
+            !text_view.isGrammarCheckingEnabled(),
+            "grammar checking off"
+        );
+        assert_eq!(
+            text_view.writingToolsBehavior(),
+            NSWritingToolsBehavior::None,
+            "no Writing Tools"
+        );
+        // The context menu AppKit builds for a right click keeps editing commands and drops
+        // the prose submenus.
+        let window = project.project_window();
+        let click = NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+            NSEventType::RightMouseDown,
+            text_view.convertPoint_toView(NSPoint::new(5.0, 5.0), None),
+            NSEventModifierFlags::empty(),
+            0.0,
+            window.windowNumber(),
+            None,
+            0,
+            1,
+            1.0,
+        )
+        .expect("a right click");
+        let menu = text_view.menuForEvent(&click).expect("a context menu");
+        let titles: Vec<String> = menu
+            .itemArray()
+            .iter()
+            .map(|i| i.title().to_string())
+            .collect();
+        assert!(titles.iter().any(|t| t == "Paste"), "{titles:?}");
+        for prose in [
+            "Spelling and Grammar",
+            "Substitutions",
+            "Transformations",
+            "Font",
+        ] {
+            assert!(!titles.iter().any(|t| t == prose), "{prose} in {titles:?}");
+        }
+        print!("(context menu {titles:?}) ");
 
         // The editor shows the selected request as saved.
         wait_loaded(&project);

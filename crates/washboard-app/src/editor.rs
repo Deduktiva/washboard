@@ -27,14 +27,15 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSColor, NSEvent, NSFont, NSFontAttributeName, NSFontWeightRegular,
-    NSForegroundColorAttributeName, NSLayoutManager, NSResponder, NSRulerOrientation, NSRulerView,
-    NSScrollView, NSStringDrawing, NSText, NSTextDelegate, NSTextView, NSTextViewDelegate,
-    NSToolTipTag, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineColorAttributeName,
-    NSUnderlineStyle, NSUnderlineStyleAttributeName, NSView,
+    NSForegroundColorAttributeName, NSLayoutManager, NSMenu, NSMenuItem, NSResponder,
+    NSRulerOrientation, NSRulerView, NSScrollView, NSStringDrawing, NSText, NSTextDelegate,
+    NSTextInputTraitType, NSTextView, NSTextViewDelegate, NSToolTipTag, NSTrackingArea,
+    NSTrackingAreaOptions, NSUnderlineColorAttributeName, NSUnderlineStyle,
+    NSUnderlineStyleAttributeName, NSView, NSWritingToolsBehavior,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSInteger, NSNotFound, NSNotification, NSNumber, NSObject,
-    NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString,
+    NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
 use washboard_ui_model::{App, Completions, ProjectKey};
@@ -285,6 +286,19 @@ define_class!(
 
     // SAFETY: `NSTextViewDelegate` has no safety requirements.
     unsafe impl NSTextViewDelegate for EditorController {
+        // SAFETY: the signature matches `textView:menu:forEvent:atIndex:`.
+        #[unsafe(method_id(textView:menu:forEvent:atIndex:))]
+        fn context_menu(
+            &self,
+            _text_view: &NSTextView,
+            menu: &NSMenu,
+            _event: &NSEvent,
+            _index: NSUInteger,
+        ) -> Option<Retained<NSMenu>> {
+            strip_prose_items(menu);
+            Some(menu.retain())
+        }
+
         // SAFETY: the signature matches `textView:shouldChangeTextInRange:replacementString:`.
         #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
         fn should_change(
@@ -806,10 +820,70 @@ fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
     text_view.setRichText(false);
     text_view.setAllowsUndo(true);
     text_view.setUsesFindBar(true);
+    code_text(&text_view);
+    text_view
+}
+
+/// Turns off everything meant for prose in a text view that shows XML: substitutions,
+/// spelling and grammar checking, link and data detection, inline predictions and Writing
+/// Tools. Each of them would change or flag markup, and Writing Tools offers to rewrite it.
+pub(crate) fn code_text(text_view: &NSTextView) {
     text_view.setAutomaticQuoteSubstitutionEnabled(false);
     text_view.setAutomaticDashSubstitutionEnabled(false);
     text_view.setAutomaticTextReplacementEnabled(false);
     text_view.setAutomaticSpellingCorrectionEnabled(false);
     text_view.setContinuousSpellCheckingEnabled(false);
-    text_view
+    text_view.setGrammarCheckingEnabled(false);
+    text_view.setAutomaticLinkDetectionEnabled(false);
+    text_view.setAutomaticDataDetectionEnabled(false);
+    text_view.setSmartInsertDeleteEnabled(false);
+    text_view.setInlinePredictionType(NSTextInputTraitType::No);
+    text_view.setWritingToolsBehavior(NSWritingToolsBehavior::None);
+}
+
+/// Context menu actions whose submenus are for prose: Spelling and Grammar, Substitutions,
+/// Transformations, Font and Layout Orientation.
+const PROSE_ACTIONS: &[&str] = &[
+    "showGuessPanel:",
+    "checkSpelling:",
+    "toggleContinuousSpellChecking:",
+    "orderFrontSubstitutionsPanel:",
+    "toggleSmartInsertDelete:",
+    "uppercaseWord:",
+    "orderFrontFontPanel:",
+    "changeLayoutOrientation:",
+];
+
+/// Removes the prose submenus from a text view's context menu, leaving cut, copy, paste,
+/// Look Up, Share and Speech.
+fn strip_prose_items(menu: &NSMenu) {
+    let prose = |item: &NSMenuItem| {
+        item.submenu().is_some_and(|sub| {
+            sub.itemArray().iter().any(|i| {
+                i.action()
+                    .is_some_and(|a| PROSE_ACTIONS.contains(&a.name().to_str().unwrap_or("")))
+            })
+        })
+    };
+    for index in (0..menu.numberOfItems()).rev() {
+        if menu.itemAtIndex(index).is_some_and(|item| prose(&item)) {
+            menu.removeItemAtIndex(index);
+        }
+    }
+    // A separator left first, last or next to another one.
+    let mut previous_separator = true;
+    let mut index = 0;
+    while index < menu.numberOfItems() {
+        let separator = menu.itemAtIndex(index).is_some_and(|i| i.isSeparatorItem());
+        if separator && previous_separator {
+            menu.removeItemAtIndex(index);
+        } else {
+            previous_separator = separator;
+            index += 1;
+        }
+    }
+    let last = menu.numberOfItems() - 1;
+    if last >= 0 && menu.itemAtIndex(last).is_some_and(|i| i.isSeparatorItem()) {
+        menu.removeItemAtIndex(last);
+    }
 }
