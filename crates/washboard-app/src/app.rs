@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSMenuItem,
@@ -306,12 +306,12 @@ impl AppDelegate {
         self.ivars().projects.borrow().clone()
     }
 
-    /// Shows the New Project sheet on the key window, or on the welcome window when no window
-    /// is key. A sheet already showing is brought forward rather than doubled.
+    /// Shows the New Project window. It is not a sheet, so open projects stay usable while it
+    /// is up. One already showing is brought forward rather than doubled.
     pub fn show_new_project_sheet(&self) -> Retained<ImportSheetController> {
         let mtm = self.mtm();
         if let Some(sheet) = &*self.ivars().new_project.borrow()
-            && sheet.window().sheetParent().is_some()
+            && sheet.window().isVisible()
         {
             sheet.window().makeKeyAndOrderFront(None);
             return sheet.clone();
@@ -319,14 +319,7 @@ impl AppDelegate {
         let target = ImportTarget::NewProject;
         self.update(|app| app.begin_import(target));
         let sheet = ImportSheetController::new(target, mtm);
-        let parent = match NSApplication::sharedApplication(mtm).keyWindow() {
-            Some(window) if window.attachedSheet().is_none() => window,
-            _ => {
-                self.welcome().show();
-                self.welcome().window().retain()
-            }
-        };
-        sheet.present(&parent);
+        sheet.show();
         *self.ivars().new_project.borrow_mut() = Some(sheet.clone());
         // Shows the model's sheet through `ImportChanged`.
         self.sync();

@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSControlStateValueOn, NSControlTextEditingDelegate, NSGridView, NSLayoutAttribute,
     NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSecureTextField, NSSplitView, NSStackView,
     NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -78,6 +78,15 @@ define_class!(
         #[unsafe(method(controlTextDidChange:))]
         fn text_did_change(&self, _notification: &NSNotification) {
             self.name_changed();
+        }
+    }
+
+    // SAFETY: `NSWindowDelegate` has no safety requirements.
+    unsafe impl NSWindowDelegate for ImportSheetController {
+        // SAFETY: the signature matches `windowWillClose:`.
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _notification: &NSNotification) {
+            self.closed();
         }
     }
 
@@ -205,7 +214,19 @@ impl ImportSheetController {
         } else {
             "Replace WSDL"
         };
-        let window = sheet_window(title, NSSize::new(600.0, 480.0), mtm);
+        let size = NSSize::new(600.0, 480.0);
+        let window = sheet_window(title, size, mtm);
+        if new_project {
+            // Its own window, so that open projects stay usable meanwhile.
+            window.setStyleMask(
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable,
+            );
+            window.setContentMinSize(size);
+            window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        }
         window.setContentView(Some(&content));
 
         let _ = this.ivars().views.set(ImportViews {
@@ -255,8 +276,15 @@ impl ImportSheetController {
         &self.views().finish
     }
 
+    /// Attaches Replace WSDL to its project's window.
     pub fn present(&self, parent: &NSWindow) {
         parent.beginSheet_completionHandler(self.window(), None);
+    }
+
+    /// Shows New Project as a window of its own, centred on the screen.
+    pub fn show(&self) {
+        self.window().center();
+        self.window().makeKeyAndOrderFront(None);
     }
 
     /// Shows the model's sheet, or ends this one once the model has dropped it (Cancel,
@@ -270,7 +298,7 @@ impl ImportSheetController {
             })
             .flatten();
         let Some(shown) = shown else {
-            end_sheet(self.window());
+            dismiss(self.window());
             return;
         };
         let views = self.views();
@@ -336,7 +364,7 @@ impl ImportSheetController {
             d.sync();
         });
         // Also when the model had no sheet left to cancel.
-        end_sheet(self.window());
+        dismiss(self.window());
     }
 
     /// Create or Replace; also called by tests. Does nothing while disabled. A new project
@@ -371,6 +399,16 @@ impl ImportSheetController {
 
     fn views(&self) -> &ImportViews {
         self.ivars().views.get().expect("set in new()")
+    }
+
+    /// The New Project window's close button means Cancel. Create and Cancel order the window
+    /// out rather than closing it, so the model only still has the sheet when the user closed
+    /// the window.
+    fn closed(&self) {
+        let target = self.target();
+        if self.read(|app| app.import_sheet(target).is_some()) == Some(true) {
+            self.cancel();
+        }
     }
 
     fn name_changed(&self) {
@@ -1037,6 +1075,15 @@ fn state(on: bool) -> NSControlStateValue {
 fn end_sheet(sheet: &NSWindow) {
     if let Some(parent) = sheet.sheetParent() {
         parent.endSheet(sheet);
+    }
+}
+
+/// Ends a sheet, or hides a standalone window without closing it (closing means Cancel).
+fn dismiss(window: &NSWindow) {
+    if window.sheetParent().is_some() {
+        end_sheet(window);
+    } else {
+        window.orderOut(None);
     }
 }
 

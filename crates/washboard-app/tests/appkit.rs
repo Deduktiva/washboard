@@ -65,7 +65,7 @@ mod checks {
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
         NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
-        NSView, NSWindow,
+        NSView,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -79,7 +79,9 @@ mod checks {
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
-    use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs, ProjectKey};
+    use washboard_ui_model::{
+        Alert, Confirm, DialogAnswer, DialogId, Dialogs, ImportTarget, ProjectKey,
+    };
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1459,19 +1461,23 @@ mod checks {
 
         // SAFETY: `newProject:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
-        let welcome = ctx.delegate.welcome().window().retain();
-        wait_until("the sheet to attach", || welcome.attachedSheet().is_some());
         let sheet = ctx
             .delegate
             .new_project_sheet()
             .expect("created by newProject:");
-        assert_eq!(
-            welcome
-                .attachedSheet()
-                .as_deref()
-                .map(|w| w as *const NSWindow),
-            Some(sheet.window() as *const NSWindow),
-            "one New Project sheet, on the welcome window"
+        let window = sheet.window().retain();
+        wait_until("the window to show", || window.isVisible());
+        assert!(
+            window.sheetParent().is_none(),
+            "its own window, not a sheet"
+        );
+        // SAFETY: `newProject:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
+        assert!(
+            ctx.delegate
+                .new_project_sheet()
+                .is_some_and(|again| std::ptr::eq(&*again, &*sheet)),
+            "a second New Project brings the first forward"
         );
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
@@ -1506,7 +1512,7 @@ mod checks {
         assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
         sheet.finish();
-        wait_until("the sheet to end", || welcome.attachedSheet().is_none());
+        wait_until("the window to hide", || !window.isVisible());
         let project = ctx
             .delegate
             .projects()
@@ -1537,6 +1543,19 @@ mod checks {
         let _: () = unsafe { msg_send![settings, done: None::<&AnyObject>] };
         wait_until("the sheet to end", || window.attachedSheet().is_none());
         autoreleasepool(|_| window.performClose(None));
+
+        // The close button cancels, like Cancel.
+        let sheet = ctx.delegate.show_new_project_sheet();
+        let window = sheet.window().retain();
+        wait_until("the window to show", || window.isVisible());
+        autoreleasepool(|_| window.performClose(None));
+        assert!(!window.isVisible());
+        assert_eq!(
+            ctx.delegate
+                .read(|app| app.import_sheet(ImportTarget::NewProject).is_some()),
+            Some(false),
+            "closing the window cancels the import"
+        );
     }
 
     /// Replace WSDL checks the new files like New Project, swaps the WSDL and says what
