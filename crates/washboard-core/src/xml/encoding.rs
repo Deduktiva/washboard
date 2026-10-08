@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use thiserror::Error;
 
-use super::names::is_xml_ws;
+use super::names::is_xml_ws_char;
 
 /// The UTF-8 byte order mark.
 pub(crate) const UTF8_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
@@ -131,12 +131,11 @@ pub(crate) fn declared_encoding(bytes: &[u8]) -> Option<Range<usize>> {
     // The declaration is ASCII; what follows it need not be UTF-8.
     let head = bytes.utf8_chunks().next()?.valid();
     let decl = &head[..head.find("?>")?];
-    let ws = |c: char| u8::try_from(c).is_ok_and(is_xml_ws);
     let (_, rest) = decl.strip_prefix("<?xml")?.split_once("encoding")?;
     let rest = rest
-        .trim_start_matches(ws)
+        .trim_start_matches(is_xml_ws_char)
         .strip_prefix('=')?
-        .trim_start_matches(ws);
+        .trim_start_matches(is_xml_ws_char);
     let quote = rest.chars().next().filter(|q| matches!(q, '"' | '\''))?;
     let value = &rest[1..];
     // `value` is a suffix of `decl`, which starts at byte 0.
