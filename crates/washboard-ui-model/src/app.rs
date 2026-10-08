@@ -11,8 +11,10 @@ use washboard_core::model::RequestId;
 use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
 use washboard_core::soap::EnvelopeError;
 
+use crate::diagnostics::Check;
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::timers::TimerKind;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
 #[derive(Debug, Error)]
@@ -31,6 +33,9 @@ pub enum ModelError {
     SchemaFailed(String),
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
+    /// Editing needs a selected request whose text could be read.
+    #[error("no request is open in the editor")]
+    NoRequestSelected,
 }
 
 /// Identifies an open project for as long as it is open. Not reused within one run, so a
@@ -60,9 +65,12 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     welcome_visible: Option<bool>,
     pub(crate) dialogs: HashMap<DialogId, PendingDialog>,
+    /// Running timers and what they are for.
+    pub(crate) timers: HashMap<TimerId, (ProjectKey, TimerKind)>,
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
+    jobs: usize,
 }
 
 impl fmt::Debug for App {
@@ -86,9 +94,11 @@ impl App {
             events: Vec::new(),
             welcome_visible: None,
             dialogs: HashMap::new(),
+            timers: HashMap::new(),
             next_id: 0,
             done_tx,
             done_rx,
+            jobs: 0,
         }
     }
 
@@ -151,20 +161,29 @@ impl App {
         self.front.dialogs.choose_project_folder(id);
     }
 
-    /// Closes the project's window. Its lock is released here.
-    pub fn close_project(&mut self, key: ProjectKey) {
+    /// Closes the project's window after saving its editor. Its lock is released here. If the
+    /// save fails the window stays open (an alert says why), so no edit is lost.
+    pub fn close_project(&mut self, key: ProjectKey) -> bool {
+        if !self.flush_or_alert(key) {
+            return false;
+        }
         let Some(i) = self.projects.iter().position(|(k, _)| *k == key) else {
-            return;
+            return true;
         };
         self.projects.remove(i);
+        self.stop_timers(key);
         self.events.push(Event::ProjectClosed { project: key });
         self.update_welcome();
+        true
     }
 
-    /// Writes which projects are open, for the next launch. Projects stay open: the front end
-    /// terminates after this returns.
-    pub fn quit(&mut self) -> Result<(), ModelError> {
-        self.save_state()
+    /// Saves every editor and writes which projects are open, for the next launch. Projects
+    /// stay open: the front end terminates after this returns. `false` means an editor could
+    /// not be saved (already alerted); the front end should cancel termination.
+    pub fn quit(&mut self) -> Result<bool, ModelError> {
+        let saved = self.save_all();
+        self.save_state()?;
+        Ok(saved)
     }
 
     pub fn project(&self, key: ProjectKey) -> Option<&ProjectWindow> {
@@ -196,10 +215,11 @@ impl App {
     /// Runs `work` on a new thread and `then` with its result on the main thread, during the
     /// [`pump`](Self::pump) that follows the worker's wake.
     pub fn spawn<T: Send + 'static>(
-        &self,
+        &mut self,
         work: impl FnOnce() -> T + Send + 'static,
         then: impl FnOnce(&mut App, T) + Send + 'static,
     ) {
+        self.jobs += 1;
         let done = self.done_tx.clone();
         let main = self.front.main_thread.clone();
         std::thread::spawn(move || {
@@ -216,12 +236,15 @@ impl App {
     /// [`MainThread::wake`](crate::MainThread::wake).
     pub fn pump(&mut self) {
         while let Ok(completion) = self.done_rx.try_recv() {
+            self.jobs -= 1;
             completion(self);
         }
     }
 
-    /// The front end reports a timer started through [`Timers`](crate::Timers).
-    pub fn timer_fired(&mut self, _id: TimerId) {}
+    /// Workers whose results have not been applied yet, e.g. for a progress indicator.
+    pub fn jobs_running(&self) -> usize {
+        self.jobs
+    }
 
     /// The front end reports the answer to a dialog. Unknown ids are ignored, so a dialog that
     /// outlived its purpose does no harm.
@@ -267,6 +290,7 @@ impl App {
             schema: SchemaState::Loading,
             sidebar: Sidebar::default(),
             servers: Vec::new(),
+            editor: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
@@ -276,6 +300,7 @@ impl App {
         }
         self.projects.push((key, window));
         self.events.push(Event::ProjectOpened { project: key });
+        self.load_editor(key);
 
         match entry {
             Ok(entry) => self.spawn(
@@ -300,6 +325,7 @@ impl App {
             Err(message) => window.schema = SchemaState::Failed(message),
         }
         self.events.push(Event::SidebarChanged { project: key });
+        self.start_check(key, Check::Full);
     }
 
     pub(crate) fn window_mut(&mut self, key: ProjectKey) -> Option<&mut ProjectWindow> {

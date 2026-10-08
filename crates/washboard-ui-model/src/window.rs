@@ -1,28 +1,59 @@
 //! Per-project window state: the sidebar tree, selection, and the server popup.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use washboard_core::diag::Diagnostic;
 use washboard_core::model::{OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
+use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
-/// The project's WSDL and the schema model built from it, loaded off the main thread and then
-/// shared read-only.
+use crate::editor::Editor;
+
+/// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
+/// off the main thread and then shared read-only with the main thread and workers.
 #[derive(Debug)]
 pub struct ProjectSchema {
     pub wsdl: Wsdl,
-    pub model: SchemaModel,
+    pub model: Arc<SchemaModel>,
+    /// libxml2 schemas are `Send` but not `Sync`; validations of one project take turns.
+    request: Result<Mutex<RequestSchema>, Vec<Diagnostic>>,
 }
 
 impl ProjectSchema {
-    /// Reads and analyzes the WSDL set; runs on a worker.
+    /// Reads and analyzes the WSDL set and compiles its schemas; runs on a worker.
     pub(crate) fn load(entry: &Path, wsdl_dir: PathBuf) -> Result<ProjectSchema, String> {
         let sources = Sources::from_disk(entry, &[wsdl_dir]).map_err(|e| e.to_string())?;
         let wsdl = wsdl::load(&sources);
-        let model = SchemaModel::build(&wsdl.bundle);
-        Ok(ProjectSchema { wsdl, model })
+        let model = Arc::new(SchemaModel::build(&wsdl.bundle));
+        let request = RequestSchema::compile(&wsdl.bundle)
+            .map(|schema| Mutex::new(schema.with_model(model.clone())));
+        Ok(ProjectSchema {
+            wsdl,
+            model,
+            request,
+        })
+    }
+
+    /// Why requests can't be schema-validated, if they can't.
+    pub fn compile_errors(&self) -> &[Diagnostic] {
+        match &self.request {
+            Ok(_) => &[],
+            Err(errors) => errors,
+        }
+    }
+
+    /// `None` if the schemas did not compile. A validation that panicked doesn't poison it for
+    /// good: libxml2 keeps no state between validations.
+    pub(crate) fn request_schema(&self) -> Option<MutexGuard<'_, RequestSchema>> {
+        let mutex = self.request.as_ref().ok()?;
+        Some(
+            mutex
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
     }
 }
 
@@ -87,6 +118,7 @@ pub struct ProjectWindow {
     pub(crate) schema: SchemaState,
     pub(crate) sidebar: Sidebar,
     pub(crate) servers: Vec<Server>,
+    pub(crate) editor: Option<Editor>,
 }
 
 impl ProjectWindow {
@@ -113,6 +145,16 @@ impl ProjectWindow {
 
     pub fn selected_request(&self) -> Option<RequestId> {
         self.restore.last_selected_request
+    }
+
+    /// The selected request's buffer; `None` without a selection or if it could not be read.
+    pub fn editor(&self) -> Option<&Editor> {
+        self.editor.as_ref()
+    }
+
+    /// Has unsaved edits: the window's edited dot.
+    pub fn edited(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.dirty())
     }
 
     /// The server popup's items, in the project's order.
@@ -157,6 +199,12 @@ impl ProjectWindow {
             self.restore.last_selected_request = None;
         }
         Ok(())
+    }
+
+    pub(crate) fn mark_dirty(&mut self, request: RequestId, dirty: bool) {
+        if let Some(row) = self.sidebar.requests.iter_mut().find(|r| r.id == request) {
+            row.dirty = dirty;
+        }
     }
 
     pub(crate) fn reload_servers(&mut self) -> Result<(), washboard_core::project::ProjectError> {

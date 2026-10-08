@@ -114,6 +114,54 @@ impl Fake {
         app.pump();
     }
 
+    /// Pumps worker results as they arrive until `done` holds.
+    pub fn pump_until(&self, app: &mut App, done: impl Fn(&App) -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let seen = *self.main_thread.wakes.lock().expect("wake counter");
+            app.pump();
+            if done(app) {
+                return;
+            }
+            let guard = self.main_thread.wakes.lock().expect("wake counter");
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let (_guard, timeout) = self
+                .main_thread
+                .woken
+                .wait_timeout_while(guard, left, |w| *w == seen)
+                .expect("wake counter");
+            assert!(!timeout.timed_out(), "gave up waiting for a worker");
+        }
+    }
+
+    /// Moves the manual clock forward by `by`, firing due timers in order on the way.
+    pub fn advance(&self, app: &mut App, by: Duration) {
+        let target = self.clock.borrow().now + by;
+        loop {
+            let due = {
+                let clock = self.clock.borrow();
+                clock
+                    .timers
+                    .iter()
+                    .filter(|(_, at)| **at <= target)
+                    .min_by_key(|(_, at)| **at)
+                    .map(|(id, at)| (*id, *at))
+            };
+            let Some((id, at)) = due else { break };
+            {
+                let mut clock = self.clock.borrow_mut();
+                clock.timers.remove(&id);
+                clock.now = at;
+            }
+            app.timer_fired(id);
+        }
+        self.clock.borrow_mut().now = target;
+    }
+
+    pub fn running_timers(&self) -> usize {
+        self.clock.borrow().timers.len()
+    }
+
     /// Answers the most recent open-panel request.
     pub fn answer_folder(&self, app: &mut App, answer: DialogAnswer) {
         let id = self

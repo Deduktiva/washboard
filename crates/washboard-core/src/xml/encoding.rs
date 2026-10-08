@@ -6,6 +6,9 @@ use thiserror::Error;
 
 use super::names::is_xml_ws_char;
 
+/// The UTF-8 byte order mark.
+pub(crate) const UTF8_BOM: &[u8; 3] = b"\xEF\xBB\xBF";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
     Utf8,
@@ -32,7 +35,7 @@ pub enum DecodeError {
 
 /// Decodes raw XML bytes to text, honouring a BOM and the XML declaration's `encoding`.
 pub fn decode(bytes: &[u8]) -> Result<Decoded, DecodeError> {
-    if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+    if let Some(rest) = bytes.strip_prefix(UTF8_BOM) {
         return utf8(rest, true);
     }
     if let Some(rest) = bytes.strip_prefix(&[0xFF, 0xFE]) {
@@ -69,7 +72,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, DecodeError> {
 pub fn encode_utf8(text: &str, with_bom: bool) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len() + 3);
     if with_bom {
-        out.extend_from_slice(&[0xEF, 0xBB, 0xBF]);
+        out.extend_from_slice(UTF8_BOM);
     }
     out.extend_from_slice(text.as_bytes());
     out
