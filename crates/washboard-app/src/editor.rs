@@ -754,15 +754,7 @@ impl EditorController {
             .find('\n')
             .map_or(text.len(), |i| bytes.end + i);
         let lines = Utf16Cursor::new(text).utf16_range(start..end);
-        let mut cursor = Utf16Cursor::new(text);
-        let tokens = self
-            .ivars()
-            .tokens
-            .borrow()
-            .tokens_in(start..end)
-            .iter()
-            .map(|t| (cursor.utf16_range(t.span()), t.kind))
-            .collect();
+        let tokens = self.ivars().tokens.borrow().tokens_utf16(text, start..end);
         self.paint(lines, tokens);
     }
 

@@ -93,12 +93,7 @@ impl Editor {
         let mut cursor = Utf16Cursor::new(&self.text);
         let start = cursor.byte_at(range.start);
         let end = cursor.byte_at(range.end.max(range.start));
-        let mut cursor = Utf16Cursor::new(&self.text);
-        self.tokens
-            .tokens_in(start..end)
-            .iter()
-            .map(|t| (cursor.utf16_range(t.span()), t.kind))
-            .collect()
+        self.tokens.tokens_utf16(&self.text, start..end)
     }
 
     /// Replaces the UTF-16 range `range` with `new`; returns the UTF-16 range of the new text
