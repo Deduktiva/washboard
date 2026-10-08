@@ -390,6 +390,8 @@ mod checks {
         }
     }
 
+    /// The text view stores its default text colour itself; only the highlight colour must
+    /// stay out of the text storage.
     fn stored_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {
         // SAFETY: plain getter; an immutable AppKit constant; a null out-pointer is allowed.
         unsafe {
@@ -447,8 +449,8 @@ mod checks {
             "tag name coloured"
         );
         assert!(
-            stored_color(editor, envelope).is_none(),
-            "no colour in the text storage"
+            !is_tag_color(stored_color(editor, envelope)),
+            "highlight colour not in the text storage"
         );
         assert_eq!(editor.ruler().error_lines(), [6], "error marker on line 6");
         assert!(
@@ -476,8 +478,8 @@ mod checks {
             "typed tag name coloured"
         );
         assert!(
-            stored_color(editor, at + 1).is_none(),
-            "typing adds no stored colour"
+            !is_tag_color(stored_color(editor, at + 1)),
+            "typing stores no highlight colour"
         );
 
         let undo = text_view
