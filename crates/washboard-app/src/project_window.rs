@@ -15,7 +15,8 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_clas
 use objc2_app_kit::{
     NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSMenu, NSMenuItem,
     NSPopUpButton, NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem,
-    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
     NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
@@ -311,6 +312,9 @@ impl ProjectWindowController {
         let toolbar =
             NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("ProjectWindow"));
         toolbar.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        // Icons only, as macOS 26 apps show their toolbars; labels make the unified toolbar
+        // tall and crowded.
+        toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
         window.setToolbar(Some(&toolbar));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
 

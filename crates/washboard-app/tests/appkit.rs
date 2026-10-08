@@ -64,7 +64,8 @@ mod checks {
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
-        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView, NSWindow,
+        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
+        NSView, NSWindow,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -585,6 +586,7 @@ mod checks {
             .map(|i| i.to_string())
             .collect();
         assert_eq!(ids, expected, "toolbar items");
+        assert_eq!(toolbar.displayMode(), NSToolbarDisplayMode::IconOnly);
 
         // The sidebar's ⋯ menu offers the request commands with no button of their own.
         let more =
