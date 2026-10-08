@@ -4,8 +4,8 @@
 //! handed to a Rust XML parser. `roxmltree` and `quick-xml` want `&str` without a BOM; real
 //! WSDLs come with UTF-8 BOMs and occasionally as UTF-16 or ISO-8859-1.
 //!
-//! libxml2 gets the original bytes instead — it handles encodings itself — so positions it
-//! reports are converted via [`crate::diag::TextPos`], which does not count the BOM either.
+//! libxml2 gets the decoded text as UTF-8 as well (`validate::xsd`), so its line and column
+//! numbers match [`crate::diag::TextPos`], which does not count a BOM either.
 //!
 //! Editor-side helpers (all operate on the decoded `&str`, positions are byte offsets into it):
 //! - [`tokenize`], [`tokenize_range`], [`TokenBuffer`]: tolerant tokenizer for highlighting;
