@@ -6,6 +6,7 @@ use std::ops::Range;
 use washboard_core::model::RequestId;
 
 use crate::app::ProjectKey;
+use crate::import::ImportTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -55,4 +56,8 @@ pub enum Event {
     HistoryChanged { project: ProjectKey },
     /// An exchange was added to the HTTP log (and the oldest maybe dropped).
     LogAppended,
+    /// An import sheet opened, closed or changed (check finished, fields set).
+    ImportChanged { target: ImportTarget },
+    /// Replace WSDL finished: schema reloaded, requests re-validated, outcome available.
+    WsdlReplaced { project: ProjectKey },
 }

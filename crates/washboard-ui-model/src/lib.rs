@@ -15,6 +15,7 @@ mod diagnostics;
 mod editor;
 mod event;
 mod front_end;
+mod import;
 mod send;
 mod timers;
 mod window;
@@ -33,6 +34,9 @@ pub use editor::Editor;
 pub use event::Event;
 pub use front_end::{
     Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
+};
+pub use import::{
+    CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome, SuggestedServer,
 };
 pub use send::{LOG_CAPACITY, LogEntry, ResponseView};
 pub use window::{
