@@ -44,6 +44,7 @@ pub use defs::{
 };
 pub use graph::{FileKind, RefKind, Reference, Resolution, Unresolved, Xsd11Construct};
 pub use report::StructuralReport;
+pub(crate) use source::split_scheme;
 pub use source::{LayoutEntry, MAX_DIR_FILES, MatchedBy, SourceError, SourceFile, Sources};
 
 /// Everything known about a WSDL and its supporting files.
