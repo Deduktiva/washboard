@@ -154,7 +154,7 @@ impl HttpLog {
                     .unwrap_or_default();
                 let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
                 let status = match (&exchange.response, &exchange.error) {
-                    (Some(response), _) => status_of(&response.start_line),
+                    (Some(response), _) => response.status_text().to_owned(),
                     (None, Some(error)) => format!("Failed: {error}"),
                     (None, None) => "—".to_owned(),
                 };
@@ -233,14 +233,6 @@ impl HttpLog {
             &response,
         );
     }
-}
-
-/// `HTTP/1.1 200 OK` → `200 OK`.
-fn status_of(start_line: &str) -> String {
-    start_line
-        .split_once(' ')
-        .map_or(start_line, |(_, rest)| rest)
-        .to_owned()
 }
 
 /// A message as it went over the wire, with the body as text.

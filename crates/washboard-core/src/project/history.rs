@@ -13,7 +13,7 @@ use super::{
     DEFAULT_HISTORY_LIMIT, HISTORY_DIR, LAST_SERVER_KEY, Project, ProjectError, Result, parse_time,
     parse_uuid, timefmt,
 };
-use crate::http::Exchange;
+use crate::http::{Exchange, RawMessage};
 use crate::model::{HistoryEntry, HistoryId, RequestId, Server, ServerId};
 
 const REQUEST_SUFFIX: &str = ".request.xml";
@@ -84,11 +84,6 @@ fn to_entry(r: &RawRow) -> Result<HistoryEntry> {
         soap_fault: r.soap_fault.unwrap_or(false),
         error: r.error.clone(),
     })
-}
-
-/// `HTTP/1.1 200 OK` → 200.
-fn status_code(start_line: &str) -> Option<u16> {
-    start_line.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// The stem must stay inside the request's history folder.
@@ -166,10 +161,7 @@ impl Project {
             url: server.url.clone(),
             sent_at: exchange.started_at,
             duration: Some(exchange.duration),
-            http_status: exchange
-                .response
-                .as_ref()
-                .and_then(|r| status_code(&r.start_line)),
+            http_status: exchange.response.as_ref().and_then(RawMessage::status_code),
             soap_fault,
             error: exchange.error.clone(),
         };
@@ -364,17 +356,5 @@ impl Project {
             }
         }
         Ok(removed)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_status_line() {
-        assert_eq!(status_code("HTTP/1.1 200 OK"), Some(200));
-        assert_eq!(status_code("HTTP/1.1 500"), Some(500));
-        assert_eq!(status_code("garbage"), None);
     }
 }

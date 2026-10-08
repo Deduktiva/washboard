@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
 
 use washboard_core::diag::LineIndex;
-use washboard_core::http::{self, Exchange, SendRequest, SoapFault, detect_fault};
+use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
 use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
 use washboard_core::project::HistoryRecord;
 use washboard_core::validate::validate_request;
@@ -73,7 +73,7 @@ impl ResponseView {
             url: server.url.clone(),
             sent_at: exchange.started_at,
             duration: Some(exchange.duration),
-            status: response.and_then(|r| status_code(&r.start_line)),
+            status: response.and_then(RawMessage::status_code),
             error: exchange.error.clone(),
             headers: response.map(|r| r.headers.clone()).unwrap_or_default(),
             size: response.map_or(0, |r| r.body.len()),
@@ -81,11 +81,6 @@ impl ResponseView {
             fault,
         }
     }
-}
-
-/// `HTTP/1.1 200 OK` → 200.
-fn status_code(start_line: &str) -> Option<u16> {
-    start_line.split_whitespace().nth(1)?.parse().ok()
 }
 
 fn display_body(bytes: &[u8]) -> String {
