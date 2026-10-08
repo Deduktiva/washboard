@@ -11,6 +11,7 @@
 
 mod app;
 mod commands;
+mod editor;
 mod event;
 mod front_end;
 mod window;
@@ -21,6 +22,7 @@ mod fake;
 mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
+pub use editor::Editor;
 pub use event::Event;
 pub use front_end::{
     Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,

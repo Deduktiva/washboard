@@ -17,20 +17,24 @@ use crate::window::{ProjectWindow, SchemaState};
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl App {
-    /// Selects `request` (or nothing). Remembered for the next launch.
+    /// Selects `request` (or nothing) and opens it in the editor. Remembered for the next
+    /// launch. The previous request is saved first; if that fails, the selection stays and the
+    /// error says why.
     pub fn select_request(
         &mut self,
         key: ProjectKey,
         request: Option<RequestId>,
     ) -> Result<(), ModelError> {
-        let window = self.window(key)?;
-        if window.restore.last_selected_request == request {
+        if self.window(key)?.restore.last_selected_request == request {
             return Ok(());
         }
-        window.restore.last_selected_request = request;
+        self.flush(key)?;
+        self.window(key)?.restore.last_selected_request = request;
         self.events.push(Event::SelectionChanged { project: key });
         self.events
             .push(Event::ServerSelectionChanged { project: key });
+        self.load_editor(key);
+        self.events.push(Event::EditorReplaced { project: key });
         Ok(())
     }
 
@@ -75,12 +79,14 @@ impl App {
         self.requests_changed(key)
     }
 
-    /// Project ▸ Duplicate: `<name> copy` right after the original, then selected.
+    /// Project ▸ Duplicate: `<name> copy` right after the original, then selected. Unsaved
+    /// edits are saved first so the copy has them.
     pub fn duplicate_request(
         &mut self,
         key: ProjectKey,
         request: RequestId,
     ) -> Result<RequestId, ModelError> {
+        self.flush(key)?;
         let meta = self.window(key)?.project.duplicate_request(request)?;
         self.requests_changed(key)?;
         self.select_request(key, Some(meta.id))?;
@@ -130,6 +136,17 @@ impl App {
         });
         let was_selected = window.selected_request() == Some(request);
         window.project.delete_request(request)?;
+        if window
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.request() == request)
+        {
+            // Its edits go with it.
+            window.editor = None;
+            if let Some(timer) = window.autosave.take() {
+                self.cancel_timer(timer);
+            }
+        }
         self.requests_changed(key)?;
         if was_selected {
             self.select_request(key, neighbour)?;
@@ -220,6 +237,8 @@ impl App {
         self.events.push(Event::SidebarChanged { project: key });
         if deselected {
             self.events.push(Event::SelectionChanged { project: key });
+            self.load_editor(key);
+            self.events.push(Event::EditorReplaced { project: key });
         }
         Ok(())
     }
