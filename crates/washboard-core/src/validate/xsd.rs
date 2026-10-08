@@ -67,6 +67,7 @@ use libxml2_sys as ffi;
 
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
 use crate::model::{QName, SchemaBundle};
+use crate::wsdl::split_scheme;
 use crate::xml::{Token, TokenKind, is_xml_ws_char};
 
 /// Base URI given to every bundle document; see the module docs.
@@ -452,21 +453,11 @@ fn oom() -> Diagnostic {
 /// The URL libxml2 sees for a bundle URI: absolute URIs as they are, relative ones under
 /// [`BASE`], i.e. in the form libxml2 itself produces when resolving them.
 fn libxml_url(uri: &str) -> String {
-    if has_scheme(uri) {
+    if split_scheme(uri).is_some() {
         uri.to_owned()
     } else {
         format!("{BASE}{uri}")
     }
-}
-
-/// RFC 3986: `scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )` followed by `:`.
-fn has_scheme(uri: &str) -> bool {
-    let Some((scheme, _)) = uri.split_once(':') else {
-        return false;
-    };
-    let mut chars = scheme.chars();
-    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// Finds the bundle document a libxml2 URL refers to.
@@ -1782,7 +1773,7 @@ mod tests {
         assert_eq!(lookup(&bundle, &format!("{BASE}?doc=3")), Some(3));
         assert_eq!(lookup(&bundle, &format!("{BASE}?doc=99")), None);
         assert_eq!(lookup(&bundle, "customer.xsd"), None);
-        assert!(has_scheme("washboard:/root.xsd"));
-        assert!(!has_scheme("xsd/a:b.xsd"));
+        assert!(split_scheme("washboard:/root.xsd").is_some());
+        assert!(split_scheme("xsd/a:b.xsd").is_none());
     }
 }
