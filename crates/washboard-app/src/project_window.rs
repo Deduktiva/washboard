@@ -45,7 +45,6 @@ const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
         "validateRequest:",
     ),
     ("send", "Send", "paperplane", "sendRequest:"),
-    ("saveAll", "Save All", "square.and.arrow.down", "saveAll:"),
     (
         "httpLog",
         "HTTP Log",
@@ -64,20 +63,17 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
             NSToolbarFlexibleSpaceItemIdentifier,
         )
     };
-    // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps.
-    let mut ids = vec![tracking.copy(), NSString::from_str(SERVER_ITEM)];
-    ids.extend(
-        TOOLBAR_ITEMS[..2]
-            .iter()
-            .map(|(id, ..)| NSString::from_str(id)),
-    );
-    ids.push(flexible.copy());
-    ids.extend(
-        TOOLBAR_ITEMS[2..]
-            .iter()
-            .map(|(id, ..)| NSString::from_str(id)),
-    );
-    ids
+    // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps. The
+    // server sits right before Send, which goes to it. No Save All: autosave makes it a no-op
+    // nearly always, and File ▸ Save All (⌘S) remains.
+    vec![
+        tracking.copy(),
+        NSString::from_str("validate"),
+        NSString::from_str(SERVER_ITEM),
+        NSString::from_str("send"),
+        flexible.copy(),
+        NSString::from_str("httpLog"),
+    ]
 }
 
 #[derive(Debug)]
