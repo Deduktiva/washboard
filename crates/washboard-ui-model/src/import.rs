@@ -210,13 +210,13 @@ impl App {
         index: usize,
         url: &str,
     ) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if index >= window.suggested_servers.len() {
             return Ok(());
         }
         let suggestion = window.suggested_servers.remove(index);
         let id = self.add_server(key)?;
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let mut server = window
             .servers
             .iter()
@@ -243,7 +243,7 @@ impl App {
         let set = checked.set.clone();
         let new_operations = checked.operations.clone();
         self.flush(key)?;
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let old_operations = match &window.schema {
             crate::window::SchemaState::Ready(s) => s.wsdl.supported_operations(),
             _ => Vec::new(),

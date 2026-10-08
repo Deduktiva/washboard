@@ -143,7 +143,7 @@ impl App {
         self.flush(key)?;
         let id = self.next();
         let secrets = self.front.secrets.clone();
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if window.sending.is_some() {
             return Err(ModelError::AlreadySending);
         }
@@ -295,7 +295,7 @@ impl App {
 
     /// Shows a history entry in the response pane.
     pub fn show_history(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let record = window.project.load_history(entry)?;
         window.response = Some(ResponseView::from_record(record));
         self.events.push(Event::ResponseChanged { project: key });
@@ -305,7 +305,7 @@ impl App {
     /// History ▸ Restore request: puts the request as it was sent into the editor (an edit,
     /// so autosave and checks follow; the widget's undo does not cover it).
     pub fn restore_request(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let record = window.project.load_history(entry)?;
         let text = xml::decode_lossy(&record.request_body);
         let editor = window

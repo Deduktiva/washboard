@@ -12,7 +12,7 @@ use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
 use crate::front_end::{Confirm, DialogId};
 use crate::timers::TimerKind;
-use crate::window::{ProjectWindow, SchemaState};
+use crate::window::SchemaState;
 
 /// A new server's timeout until the user changes it.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -242,10 +242,6 @@ impl App {
         Ok(window
             .project
             .server_password(server, self.front.secrets.as_ref())?)
-    }
-
-    fn window(&mut self, key: ProjectKey) -> Result<&mut ProjectWindow, ModelError> {
-        self.window_mut(key).ok_or(ModelError::UnknownProject)
     }
 
     fn requests_changed(&mut self, key: ProjectKey) -> Result<(), ModelError> {

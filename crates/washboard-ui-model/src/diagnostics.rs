@@ -86,7 +86,7 @@ enum Against {
 impl App {
     /// The Validate command: checks right away instead of waiting for the debounce.
     pub fn validate(&mut self, key: ProjectKey) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if window.editor.is_none() {
             return Err(ModelError::NoRequestSelected);
         }
