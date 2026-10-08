@@ -1521,6 +1521,43 @@ mod checks {
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
 
+        // A long location is shortened in the form instead of widening it past the window.
+        let deep = (0..12).fold(tmp.path().to_path_buf(), |p, i| {
+            p.join(format!("a-rather-long-folder-name-{i}"))
+        });
+        std::fs::create_dir_all(&deep).expect("mkdir");
+        sheet.choose_location(deep);
+        window.layoutIfNeeded();
+        let content = window.contentView().expect("content view").bounds();
+        let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let inside = |what: &str, r: NSRect| {
+            assert!(
+                r.origin.x >= 19.5
+                    && r.origin.x + r.size.width <= content.size.width - 19.5
+                    && r.origin.y >= 19.5
+                    && r.origin.y + r.size.height <= content.size.height - 19.5
+                    && r.size.width > 0.0
+                    && r.size.height > 0.0,
+                "{what} inside the margins of {content:?}: {r:?}"
+            );
+        };
+        let location = in_window(sheet.location());
+        inside("the location", location);
+        assert!(
+            location.size.width > 200.0,
+            "the location takes the row's width: {location:?}"
+        );
+        inside("Create", in_window(sheet.finish_button()));
+        let name = in_window(sheet.name_field());
+        assert!(
+            name.origin.x < 150.0,
+            "the form starts at the leading edge: {name:?}"
+        );
+        let references = in_window(sheet.references().view());
+        inside("the references", references);
+        assert!(references.size.height >= 119.5, "{references:?}");
+        inside("the findings", in_window(sheet.messages().view()));
+
         sheet.set_name("Customers");
         sheet.choose_location(projects.clone());
         sheet.choose_wsdl(files.join("CustomerService.wsdl"));
