@@ -27,6 +27,7 @@ use dispatch2::{DispatchQueue, MainThreadBound};
 
 use crate::editor::EditorController;
 use crate::panes::{FakeResponse, IssuesBar, ResponsePane, sample_issues};
+use crate::sheets::{SettingsSheet, sample_servers};
 use crate::sidebar::SidebarController;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
@@ -100,6 +101,7 @@ pub struct ProjectIvars {
     issues: OnceCell<Retained<IssuesBar>>,
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
+    settings: OnceCell<Retained<SettingsSheet>>,
 }
 
 define_class!(
@@ -195,7 +197,7 @@ define_class!(
 
         #[unsafe(method(projectSettings:))]
         fn project_settings(&self, _sender: Option<&AnyObject>) {
-            self.stub("Project Settings");
+            self.show_settings();
         }
 
         #[unsafe(method(moreSidebarActions:))]
@@ -215,6 +217,7 @@ impl ProjectWindowController {
             issues: OnceCell::new(),
             response: ResponsePane::new(mtm),
             split: OnceCell::new(),
+            settings: OnceCell::new(),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithWindow: &*window] };
@@ -279,6 +282,25 @@ impl ProjectWindowController {
                 this.get(mtm).response().show(&response);
             });
         });
+    }
+
+    /// Shows the project's settings sheet on its window, on the Servers tab. One sheet per
+    /// project, kept so edits survive closing and reopening it until the model stores them.
+    pub fn show_settings(&self) -> &SettingsSheet {
+        let sheet = self
+            .ivars()
+            .settings
+            .get_or_init(|| SettingsSheet::new(self.name(), sample_servers(), self.mtm()));
+        let window = self.project_window();
+        if window.attachedSheet().is_none() {
+            sheet.present(&window);
+        }
+        sheet
+    }
+
+    /// The settings sheet, once shown.
+    pub fn settings(&self) -> Option<&SettingsSheet> {
+        self.ivars().settings.get().map(|s| &**s)
     }
 
     pub fn split_view(&self) -> &NSSplitViewController {

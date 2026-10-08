@@ -20,16 +20,6 @@ pub(crate) const WSDL20_NS: &str = "http://www.w3.org/ns/wsdl";
 pub(crate) const VC_NS: &str = "http://www.w3.org/2007/XMLSchema-versioning";
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
-/// Parses decoded XML text. Internal DTD subsets occur in old WSDLs, so they are allowed;
-/// roxmltree never loads external entities and guards against entity expansion bombs.
-pub(crate) fn parse(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
-    let opts = roxmltree::ParsingOptions {
-        allow_dtd: true,
-        ..roxmltree::ParsingOptions::default()
-    };
-    roxmltree::Document::parse_with_options(text, opts)
-}
-
 /// The kind of reference element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefKind {
@@ -295,7 +285,7 @@ fn load(w: &mut Walk, f: usize, file: &SourceFile, name: &str) {
     st.encoding = Some(decoded.encoding);
     st.had_bom = decoded.had_bom;
     let text = decoded.text;
-    match parse(&text) {
+    match xml::parse_wsdl_or_xsd(&text) {
         Ok(doc) => {
             let root = doc.root_element();
             let ns = root.tag_name().namespace().unwrap_or("");
@@ -312,12 +302,8 @@ fn load(w: &mut Walk, f: usize, file: &SourceFile, name: &str) {
         }
         Err(e) => {
             st.kind = FileKind::Unreadable;
-            let p = e.pos();
             w.diags.push(err(
-                Some(TextPos {
-                    line: p.row,
-                    column: p.col,
-                }),
+                Some(e.pos().into()),
                 format!("{name}: not well-formed XML: {e}"),
             ));
         }
@@ -330,7 +316,7 @@ fn scan(w: &mut Walk, f: usize, name: &str) {
     let Some(text) = w.files[f].text.take() else {
         return;
     };
-    if let Ok(doc) = parse(&text) {
+    if let Ok(doc) = xml::parse_wsdl_or_xsd(&text) {
         let lines = LineIndex::new(&text);
         let root = doc.root_element();
         match w.files[f].kind {

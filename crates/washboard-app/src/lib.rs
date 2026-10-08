@@ -21,6 +21,8 @@ mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
 #[cfg(target_os = "macos")]
+mod sheets;
+#[cfg(target_os = "macos")]
 mod sidebar;
 #[cfg(target_os = "macos")]
 mod table;
@@ -40,6 +42,10 @@ pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
 pub use panes::{FakeResponse, Issue, IssuesBar, RESPONSE_TABS, ResponsePane, sample_issues};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
+#[cfg(target_os = "macos")]
+pub use sheets::{
+    NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
+};
 #[cfg(target_os = "macos")]
 pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]

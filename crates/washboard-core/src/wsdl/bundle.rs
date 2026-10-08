@@ -22,11 +22,11 @@ use crate::model::{QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::soap::XSD_NS;
 
 use super::defs::{Definitions, Direction, Operation, PartContent, Protocol, Style};
-use super::graph::{FileKind, Owner, RefKind, Walk, parse};
+use super::graph::{FileKind, Owner, RefKind, Walk};
 use super::source::percent_encode_path;
 use super::text::{Edit, splice};
 use crate::diag::LineIndex;
-use crate::xml::{declared_encoding, escape_attr, start_tag_at};
+use crate::xml::{declared_encoding, escape_attr, parse_wsdl_or_xsd, start_tag_at};
 
 /// URI prefix of supplied files inside the bundle; the rest is the percent-encoded
 /// project-relative path.
@@ -395,7 +395,7 @@ fn extract_inline(
     range: std::ops::Range<usize>,
     mut edits: Vec<Edit>,
 ) -> Option<String> {
-    let doc = parse(src).ok()?;
+    let doc = parse_wsdl_or_xsd(src).ok()?;
     let el = doc
         .descendants()
         .find(|n| n.is_element() && n.range() == range)?;
@@ -441,7 +441,7 @@ fn extract_inline(
 }
 
 fn global_elements(text: &str) -> Vec<String> {
-    let Ok(doc) = parse(text) else {
+    let Ok(doc) = parse_wsdl_or_xsd(text) else {
         return Vec::new();
     };
     doc.root_element()

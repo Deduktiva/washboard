@@ -14,6 +14,16 @@ pub struct TextPos {
     pub column: u32,
 }
 
+impl From<roxmltree::TextPos> for TextPos {
+    /// roxmltree counts the same way: 1-based lines and char columns.
+    fn from(p: roxmltree::TextPos) -> Self {
+        TextPos {
+            line: p.row,
+            column: p.col,
+        }
+    }
+}
+
 /// A range in a text document, in [`TextPos`] coordinates. `end` is exclusive: the span
 /// `1:5..1:8` covers columns 5, 6 and 7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
