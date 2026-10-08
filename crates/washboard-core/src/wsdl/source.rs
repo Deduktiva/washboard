@@ -413,12 +413,19 @@ pub(crate) fn layout(files: &[SourceFile]) -> Vec<LayoutEntry> {
         .map(|f| {
             let segs = segments(&f.path);
             // Leading ".." segments of relative in-memory paths cannot be expressed inside
-            // the project folder; they are kept as plain names.
+            // the project folder; they are kept as plain names. Other names starting with
+            // "." are reserved there (`Project::create` rejects them) and lose the dot: files
+            // from two folder trees keep their full paths, which may pass through a hidden
+            // folder such as a temp dir or `~/.config`.
             let dest = segs
                 .get(common..)
                 .unwrap_or(&[])
                 .iter()
-                .map(|s| if *s == ".." { "_up" } else { s })
+                .map(|s| match s.strip_prefix('.') {
+                    Some(".") => "_up".to_owned(),
+                    Some(rest) => format!("_{rest}"),
+                    None => (*s).to_owned(),
+                })
                 .collect::<Vec<_>>()
                 .join("/");
             LayoutEntry {
@@ -504,6 +511,22 @@ mod tests {
         assert_eq!(l[1].dest, "xsd/a.xsd");
         let single = layout(&[SourceFile::new("/x/S.wsdl", "")]);
         assert_eq!(single[0].dest, "S.wsdl");
+    }
+
+    #[test]
+    fn layout_drops_leading_dots() {
+        let files = [
+            SourceFile::new("/tmp/.tmpA1/svc/Svc.wsdl", ""),
+            SourceFile::new("/home/u/.config/.a.xsd", ""),
+        ];
+        let l = layout(&files);
+        assert_eq!(l[0].dest, "tmp/_tmpA1/svc/Svc.wsdl");
+        assert_eq!(l[1].dest, "home/u/_config/_a.xsd");
+        let relative = layout(&[
+            SourceFile::new("../x/S.wsdl", ""),
+            SourceFile::new("y.xsd", ""),
+        ]);
+        assert_eq!(relative[0].dest, "_up/x/S.wsdl");
     }
 
     #[test]
