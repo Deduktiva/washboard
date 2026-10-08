@@ -248,6 +248,7 @@ impl ResponsePane {
             .and_then(|v| v.downcast::<NSTextView>().ok())
         {
             text.setEditable(false);
+            crate::editor::code_text(&text);
         }
         let history = TextTable::new(&["Sent", "Server", "Status", "Duration"], mtm);
         let tabs = NSTabView::new(mtm);

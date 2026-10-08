@@ -282,6 +282,7 @@ fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
     scroll.setAutohidesScrollers(true);
     if let Some(text) = text_view(&scroll) {
         text.setEditable(false);
+        crate::editor::code_text(&text);
     }
     scroll
 }
