@@ -1,8 +1,8 @@
 //! The issues bar under the editor and the response pane below it (PLAN §8).
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
@@ -11,29 +11,17 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString, ns_string};
 
+use washboard_ui_model::Issue;
+
 use crate::editor::EditorController;
 use crate::table::TextTable;
-
-/// A diagnostic as the issues bar lists it.
-#[derive(Debug, Clone)]
-pub struct Issue {
-    /// 1-based.
-    pub line: usize,
-    pub message: String,
-}
-
-/// Matches the sample request: line 6 holds `<cus:customerId>?</cus:customerId>`.
-pub fn sample_issues() -> Vec<Issue> {
-    vec![Issue {
-        line: 6,
-        message: "'customerId': '?' is not a valid xs:long".into(),
-    }]
-}
 
 #[derive(Debug)]
 pub struct IssuesIvars {
     editor: Retained<EditorController>,
     table: Retained<TextTable>,
+    /// The listed issues, in the table's order.
+    issues: RefCell<Vec<Issue>>,
     summary: OnceCell<Retained<NSTextField>>,
     view: OnceCell<Retained<NSStackView>>,
 }
@@ -67,6 +55,7 @@ impl IssuesBar {
         let this = Self::alloc(mtm).set_ivars(IssuesIvars {
             editor: editor.retain(),
             table,
+            issues: RefCell::new(Vec::new()),
             summary: OnceCell::new(),
             view: OnceCell::new(),
         });
@@ -93,18 +82,11 @@ impl IssuesBar {
         let header = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&header), mtm);
         header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
 
-        let editor = this.ivars().editor.clone();
-        this.ivars().table.on_click({
-            let issues_table = this.ivars().table.clone();
-            move |row| {
-                // Click selects the line; the line number is the row's first column.
-                let line = issues_table
-                    .rows()
-                    .get(row)
-                    .and_then(|r| r.first()?.parse().ok());
-                if let Some(line) = line {
-                    editor.select_line(line);
-                }
+        // The table belongs to this bar: a strong reference back would be a cycle.
+        let bar = Weak::from(&*this);
+        this.ivars().table.on_click(move |row| {
+            if let Some(bar) = bar.load() {
+                bar.reveal_issue(row);
             }
         });
         let list: Retained<NSView> = Retained::into_super(this.ivars().table.view().retain());
@@ -125,11 +107,20 @@ impl IssuesBar {
         &self.ivars().table
     }
 
-    pub fn set_issues(&self, issues: &[Issue]) {
-        let summary = match issues.len() {
-            0 => "No issues".to_owned(),
-            1 => "⚠ 1 error".to_owned(),
-            n => format!("⚠ {n} errors"),
+    /// Lists the editor's issues, marks their lines in the ruler and underlines their ranges
+    /// (`DiagnosticsChanged`).
+    pub fn set_issues(&self, issues: Vec<Issue>) {
+        let errors = issues.iter().filter(|i| i.is_error()).count();
+        let warnings = issues.len() - errors;
+        let plural = |n: usize, what: &str| match n {
+            1 => format!("1 {what}"),
+            n => format!("{n} {what}s"),
+        };
+        let summary = match (errors, warnings) {
+            (0, 0) => "No issues".to_owned(),
+            (e, 0) => format!("⚠ {}", plural(e, "error")),
+            (0, w) => plural(w, "warning"),
+            (e, w) => format!("⚠ {}, {}", plural(e, "error"), plural(w, "warning")),
         };
         if let Some(label) = self.ivars().summary.get() {
             label.setStringValue(&NSString::from_str(&summary));
@@ -137,13 +128,42 @@ impl IssuesBar {
         self.ivars().table.set_rows(
             issues
                 .iter()
-                .map(|i| vec![i.line.to_string(), i.message.clone()])
+                .map(|i| {
+                    let line = i.line.map_or_else(|| "—".to_owned(), |l| l.to_string());
+                    vec![line, i.message.clone()]
+                })
                 .collect(),
         );
-        self.ivars()
-            .editor
-            .ruler()
-            .set_error_lines(issues.iter().map(|i| i.line).collect());
+        let editor = &self.ivars().editor;
+        let errors = issues.iter().filter(|i| i.is_error());
+        editor.ruler().set_error_lines(
+            errors
+                .clone()
+                .filter_map(|i| i.line)
+                .map(|l| l as usize)
+                .collect(),
+        );
+        editor.set_underlines(errors.filter_map(|i| i.range.clone()).collect());
+        *self.ivars().issues.borrow_mut() = issues;
+    }
+
+    /// Shows the list if it was hidden (`ShowIssues`).
+    pub fn reveal(&self) {
+        self.ivars().table.view().setHidden(false);
+    }
+
+    /// A click on row `row`: selects the issue's range, else its line.
+    pub fn reveal_issue(&self, row: usize) {
+        let Some(issue) = self.ivars().issues.borrow().get(row).cloned() else {
+            return;
+        };
+        let editor = &self.ivars().editor;
+        match (issue.range, issue.line) {
+            (Some(range), _) if !range.is_empty() => editor.select_range(range),
+            (_, Some(line)) => editor.select_line(line as usize),
+            (Some(range), None) => editor.select_range(range),
+            (None, None) => {}
+        }
     }
 }
 

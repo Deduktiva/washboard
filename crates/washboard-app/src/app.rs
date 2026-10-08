@@ -413,6 +413,16 @@ impl AppDelegate {
                     controller.editor().recolor(range);
                 }
             }
+            Event::DiagnosticsChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_issues();
+                }
+            }
+            Event::ShowIssues { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.issues().reveal();
+                }
+            }
             Event::EditedChanged { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.show_edited();
@@ -439,6 +449,7 @@ impl AppDelegate {
         controller.sidebar().reload();
         controller.reload_servers();
         controller.editor().show_model_text();
+        controller.show_issues();
         controller.show_edited();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };

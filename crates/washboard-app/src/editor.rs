@@ -20,11 +20,12 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_clas
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSLayoutManager, NSResponder, NSRulerOrientation, NSRulerView,
-    NSScrollView, NSStringDrawing, NSTextDelegate, NSTextView, NSTextViewDelegate, NSView,
+    NSScrollView, NSStringDrawing, NSTextDelegate, NSTextView, NSTextViewDelegate,
+    NSUnderlineColorAttributeName, NSUnderlineStyle, NSUnderlineStyleAttributeName, NSView,
 };
 use objc2_foundation::{
-    NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize,
-    NSString,
+    NSDictionary, NSNotification, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect,
+    NSSize, NSString,
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
 use washboard_ui_model::ProjectKey;
@@ -388,6 +389,43 @@ impl EditorController {
         *self.ivars().text.borrow_mut() = text.to_owned();
         self.update_line_starts(text);
         self.highlight(text, 0..text.len());
+    }
+
+    /// Selects the UTF-16 range `range`, clamped to the text, and scrolls to it.
+    pub fn select_range(&self, range: Range<usize>) {
+        let len = self.text_view().string().length();
+        let start = range.start.min(len);
+        let range = NSRange::new(start, range.end.clamp(start, len) - start);
+        self.text_view().setSelectedRange(range);
+        self.text_view().scrollRangeToVisible(range);
+    }
+
+    /// Underlines the UTF-16 ranges `ranges` as errors, replacing the previous underlines. An
+    /// empty range marks the character it points at. Temporary attributes, like the colours.
+    pub fn set_underlines(&self, ranges: Vec<Range<usize>>) {
+        let layout = self.layout_manager();
+        let len = self.text_view().string().length();
+        // SAFETY: immutable AppKit constants.
+        let (style, color) =
+            unsafe { (NSUnderlineStyleAttributeName, NSUnderlineColorAttributeName) };
+        for key in [style, color] {
+            layout.removeTemporaryAttribute_forCharacterRange(key, NSRange::new(0, len));
+        }
+        let single = NSNumber::new_isize(NSUnderlineStyle::Single.0);
+        let orange = NSColor::systemOrangeColor();
+        for range in ranges {
+            let start = range.start.min(len);
+            let end = range.end.max(start + 1).min(len);
+            if end <= start {
+                continue;
+            }
+            let range = NSRange::new(start, end - start);
+            // SAFETY: the underline style is an `NSNumber`, the underline colour an `NSColor`.
+            unsafe {
+                layout.addTemporaryAttribute_value_forCharacterRange(style, &single, range);
+                layout.addTemporaryAttribute_value_forCharacterRange(color, &orange, range);
+            }
+        }
     }
 
     /// Selects line `line` (1-based) and scrolls to it; used by the issues bar.

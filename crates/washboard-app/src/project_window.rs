@@ -32,7 +32,7 @@ use washboard_ui_model::{App, ModelError, ProjectKey};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
-use crate::panes::{FakeResponse, IssuesBar, ResponsePane, sample_issues};
+use crate::panes::{FakeResponse, IssuesBar, ResponsePane};
 use crate::sheets::{SettingsSheet, sample_servers};
 use crate::sidebar::SidebarController;
 
@@ -225,7 +225,8 @@ define_class!(
 
         #[unsafe(method(validateRequest:))]
         fn validate_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("Validate");
+            let key = self.key();
+            self.command("Could not validate the request", |app| app.validate(key));
         }
 
         #[unsafe(method(sendRequest:))]
@@ -394,6 +395,20 @@ impl ProjectWindowController {
         self.project_window().setDocumentEdited(edited);
     }
 
+    /// The issues bar, ruler and underlines show the editor's issues (`DiagnosticsChanged`).
+    pub fn show_issues(&self) {
+        let key = self.key();
+        let issues = self
+            .read(|app| {
+                app.project(key)
+                    .and_then(|w| w.editor())
+                    .map(|e| e.issues().to_vec())
+            })
+            .flatten()
+            .unwrap_or_default();
+        self.issues().set_issues(issues);
+    }
+
     /// The model's selected request.
     pub fn selected_request(&self) -> Option<RequestId> {
         let key = self.key();
@@ -492,7 +507,6 @@ impl ProjectWindowController {
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
         let issues = IssuesBar::new(editor, mtm);
-        issues.set_issues(&sample_issues());
         content_vc.setView(&content_pane(
             editor.view(),
             issues.view(),
