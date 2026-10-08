@@ -11,7 +11,9 @@ use crate::model::QName;
 use crate::soap::XSI_NS;
 
 use super::lex::{Construct, Lexer, RawAttr, TagInfo};
-use super::names::{NamespaceMap, is_xml_ws, split_qname, unescape_lossy, xmlns_prefix};
+use super::names::{
+    NamespaceMap, is_xml_ws, is_xml_ws_char, split_qname, unescape_lossy, xmlns_prefix,
+};
 
 /// Result of [`cursor_context`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,7 +280,7 @@ fn resolve_path(text: &str, stack: &[Frame]) -> Vec<PathElement> {
             (namespaces.resolve_attribute(&text[attr.clone()]).as_ref() == Some(&xsi_type)).then(
                 || {
                     let raw = unescape_lossy(&text[value.clone()]);
-                    let raw = raw.trim_matches(|c: char| c.is_ascii() && is_xml_ws(c as u8));
+                    let raw = raw.trim_matches(is_xml_ws_char);
                     XsiType {
                         raw: raw.to_owned(),
                         name: namespaces.resolve_qname_value(raw),
