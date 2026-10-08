@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use washboard_core::diag::LineIndex;
 use washboard_core::http::{self, Exchange, SendRequest, SoapFault, detect_fault};
-use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server};
+use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
 use washboard_core::project::HistoryRecord;
 use washboard_core::validate::validate_request;
 use washboard_core::xml;
@@ -24,6 +24,9 @@ pub const LOG_CAPACITY: usize = 50;
 pub struct ResponseView {
     /// `None` if the exchange could not be stored in the history.
     pub history: Option<HistoryId>,
+    /// The server it went to; `None` if that server has been deleted since. Name it with
+    /// [`ProjectWindow::server_label`](crate::ProjectWindow::server_label).
+    pub server: Option<ServerId>,
     pub url: String,
     pub sent_at: SystemTime,
     pub duration: Option<Duration>,
@@ -44,6 +47,7 @@ impl ResponseView {
         let fault = record.response_body.as_deref().and_then(detect_fault);
         ResponseView {
             history: Some(entry.id),
+            server: entry.server_id,
             url: entry.url,
             sent_at: entry.sent_at,
             duration: entry.duration,
@@ -65,6 +69,7 @@ impl ResponseView {
         let response = exchange.response.as_ref();
         ResponseView {
             history,
+            server: Some(server.id),
             url: server.url.clone(),
             sent_at: exchange.started_at,
             duration: Some(exchange.duration),
