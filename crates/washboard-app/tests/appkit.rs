@@ -1518,13 +1518,14 @@ mod checks {
             username: "bob".into(),
         };
         assert_eq!(sheet.servers()[1].auth, basic);
-        let password = |ctx: &Ctx| {
+        // By project key, which changes when the project is reopened.
+        let password = |ctx: &Ctx, key: ProjectKey| {
             ctx.delegate
                 .read(|app| app.server_password(key, server.id))
                 .and_then(Result::ok)
                 .flatten()
         };
-        assert_eq!(password(ctx).as_deref(), Some("hunter2"));
+        assert_eq!(password(ctx, key).as_deref(), Some("hunter2"));
         assert_eq!(
             sheet.password_field().stringValue().to_string(),
             "",
@@ -1551,7 +1552,7 @@ mod checks {
         sheet.select(1);
         assert_eq!(sheet.servers()[1].auth, basic);
         assert_eq!(sheet.user_field().stringValue().to_string(), "bob");
-        assert_eq!(password(ctx).as_deref(), Some("hunter2"));
+        assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
         // SAFETY: `done:` takes the sender.
         let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
         wait_until("the sheet to end", || window.attachedSheet().is_none());
