@@ -8,17 +8,21 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSScrollView, NSTableColumn,
-    NSTableColumnResizingOptions, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
-    NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSLineBreakMode, NSScrollView,
+    NSTableColumn, NSTableColumnResizingOptions, NSTableView, NSTableViewDataSource,
+    NSTableViewDelegate, NSTextAlignment, NSTextField, NSView,
 };
 use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSString};
+
+use crate::layout;
 
 type OnClick = Box<dyn Fn(usize)>;
 
 pub struct TableIvars {
     columns: usize,
     rows: RefCell<Vec<Vec<String>>>,
+    /// Columns fixed by `fix_column_width`, whose text is centred.
+    fixed: RefCell<Vec<usize>>,
     on_click: RefCell<Option<OnClick>>,
     table: OnceCell<Retained<NSTableView>>,
     scroll: OnceCell<Retained<NSScrollView>>,
@@ -73,8 +77,14 @@ define_class!(
             let rows = self.ivars().rows.borrow();
             let text = usize::try_from(row).ok().and_then(|r| rows.get(r)?.get(index));
             text.map(|text| {
-                let label = NSTextField::labelWithString(&NSString::from_str(text), self.mtm());
-                Retained::into_super(Retained::into_super(label))
+                let mtm = self.mtm();
+                let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+                layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+                if self.ivars().fixed.borrow().contains(&index) {
+                    label.setAlignment(NSTextAlignment::Center);
+                }
+                let cell = layout::cell(&label, Some(&label), mtm);
+                Retained::into_super(cell)
             })
         }
     }
@@ -96,6 +106,7 @@ impl TextTable {
         let this = Self::alloc(mtm).set_ivars(TableIvars {
             columns: titles.len().max(1),
             rows: RefCell::new(Vec::new()),
+            fixed: RefCell::new(Vec::new()),
             on_click: RefCell::new(None),
             table: OnceCell::new(),
             scroll: OnceCell::new(),
@@ -147,8 +158,10 @@ impl TextTable {
         self.ivars().scroll.get().expect("set in new()")
     }
 
-    /// Fixes `column` at `width`, e.g. a narrow ✓/✗ column; the others share the rest.
+    /// Fixes `column` at `width` and centres its text, e.g. a narrow ✓/✗ column; the others
+    /// share the rest.
     pub fn fix_column_width(&self, column: usize, width: f64) {
+        self.ivars().fixed.borrow_mut().push(column);
         if let Some(c) = self.table().tableColumns().iter().nth(column) {
             c.setMinWidth(width);
             c.setMaxWidth(width);

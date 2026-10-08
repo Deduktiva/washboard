@@ -212,6 +212,7 @@ impl ImportSheetController {
         let references = TextTable::new(&["", "Reference", "Resolved to"], mtm);
         let messages = TextTable::new(&["", "Message"], mtm);
         let status = NSTextField::labelWithString(ns_string!(""), mtm);
+        layout::truncating(&status, NSLineBreakMode::ByTruncatingTail);
         let cancel = button("Cancel", sel!(cancel:));
         cancel.setKeyEquivalent(ns_string!("\u{1b}"));
         let finish = button(

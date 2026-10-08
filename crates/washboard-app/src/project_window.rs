@@ -680,12 +680,25 @@ fn toolbar_item(identifier: &NSString, mtm: MainThreadMarker) -> Option<Retained
 }
 
 fn server_popup(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
-    NSPopUpButton::initWithFrame_pullsDown(
+    let popup = NSPopUpButton::initWithFrame_pullsDown(
         NSPopUpButton::alloc(mtm),
         NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(140.0, 24.0)),
         false,
-    )
+    );
+    // A popup is as wide as its longest item; a long server name would crowd out the other
+    // toolbar items. The menu still shows names in full.
+    let width = popup.widthAnchor();
+    width
+        .constraintGreaterThanOrEqualToConstant(SERVER_POPUP_MIN_WIDTH)
+        .setActive(true);
+    width
+        .constraintLessThanOrEqualToConstant(SERVER_POPUP_MAX_WIDTH)
+        .setActive(true);
+    popup
 }
+
+const SERVER_POPUP_MIN_WIDTH: f64 = 120.0;
+const SERVER_POPUP_MAX_WIDTH: f64 = 220.0;
 
 fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NSButton> {
     // SAFETY: no target: the action goes up the responder chain to the window controller,

@@ -10,13 +10,15 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSColor,
     NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
-    NSScrollView, NSStackView, NSTableColumn, NSTableView, NSTableViewDataSource,
+    NSScrollView, NSStackView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource,
     NSTableViewDelegate, NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
     NSWindow, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
+
+use crate::layout;
 
 /// A recent project as the welcome window and File ▸ Open Recent list it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -291,20 +293,21 @@ fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTa
     (scroll, table)
 }
 
-fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSStackView> {
+fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
     let name = NSTextField::labelWithString(&NSString::from_str(&project.name), mtm);
     let path = NSTextField::labelWithString(&NSString::from_str(&project.path), mtm);
     path.setFont(Some(&NSFont::systemFontOfSize(11.0)));
     path.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
     // Long paths keep both ends: the folder's name is at the end.
-    path.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
+    layout::truncating(&path, NSLineBreakMode::ByTruncatingMiddle);
     let views = [
-        Retained::into_super(Retained::into_super(name)),
+        Retained::into_super(Retained::into_super(name.clone())),
         Retained::into_super(Retained::into_super(path)),
     ];
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::Leading);
     stack.setSpacing(0.0);
-    stack
+    layout::cell(&stack, Some(&name), mtm)
 }

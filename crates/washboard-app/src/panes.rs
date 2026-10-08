@@ -75,6 +75,8 @@ impl IssuesBar {
         let summary = NSTextField::labelWithString(ns_string!(""), mtm);
         summary.setFont(Some(&NSFont::systemFontOfSize(11.0)));
         summary.setTextColor(Some(&NSColor::systemOrangeColor()));
+        // A long first message keeps the Hide button in view.
+        layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
         // SAFETY: this bar owns the button through its view, so it outlives the button's weak
         // target reference.
         let hide = unsafe {
