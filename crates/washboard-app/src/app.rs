@@ -370,6 +370,31 @@ impl AppDelegate {
                 self.welcome().window().orderOut(None);
             }
             Event::RecentProjectsChanged => self.recent_projects_changed(),
+            Event::SidebarChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.sidebar().reload();
+                }
+            }
+            Event::SelectionChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.sidebar().show_selection(None);
+                }
+            }
+            Event::BeginRename { project, request } => {
+                if let Some(controller) = self.project(project) {
+                    controller.sidebar().begin_rename(request);
+                }
+            }
+            Event::ServersChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.reload_servers();
+                }
+            }
+            Event::ServerSelectionChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_server_selection();
+                }
+            }
             // Bound by the later steps of WP-APP-INTEGRATION.
             _ => {}
         }
@@ -386,9 +411,12 @@ impl AppDelegate {
             return;
         };
         let controller = ProjectWindowController::new(key, &name, &path, self.mtm());
+        self.ivars().projects.borrow_mut().push(controller.clone());
+        // The model announces a new project once; its state so far is read here.
+        controller.sidebar().reload();
+        controller.reload_servers();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };
-        self.ivars().projects.borrow_mut().push(controller);
     }
 
     fn project_closed(&self, key: ProjectKey) {
@@ -424,13 +452,13 @@ impl AppDelegate {
 }
 
 /// Runs `f` with the app delegate, if it is ours (it is, unless a test installed another).
-pub(crate) fn with_delegate(mtm: MainThreadMarker, f: impl FnOnce(&AppDelegate)) {
-    if let Some(delegate) = NSApplication::sharedApplication(mtm).delegate() {
-        let delegate: &AnyObject = delegate.as_ref();
-        if let Some(delegate) = delegate.downcast_ref::<AppDelegate>() {
-            f(delegate);
-        }
-    }
+pub(crate) fn with_delegate<R>(
+    mtm: MainThreadMarker,
+    f: impl FnOnce(&AppDelegate) -> R,
+) -> Option<R> {
+    let delegate = NSApplication::sharedApplication(mtm).delegate()?;
+    let delegate: &AnyObject = delegate.as_ref();
+    delegate.downcast_ref::<AppDelegate>().map(f)
 }
 
 /// Creates the shared application, its main menu and a new delegate with its model.

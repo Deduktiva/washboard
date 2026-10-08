@@ -1,23 +1,30 @@
 //! The project window's source list: REQUESTS and OPERATIONS (service › port › operation),
 //! with unsaved (•) and invalid (⚠) markers on requests and inline rename.
 //!
-//! `NSOutlineView` identifies rows by object pointer and does not retain its items, so every
-//! node is an Objective-C object (`SidebarNode`) owned by the tree in `SidebarController`.
+//! The rows are the model's [`Sidebar`]; this controller only draws them and turns selection,
+//! rename and double-clicks into model commands. `NSOutlineView` identifies rows by object
+//! pointer and does not retain its items, so every node is an Objective-C object
+//! (`SidebarNode`) owned by the tree in `SidebarController`, rebuilt on `SidebarChanged`.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::HashSet;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute,
     NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView,
-    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate,
+    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
     NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
-    NSArray, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
+    NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
 };
+use washboard_core::model::{OperationRef, RequestId};
+use washboard_ui_model::{App, ModelError, ProjectKey, SchemaState, Sidebar};
+
+use crate::app::with_delegate;
 
 /// What a sidebar row stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,47 +35,33 @@ pub enum NodeKind {
     Service,
     Port,
     Operation,
+    /// Stands in for the operations while the WSDL loads, or says why it could not be.
+    Placeholder,
 }
 
-/// Sample data shaped like the core types until `washboard-ui-model` supplies the tree.
-#[derive(Debug, Clone)]
-pub struct SampleRequest {
-    pub name: &'static str,
-    pub unsaved: bool,
-    pub invalid: bool,
+#[derive(Debug)]
+enum NodeData {
+    Group,
+    Request {
+        id: RequestId,
+        dirty: bool,
+        invalid: bool,
+    },
+    Service,
+    Port,
+    Operation {
+        operation: OperationRef,
+        unsupported: Option<String>,
+    },
+    Placeholder,
 }
-
-pub const SAMPLE_REQUESTS: &[SampleRequest] = &[
-    SampleRequest {
-        name: "GetCustomer 1",
-        unsaved: false,
-        invalid: false,
-    },
-    SampleRequest {
-        name: "GetCustomer 2",
-        unsaved: true,
-        invalid: false,
-    },
-    SampleRequest {
-        name: "CreateOrder 1",
-        unsaved: false,
-        invalid: true,
-    },
-];
-
-/// service › port › operations.
-pub const SAMPLE_OPERATIONS: &[(&str, &str, &[&str])] = &[(
-    "CustomerService",
-    "CustomerPort",
-    &["GetCustomer", "CreateOrder", "ListOrders"],
-)];
 
 #[derive(Debug)]
 pub struct NodeIvars {
-    kind: NodeKind,
-    title: RefCell<String>,
-    unsaved: bool,
-    invalid: bool,
+    data: NodeData,
+    title: String,
+    /// Names the node across rebuilds, to keep collapsed groups collapsed.
+    path: String,
     children: Vec<Retained<SidebarNode>>,
 }
 
@@ -88,27 +81,16 @@ define_class!(
 
 impl SidebarNode {
     fn new(
-        kind: NodeKind,
+        data: NodeData,
         title: &str,
-        children: Vec<Retained<SidebarNode>>,
-        mtm: MainThreadMarker,
-    ) -> Retained<Self> {
-        Self::with_markers(kind, title, false, false, children, mtm)
-    }
-
-    fn with_markers(
-        kind: NodeKind,
-        title: &str,
-        unsaved: bool,
-        invalid: bool,
+        path: String,
         children: Vec<Retained<SidebarNode>>,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(NodeIvars {
-            kind,
-            title: RefCell::new(title.to_owned()),
-            unsaved,
-            invalid,
+            data,
+            title: title.to_owned(),
+            path,
             children,
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -116,40 +98,140 @@ impl SidebarNode {
     }
 
     pub fn kind(&self) -> NodeKind {
-        self.ivars().kind
+        match self.ivars().data {
+            NodeData::Group => NodeKind::Group,
+            NodeData::Request { .. } => NodeKind::Request,
+            NodeData::Service => NodeKind::Service,
+            NodeData::Port => NodeKind::Port,
+            NodeData::Operation { .. } => NodeKind::Operation,
+            NodeData::Placeholder => NodeKind::Placeholder,
+        }
     }
 
     pub fn title(&self) -> String {
-        self.ivars().title.borrow().clone()
+        self.ivars().title.clone()
     }
 
     pub fn children(&self) -> &[Retained<SidebarNode>] {
         &self.ivars().children
     }
+
+    /// The request a request row stands for.
+    pub fn request(&self) -> Option<RequestId> {
+        match self.ivars().data {
+            NodeData::Request { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The (unsaved, invalid) markers of a request row.
+    pub fn markers(&self) -> (bool, bool) {
+        match self.ivars().data {
+            NodeData::Request { dirty, invalid, .. } => (dirty, invalid),
+            _ => (false, false),
+        }
+    }
+
+    /// The operation an operation row stands for.
+    pub fn operation(&self) -> Option<&OperationRef> {
+        match &self.ivars().data {
+            NodeData::Operation { operation, .. } => Some(operation),
+            _ => None,
+        }
+    }
+
+    /// Why an operation row can't be used, if it can't.
+    pub fn unsupported(&self) -> Option<&str> {
+        match &self.ivars().data {
+            NodeData::Operation { unsupported, .. } => unsupported.as_deref(),
+            _ => None,
+        }
+    }
 }
 
-fn sample_tree(mtm: MainThreadMarker) -> Vec<Retained<SidebarNode>> {
-    let requests = SAMPLE_REQUESTS
+/// The REQUESTS and OPERATIONS groups for `sidebar`; `placeholder` replaces an empty
+/// OPERATIONS group.
+fn tree(
+    sidebar: &Sidebar,
+    placeholder: Option<&str>,
+    mtm: MainThreadMarker,
+) -> Vec<Retained<SidebarNode>> {
+    let requests = sidebar
+        .requests
         .iter()
         .map(|r| {
-            SidebarNode::with_markers(NodeKind::Request, r.name, r.unsaved, r.invalid, vec![], mtm)
+            let data = NodeData::Request {
+                id: r.id,
+                dirty: r.dirty,
+                invalid: r.invalid,
+            };
+            SidebarNode::new(data, &r.name, String::new(), vec![], mtm)
         })
         .collect();
-    let services = SAMPLE_OPERATIONS
+    let mut services: Vec<_> = sidebar
+        .services
         .iter()
-        .map(|(service, port, operations)| {
-            let operations = operations
+        .map(|service| {
+            let ports = service
+                .ports
                 .iter()
-                .map(|o| SidebarNode::new(NodeKind::Operation, o, vec![], mtm))
+                .map(|port| {
+                    let operations = port
+                        .operations
+                        .iter()
+                        .map(|o| {
+                            let data = NodeData::Operation {
+                                operation: o.operation.clone(),
+                                unsupported: o.unsupported.clone(),
+                            };
+                            SidebarNode::new(data, o.name(), String::new(), vec![], mtm)
+                        })
+                        .collect();
+                    let path = format!("port:{}/{}", service.name, port.name);
+                    SidebarNode::new(NodeData::Port, &port.name, path, operations, mtm)
+                })
                 .collect();
-            let port = SidebarNode::new(NodeKind::Port, port, operations, mtm);
-            SidebarNode::new(NodeKind::Service, service, vec![port], mtm)
+            let path = format!("service:{}", service.name);
+            SidebarNode::new(NodeData::Service, &service.name, path, ports, mtm)
         })
         .collect();
+    if services.is_empty()
+        && let Some(placeholder) = placeholder
+    {
+        let node = SidebarNode::new(
+            NodeData::Placeholder,
+            placeholder,
+            String::new(),
+            vec![],
+            mtm,
+        );
+        services.push(node);
+    }
     vec![
-        SidebarNode::new(NodeKind::Group, "REQUESTS", requests, mtm),
-        SidebarNode::new(NodeKind::Group, "OPERATIONS", services, mtm),
+        SidebarNode::new(
+            NodeData::Group,
+            "REQUESTS",
+            "group:requests".into(),
+            requests,
+            mtm,
+        ),
+        SidebarNode::new(
+            NodeData::Group,
+            "OPERATIONS",
+            "group:ops".into(),
+            services,
+            mtm,
+        ),
     ]
+}
+
+/// What the OPERATIONS group says while it has no operations.
+fn placeholder(schema: &SchemaState) -> String {
+    match schema {
+        SchemaState::Loading => "Loading the WSDL…".into(),
+        SchemaState::Failed(message) => format!("The WSDL could not be loaded: {message}"),
+        SchemaState::Ready(_) => "The WSDL has no services".into(),
+    }
 }
 
 /// The node behind an outline item. Every item the outline view hands back is one of ours.
@@ -199,8 +281,14 @@ define_class!(
 
 #[derive(Debug)]
 pub struct SidebarIvars {
-    roots: Vec<Retained<SidebarNode>>,
+    key: ProjectKey,
+    roots: RefCell<Vec<Retained<SidebarNode>>>,
     outline: OnceCell<Retained<SidebarOutlineView>>,
+    /// Set while the controller changes the outline itself, so its own selection changes
+    /// don't go back to the model as commands.
+    applying: Cell<bool>,
+    /// A reload that arrived while a name was being edited; it would have ended the edit.
+    stale: Cell<bool>,
 }
 
 define_class!(
@@ -226,13 +314,14 @@ define_class!(
             item: Option<&AnyObject>,
         ) -> NSInteger {
             match item {
-                None => self.ivars().roots.len() as NSInteger,
+                None => self.ivars().roots.borrow().len() as NSInteger,
                 Some(item) => node(item).children().len() as NSInteger,
             }
         }
 
         // SAFETY: the signature matches `outlineView:child:ofItem:`; the child is retained by
-        // the tree, which outlives the outline view's use of it.
+        // the tree, which outlives the outline view's use of it (a rebuild reloads the
+        // outline view before the old tree goes).
         #[unsafe(method_id(outlineView:child:ofItem:))]
         fn child(
             &self,
@@ -240,12 +329,12 @@ define_class!(
             index: NSInteger,
             item: Option<&AnyObject>,
         ) -> Retained<AnyObject> {
-            let children = match item {
-                None => &self.ivars().roots[..],
-                Some(item) => node(item).children(),
-            };
             let index = usize::try_from(index).expect("AppKit asks for a valid index");
-            Retained::into_super(Retained::into_super(children[index].clone()))
+            let child = match item {
+                None => self.ivars().roots.borrow()[index].clone(),
+                Some(item) => node(item).children()[index].clone(),
+            };
+            Retained::into_super(Retained::into_super(child))
         }
 
         // SAFETY: the signature matches `outlineView:isItemExpandable:`.
@@ -265,27 +354,15 @@ define_class!(
         // SAFETY: the signature matches `controlTextDidEndEditing:`.
         #[unsafe(method(controlTextDidEndEditing:))]
         fn did_end_editing(&self, notification: &NSNotification) {
-            // Rename is local until `washboard-ui-model` takes the command.
-            let Some(field) = notification.object() else {
-                return;
-            };
-            let Some(field) = field.downcast_ref::<NSTextField>() else {
-                return;
-            };
-            let Some(outline) = self.outline() else {
-                return;
-            };
-            let view: &NSView = field;
-            let row = outline.rowForView(view);
-            let Some(item) = outline.itemAtRow(row) else {
-                return;
-            };
-            let name = field.stringValue().to_string();
-            if !name.trim().is_empty() {
-                *node(&item).ivars().title.borrow_mut() = name;
+            let field = notification
+                .object()
+                .and_then(|f| f.downcast::<NSTextField>().ok());
+            if let Some(field) = field {
+                self.rename_ended(&field);
             }
-            // SAFETY: `item` is one of the tree's nodes.
-            unsafe { outline.reloadItem(Some(&item)) };
+            if self.ivars().stale.replace(false) {
+                self.reload_now();
+            }
         }
     }
 
@@ -313,21 +390,48 @@ define_class!(
         fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
             matches!(node(item).kind(), NodeKind::Request | NodeKind::Operation)
         }
+
+        // SAFETY: the signature matches `outlineViewSelectionDidChange:`.
+        #[unsafe(method(outlineViewSelectionDidChange:))]
+        fn selection_did_change(&self, _notification: &NSNotification) {
+            if !self.ivars().applying.get() {
+                self.selection_changed_by_user();
+            }
+        }
+    }
+
+    impl SidebarController {
+        // SAFETY: the signature matches an action method; the outline view's double action.
+        #[unsafe(method(sidebarDoubleClicked:))]
+        fn double_clicked(&self, _sender: Option<&AnyObject>) {
+            let Some(outline) = self.outline() else {
+                return;
+            };
+            let Some(item) = outline.itemAtRow(outline.clickedRow()) else {
+                return;
+            };
+            if let Some(operation) = node(&item).operation() {
+                self.new_request(Some(operation.clone()));
+            }
+        }
     }
 );
 
 impl SidebarController {
-    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
+    pub fn new(key: ProjectKey, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(SidebarIvars {
-            roots: sample_tree(mtm),
+            key,
+            roots: RefCell::new(Vec::new()),
             outline: OnceCell::new(),
+            applying: Cell::new(false),
+            stale: Cell::new(false),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         unsafe { msg_send![super(this), init] }
     }
 
-    pub fn roots(&self) -> &[Retained<SidebarNode>] {
-        &self.ivars().roots
+    pub fn roots(&self) -> Vec<Retained<SidebarNode>> {
+        self.ivars().roots.borrow().clone()
     }
 
     /// The outline view, once `outline_view` has built it.
@@ -335,8 +439,7 @@ impl SidebarController {
         self.ivars().outline.get().map(|o| &**o)
     }
 
-    /// Builds the outline view with this controller as data source and delegate, and
-    /// expands everything.
+    /// Builds the outline view with this controller as data source and delegate.
     pub fn outline_view(&self, mtm: MainThreadMarker) -> Retained<SidebarOutlineView> {
         // SAFETY: `init` is NSOutlineView's designated initializer for code-built views.
         let outline: Retained<SidebarOutlineView> =
@@ -349,33 +452,261 @@ impl SidebarController {
         outline.setHeaderView(None);
         outline.setStyle(NSTableViewStyle::SourceList);
         // SAFETY: the project window controller owns this controller and the outline view's
-        // window, so the controller outlives the outline view's weak references to it.
+        // window, so the controller outlives the outline view's weak references to it, the
+        // target included; `sidebarDoubleClicked:` takes the sender.
         unsafe {
             outline.setDataSource(Some(ProtocolObject::from_ref(self)));
             outline.setDelegate(Some(ProtocolObject::from_ref(self)));
+            outline.setTarget(Some(self));
+            outline.setDoubleAction(Some(sel!(sidebarDoubleClicked:)));
         }
-        // SAFETY: nil expands every root item and, with `true`, all their descendants.
-        unsafe { outline.expandItem_expandChildren(None, true) };
         let _ = self.ivars().outline.set(outline.clone());
         outline
+    }
+
+    /// Redraws the rows from the model (`SidebarChanged`), keeping collapsed groups collapsed
+    /// and the selection. Waits while a name is being edited.
+    pub fn reload(&self) {
+        if self.is_editing() {
+            self.ivars().stale.set(true);
+        } else {
+            self.reload_now();
+        }
+    }
+
+    /// Whether a row's name is being edited: the window's first responder is the field
+    /// editor of a text field in the outline view.
+    pub fn is_editing(&self) -> bool {
+        let Some(outline) = self.outline() else {
+            return false;
+        };
+        let Some(responder) = outline.window().and_then(|w| w.firstResponder()) else {
+            return false;
+        };
+        let Ok(editor) = responder.downcast::<NSTextView>() else {
+            return false;
+        };
+        if !editor.isFieldEditor() {
+            return false;
+        }
+        let Some(delegate) = editor.delegate() else {
+            return false;
+        };
+        let delegate: &AnyObject = delegate.as_ref();
+        delegate
+            .downcast_ref::<NSTextField>()
+            .is_some_and(|field| outline.rowForView(field) >= 0)
+    }
+
+    fn reload_now(&self) {
+        let key = self.ivars().key;
+        let Some((sidebar, placeholder)) = with_delegate(self.mtm(), |d| {
+            d.read(|app| {
+                let window = app.project(key)?;
+                Some((window.sidebar().clone(), placeholder(window.schema())))
+            })
+        })
+        .flatten()
+        .flatten() else {
+            return;
+        };
+        let collapsed = self.collapsed_paths();
+        let selected_operation = self.selected_operation();
+        let roots = tree(&sidebar, Some(&placeholder), self.mtm());
+        let old = std::mem::replace(&mut *self.ivars().roots.borrow_mut(), roots);
+        if let Some(outline) = self.outline() {
+            self.applying(|| {
+                outline.reloadData();
+                // SAFETY: nil expands every root item and, with `true`, all their descendants.
+                unsafe { outline.expandItem_expandChildren(None, true) };
+                for row in (0..outline.numberOfRows()).rev() {
+                    let Some(item) = outline.itemAtRow(row) else {
+                        continue;
+                    };
+                    if collapsed.contains(&node(&item).ivars().path) {
+                        // SAFETY: `item` is one of the tree's nodes.
+                        unsafe { outline.collapseItem(Some(&item)) };
+                    }
+                }
+            });
+        }
+        // The outline view no longer refers to the old nodes.
+        drop(old);
+        self.show_selection(selected_operation.as_ref());
+    }
+
+    /// Selects the model's selected request (`SelectionChanged`). With no request selected,
+    /// an operation the user selected stays selected.
+    pub fn show_selection(&self, operation: Option<&OperationRef>) {
+        let key = self.ivars().key;
+        let request = with_delegate(self.mtm(), |d| {
+            d.read(|app| app.project(key).and_then(|w| w.selected_request()))
+        })
+        .flatten()
+        .flatten();
+        let Some(outline) = self.outline() else {
+            return;
+        };
+        let row = match request {
+            Some(id) => self.row_where(|n| n.request() == Some(id)),
+            None => operation
+                .or(self.selected_operation().as_ref())
+                .and_then(|op| self.row_where(|n| n.operation() == Some(op))),
+        };
+        self.applying(|| match row {
+            Some(row) => {
+                let rows = NSIndexSet::indexSetWithIndex(row as usize);
+                outline.selectRowIndexes_byExtendingSelection(&rows, false);
+                outline.scrollRowToVisible(row);
+            }
+            // SAFETY: `deselectAll:` takes any sender.
+            None => unsafe { outline.deselectAll(None) },
+        });
+    }
+
+    /// Starts inline rename of `request`'s row (`BeginRename`).
+    pub fn begin_rename(&self, request: RequestId) {
+        let (Some(outline), Some(row)) = (
+            self.outline(),
+            self.row_where(|n| n.request() == Some(request)),
+        ) else {
+            return;
+        };
+        self.applying(|| {
+            let rows = NSIndexSet::indexSetWithIndex(row as usize);
+            outline.selectRowIndexes_byExtendingSelection(&rows, false);
+        });
+        outline.editColumn_row_withEvent_select(0, row, None, true);
+    }
+
+    /// The operation selected in the outline, if an operation row is selected.
+    pub fn selected_operation(&self) -> Option<OperationRef> {
+        let outline = self.outline()?;
+        let item = outline.itemAtRow(outline.selectedRow())?;
+        node(&item).operation().cloned()
+    }
+
+    /// Project ▸ New Request: for `operation`, else the selected operation, else the model's
+    /// default.
+    pub fn new_request(&self, operation: Option<OperationRef>) {
+        let key = self.ivars().key;
+        let operation = operation.or_else(|| self.selected_operation());
+        self.command("Could not create a request", |app| {
+            let operation = match operation {
+                Some(operation) => operation,
+                None => app.default_operation(key)?,
+            };
+            app.new_request(key, &operation)
+        });
+    }
+
+    /// The first row whose node satisfies `f`.
+    fn row_where(&self, f: impl Fn(&SidebarNode) -> bool) -> Option<NSInteger> {
+        let outline = self.outline()?;
+        (0..outline.numberOfRows()).find(|&row| outline.itemAtRow(row).is_some_and(|i| f(node(&i))))
+    }
+
+    /// Paths of the expandable rows that are collapsed now.
+    fn collapsed_paths(&self) -> HashSet<String> {
+        let Some(outline) = self.outline() else {
+            return HashSet::new();
+        };
+        (0..outline.numberOfRows())
+            .filter_map(|row| outline.itemAtRow(row))
+            .filter(|item| {
+                // SAFETY: `item` is one of the tree's nodes.
+                !node(item).children().is_empty() && !unsafe { outline.isItemExpanded(Some(item)) }
+            })
+            .map(|item| node(&item).ivars().path.clone())
+            .collect()
+    }
+
+    fn applying(&self, f: impl FnOnce()) {
+        let was = self.ivars().applying.replace(true);
+        f();
+        self.ivars().applying.set(was);
+    }
+
+    fn command<R>(
+        &self,
+        title: &str,
+        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
+    }
+
+    fn selection_changed_by_user(&self) {
+        let Some(outline) = self.outline() else {
+            return;
+        };
+        let key = self.ivars().key;
+        let request = match outline.itemAtRow(outline.selectedRow()) {
+            Some(item) if node(&item).kind() == NodeKind::Operation => None,
+            Some(item) => node(&item).request(),
+            None => None,
+        };
+        self.command("Could not open the request", |app| {
+            app.select_request(key, request)
+        });
+        // If the model kept its selection (the old request could not be saved), show it.
+        self.show_selection(None);
+    }
+
+    fn rename_ended(&self, field: &NSTextField) {
+        let Some(outline) = self.outline() else {
+            return;
+        };
+        let row = outline.rowForView(field);
+        let Some(item) = outline.itemAtRow(row) else {
+            return;
+        };
+        let node = node(&item);
+        let Some(request) = node.request() else {
+            return;
+        };
+        let name = field.stringValue().to_string();
+        if name == node.title() {
+            return;
+        }
+        let key = self.ivars().key;
+        let renamed = self.command("Could not rename the request", |app| {
+            app.rename_request(key, request, &name)
+        });
+        if renamed.is_none() {
+            // The field still shows the refused name.
+            // SAFETY: `item` is one of the tree's nodes.
+            unsafe { outline.reloadItem(Some(&item)) };
+        }
     }
 
     fn row_view(&self, node: &SidebarNode) -> Retained<NSView> {
         let mtm = self.mtm();
         let title = NSString::from_str(&node.title());
-        if node.kind() == NodeKind::Group {
-            let label = NSTextField::labelWithString(&title, mtm);
-            return Retained::into_super(Retained::into_super(label));
-        }
         let name = NSTextField::labelWithString(&title, mtm);
-        if node.kind() == NodeKind::Request {
-            name.setEditable(true);
-            // SAFETY: the project window controller owns this controller and the window the
-            // field lives in, so the controller outlives the field's weak delegate reference.
-            unsafe { name.setDelegate(Some(ProtocolObject::from_ref(self))) };
+        match node.kind() {
+            NodeKind::Group => return Retained::into_super(Retained::into_super(name)),
+            NodeKind::Placeholder => {
+                name.setTextColor(Some(&NSColor::secondaryLabelColor()));
+                name.setToolTip(Some(&title));
+                return Retained::into_super(Retained::into_super(name));
+            }
+            NodeKind::Request => {
+                name.setEditable(true);
+                // SAFETY: the project window controller owns this controller and the window
+                // the field lives in, so the controller outlives the field's weak delegate
+                // reference.
+                unsafe { name.setDelegate(Some(ProtocolObject::from_ref(self))) };
+            }
+            NodeKind::Operation => {
+                if let Some(why) = node.unsupported() {
+                    name.setTextColor(Some(&NSColor::disabledControlTextColor()));
+                    name.setToolTip(Some(&NSString::from_str(why)));
+                }
+            }
+            NodeKind::Service | NodeKind::Port => {}
         }
         let mut views = vec![Retained::into_super(Retained::into_super(name))];
-        let marker = match (node.ivars().unsaved, node.ivars().invalid) {
+        let marker = match node.markers() {
             (_, true) => Some(("⚠", NSColor::systemOrangeColor())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
             (false, false) => None,
