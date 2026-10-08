@@ -13,9 +13,17 @@ mod app;
 #[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
+mod project_window;
+#[cfg(target_os = "macos")]
+mod sidebar;
+#[cfg(target_os = "macos")]
 mod welcome;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};
+#[cfg(target_os = "macos")]
+pub use project_window::{ProjectWindowController, toolbar_identifiers};
+#[cfg(target_os = "macos")]
+pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]
 pub use welcome::{RecentProject, WelcomeController, sample_recent_projects};
