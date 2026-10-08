@@ -20,9 +20,9 @@ mod project_window;
 mod sidebar;
 #[cfg(target_os = "macos")]
 mod welcome;
-// Used by the editor; built everywhere so its tests run on Linux.
+// Used by the views; built everywhere so its tests run on Linux.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod text_diff;
+mod text;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};

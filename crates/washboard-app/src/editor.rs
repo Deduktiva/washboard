@@ -23,7 +23,7 @@ use objc2_foundation::{
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
 
-use crate::text_diff::changed_range;
+use crate::text::changed_range;
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
