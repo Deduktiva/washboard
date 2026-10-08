@@ -95,8 +95,9 @@ error is shown as usual. Spaces only, no tabs.
 - **App:** Format XML (⌃I) in the Edit menu, enabled with a request selected. The model computes
   the new text; the app replaces the whole text through the widget so it is one undo step
   (PLAN §2.1 "Not undo/redo") and the selection stays on the same element where practical.
-  App ▸ Settings… (today disabled) opens a small window with the indent width and "Format on
-  save"; changing them reformats nothing by itself.
+  The indent width and "Format on save" go in the app section of the Settings window
+  (WP-SETTINGS-WINDOW; if that is not built yet, Washboard ▸ Settings…, today disabled, opens a
+  small window with the two); changing them reformats nothing by itself.
 - **Format on save:** applies to File ▸ Save All (⌘S) only, to the open request, as the same
   undo step as ⌃I. Not to autosave: autosave runs a second after typing stops and would rewrite
   the text under the cursor. Never on send; a request is sent as written.
