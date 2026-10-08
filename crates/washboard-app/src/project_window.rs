@@ -25,14 +25,12 @@ use objc2_foundation::{
     NSSize, NSString, ns_string,
 };
 
-use dispatch2::{DispatchQueue, MainThreadBound};
-
 use washboard_core::model::{RequestId, ServerId};
 use washboard_ui_model::{App, ModelError, ProjectKey};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
-use crate::panes::{FakeResponse, IssuesBar, ResponsePane};
+use crate::panes::{IssuesBar, ResponsePane};
 use crate::sheets::{SettingsSheet, sample_servers};
 use crate::sidebar::SidebarController;
 
@@ -231,7 +229,19 @@ define_class!(
 
         #[unsafe(method(sendRequest:))]
         fn send_request(&self, _sender: Option<&AnyObject>) {
-            self.fake_send();
+            // The toolbar's Send is Cancel while a send is in flight.
+            let key = self.key();
+            let sending = self
+                .read(|app| app.project(key).is_some_and(|w| w.sending()))
+                .unwrap_or(false);
+            if sending {
+                with_delegate(self.mtm(), |d| {
+                    d.update(|app| app.cancel_send(key));
+                    d.sync();
+                });
+            } else {
+                self.command("Could not send the request", |app| app.send(key));
+            }
         }
 
         #[unsafe(method(replaceWsdl:))]
@@ -269,7 +279,7 @@ impl ProjectWindowController {
             server_ids: RefCell::new(Vec::new()),
             editor: EditorController::for_project(key, mtm),
             issues: OnceCell::new(),
-            response: ResponsePane::new(mtm),
+            response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
             settings: OnceCell::new(),
         });
@@ -436,29 +446,39 @@ impl ProjectWindowController {
         &self.ivars().response
     }
 
-    /// Sends nothing: waits on a worker thread, then shows a canned response on the main
-    /// thread. This is the pattern every background job follows: the work gets owned data,
-    /// and the result comes back through the main dispatch queue to a `MainThreadBound`
-    /// reference, so no AppKit object is touched off the main thread.
-    pub fn fake_send(&self) {
-        self.response().set_status("Sending…");
-        let this = MainThreadBound::new(self.retain(), self.mtm());
-        std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let response = FakeResponse {
-                sent: "now".into(),
-                status: 200,
-                reason: "OK".into(),
-                millis: started.elapsed().as_millis() as u64,
-                headers: "Content-Type: text/xml; charset=utf-8\n".into(),
-                body: FAKE_RESPONSE_BODY.into(),
+    /// Send ↔ Cancel in the toolbar, and the response pane's status (`SendStateChanged`).
+    pub fn show_send_state(&self) {
+        let key = self.key();
+        let sending = self
+            .read(|app| app.project(key).is_some_and(|w| w.sending()))
+            .unwrap_or(false);
+        if let Some(item) = self.send_item() {
+            let (label, symbol) = if sending {
+                ("Cancel", "xmark.circle")
+            } else {
+                ("Send", "paperplane")
             };
-            DispatchQueue::main().exec_async(move || {
-                let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
-                this.get(mtm).response().show(&response);
-            });
-        });
+            let label = NSString::from_str(label);
+            item.setLabel(&label);
+            item.setToolTip(Some(&label));
+            item.setImage(
+                NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                    &NSString::from_str(symbol),
+                    Some(&label),
+                )
+                .as_deref(),
+            );
+        }
+        self.response().show_response();
+    }
+
+    /// The toolbar's Send (or Cancel) item.
+    pub fn send_item(&self) -> Option<Retained<NSToolbarItem>> {
+        let toolbar = self.project_window().toolbar()?;
+        toolbar
+            .items()
+            .iter()
+            .find(|i| i.itemIdentifier().to_string() == "send")
     }
 
     /// Shows the project's settings sheet on its window, on the Servers tab. One sheet per
@@ -636,12 +656,3 @@ fn content_pane(
     split.adjustSubviews();
     Retained::into_super(split)
 }
-
-const FAKE_RESPONSE_BODY: &str = r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <GetCustomerResponse xmlns="urn:example:customer">
-      <customer><id>42</id><name>Example Ltd</name></customer>
-    </GetCustomerResponse>
-  </soap:Body>
-</soap:Envelope>
-"#;

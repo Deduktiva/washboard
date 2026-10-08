@@ -26,7 +26,7 @@ use washboard_ui_model::{
 };
 
 use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
-use crate::http_log::{HttpLog, sample_exchanges};
+use crate::http_log::HttpLog;
 use crate::menu;
 use crate::project_window::ProjectWindowController;
 use crate::sheets::{NewProjectSheet, sample_references};
@@ -352,9 +352,11 @@ impl AppDelegate {
 
     /// The app's one HTTP log panel, created on first use.
     pub fn http_log(&self) -> &HttpLog {
-        self.ivars()
-            .http_log
-            .get_or_init(|| HttpLog::new(sample_exchanges(), self.mtm()))
+        self.ivars().http_log.get_or_init(|| {
+            let log = HttpLog::new(self.mtm());
+            log.reload();
+            log
+        })
     }
 
     /// The welcome window's controller, created on first use.
@@ -405,7 +407,10 @@ impl AppDelegate {
             }
             Event::EditorReplaced { project } => {
                 if let Some(controller) = self.project(project) {
+                    // The response pane and history follow the editor's request.
                     controller.editor().show_model_text();
+                    controller.response().show_response();
+                    controller.response().show_history();
                 }
             }
             Event::TokensChanged { project, range } => {
@@ -421,6 +426,26 @@ impl AppDelegate {
             Event::ShowIssues { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.issues().reveal();
+                }
+            }
+            Event::SendStateChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_send_state();
+                }
+            }
+            Event::ResponseChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.response().show_response();
+                }
+            }
+            Event::HistoryChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.response().show_history();
+                }
+            }
+            Event::LogAppended => {
+                if let Some(log) = self.ivars().http_log.get() {
+                    log.reload();
                 }
             }
             Event::EditedChanged { project } => {
@@ -450,6 +475,8 @@ impl AppDelegate {
         controller.reload_servers();
         controller.editor().show_model_text();
         controller.show_issues();
+        controller.response().show_response();
+        controller.response().show_history();
         controller.show_edited();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };
