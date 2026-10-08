@@ -11,6 +11,7 @@ use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
 use crate::editor::Editor;
+use crate::import::{ReplaceOutcome, SuggestedServer};
 use crate::send::{ResponseView, Sending};
 
 /// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
@@ -123,6 +124,8 @@ pub struct ProjectWindow {
     pub(crate) history: Vec<HistoryEntry>,
     pub(crate) response: Option<ResponseView>,
     pub(crate) sending: Option<Sending>,
+    pub(crate) suggested_servers: Vec<SuggestedServer>,
+    pub(crate) replace_outcome: Option<ReplaceOutcome>,
 }
 
 impl ProjectWindow {
@@ -159,6 +162,16 @@ impl ProjectWindow {
     /// Has unsaved edits: the window's edited dot.
     pub fn edited(&self) -> bool {
         self.editor.as_ref().is_some_and(|e| e.dirty())
+    }
+
+    /// Servers from the WSDL's addresses, not added until the user confirms them.
+    pub fn suggested_servers(&self) -> &[SuggestedServer] {
+        &self.suggested_servers
+    }
+
+    /// What the last Replace WSDL changed.
+    pub fn replace_outcome(&self) -> Option<&ReplaceOutcome> {
+        self.replace_outcome.as_ref()
     }
 
     /// The server popup's items, in the project's order.
