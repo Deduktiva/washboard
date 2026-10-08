@@ -22,14 +22,15 @@ use objc2_app_kit::{
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
 use washboard_core::secrets::SecretStore;
 use washboard_ui_model::{
-    App, DialogAnswer, DialogId, Dialogs, Event, FrontEnd, ModelError, ProjectKey, TimerId,
+    App, DialogAnswer, DialogId, Dialogs, Event, FrontEnd, ImportTarget, ModelError, ProjectKey,
+    TimerId,
 };
 
 use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
 use crate::http_log::HttpLog;
 use crate::menu;
 use crate::project_window::ProjectWindowController;
-use crate::sheets::{NewProjectSheet, sample_references};
+use crate::sheets::ImportSheetController;
 use crate::welcome::{RecentProject, WelcomeController};
 
 /// What the app runs with. Tests pass a temp state dir, an in-memory secret store and dialogs
@@ -70,7 +71,7 @@ pub struct AppDelegateIvars {
     welcome: OnceCell<Retained<WelcomeController>>,
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
     http_log: OnceCell<Retained<HttpLog>>,
-    new_project: RefCell<Option<Retained<NewProjectSheet>>>,
+    new_project: RefCell<Option<Retained<ImportSheetController>>>,
 }
 
 define_class!(
@@ -307,7 +308,7 @@ impl AppDelegate {
 
     /// Shows the New Project sheet on the key window, or on the welcome window when no window
     /// is key. A sheet already showing is brought forward rather than doubled.
-    pub fn show_new_project_sheet(&self) -> Retained<NewProjectSheet> {
+    pub fn show_new_project_sheet(&self) -> Retained<ImportSheetController> {
         let mtm = self.mtm();
         if let Some(sheet) = &*self.ivars().new_project.borrow()
             && sheet.window().sheetParent().is_some()
@@ -315,10 +316,9 @@ impl AppDelegate {
             sheet.window().makeKeyAndOrderFront(None);
             return sheet.clone();
         }
-        let sheet = NewProjectSheet::new(sample_references(), mtm);
-        sheet.on_create(|name| {
-            eprintln!("washboard-app: creating {name:?} is not implemented yet");
-        });
+        let target = ImportTarget::NewProject;
+        self.update(|app| app.begin_import(target));
+        let sheet = ImportSheetController::new(target, mtm);
         let parent = match NSApplication::sharedApplication(mtm).keyWindow() {
             Some(window) if window.attachedSheet().is_none() => window,
             _ => {
@@ -328,11 +328,13 @@ impl AppDelegate {
         };
         sheet.present(&parent);
         *self.ivars().new_project.borrow_mut() = Some(sheet.clone());
+        // Shows the model's sheet through `ImportChanged`.
+        self.sync();
         sheet
     }
 
     /// The most recent New Project sheet, if one was shown.
-    pub fn new_project_sheet(&self) -> Option<Retained<NewProjectSheet>> {
+    pub fn new_project_sheet(&self) -> Option<Retained<ImportSheetController>> {
         self.ivars().new_project.borrow().clone()
     }
 
@@ -453,8 +455,22 @@ impl AppDelegate {
                     controller.show_edited();
                 }
             }
-            // Bound by the later steps of WP-APP-INTEGRATION.
-            _ => {}
+            Event::ImportChanged { target } => {
+                let sheet = match target {
+                    ImportTarget::NewProject => self.new_project_sheet(),
+                    ImportTarget::ReplaceWsdl(key) => {
+                        self.project(key).and_then(|c| c.replace_sheet())
+                    }
+                };
+                if let Some(sheet) = sheet {
+                    sheet.reload();
+                }
+            }
+            Event::WsdlReplaced { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_replace_outcome();
+                }
+            }
         }
     }
 

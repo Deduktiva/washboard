@@ -13,7 +13,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
+    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
     NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView, NSToolbar,
     NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
@@ -26,13 +26,14 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{App, ModelError, ProjectKey};
+use washboard_ui_model::{App, ImportTarget, ModelError, ProjectKey};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
 use crate::panes::{IssuesBar, ResponsePane};
-use crate::sheets::{SettingsSheet, sample_servers};
+use crate::sheets::{ImportSheetController, SettingsSheet};
 use crate::sidebar::SidebarController;
+use crate::text::replace_summary;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
 const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
@@ -97,6 +98,9 @@ pub struct ProjectIvars {
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
     settings: OnceCell<Retained<SettingsSheet>>,
+    replace: RefCell<Option<Retained<ImportSheetController>>>,
+    /// What the last Replace WSDL changed, as shown in its alert.
+    replace_summary: RefCell<Option<String>>,
 }
 
 define_class!(
@@ -246,7 +250,7 @@ define_class!(
 
         #[unsafe(method(replaceWsdl:))]
         fn replace_wsdl(&self, _sender: Option<&AnyObject>) {
-            self.stub("Replace WSDL");
+            self.show_replace_sheet();
         }
 
         #[unsafe(method(projectSettings:))]
@@ -282,6 +286,8 @@ impl ProjectWindowController {
             response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
             settings: OnceCell::new(),
+            replace: RefCell::new(None),
+            replace_summary: RefCell::new(None),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithWindow: &*window] };
@@ -336,8 +342,12 @@ impl ProjectWindowController {
         &self.ivars().servers
     }
 
-    /// Fills the server popup from the model (`ServersChanged`).
+    /// Fills the server popup, and the settings sheet if shown, from the model
+    /// (`ServersChanged`).
     pub fn reload_servers(&self) {
+        if let Some(settings) = self.settings() {
+            settings.reload();
+        }
         let key = self.key();
         let servers = self
             .read(|app| {
@@ -481,15 +491,15 @@ impl ProjectWindowController {
             .find(|i| i.itemIdentifier().to_string() == "send")
     }
 
-    /// Shows the project's settings sheet on its window, on the Servers tab. One sheet per
-    /// project, kept so edits survive closing and reopening it until the model stores them.
+    /// Shows the project's settings sheet on its window, on the Servers tab.
     pub fn show_settings(&self) -> &SettingsSheet {
         let sheet = self
             .ivars()
             .settings
-            .get_or_init(|| SettingsSheet::new(self.name(), sample_servers(), self.mtm()));
+            .get_or_init(|| SettingsSheet::new(self.key(), self.name(), self.mtm()));
         let window = self.project_window();
         if window.attachedSheet().is_none() {
+            sheet.reload();
             sheet.present(&window);
         }
         sheet
@@ -498,6 +508,51 @@ impl ProjectWindowController {
     /// The settings sheet, once shown.
     pub fn settings(&self) -> Option<&SettingsSheet> {
         self.ivars().settings.get().map(|s| &**s)
+    }
+
+    /// Shows the Replace WSDL sheet, unless the window already has a sheet.
+    pub fn show_replace_sheet(&self) -> Option<Retained<ImportSheetController>> {
+        let window = self.project_window();
+        if window.attachedSheet().is_some() {
+            return None;
+        }
+        let target = ImportTarget::ReplaceWsdl(self.key());
+        let sheet = ImportSheetController::new(target, self.mtm());
+        *self.ivars().replace.borrow_mut() = Some(sheet.clone());
+        sheet.present(&window);
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.begin_import(target));
+            // Shows the model's sheet through `ImportChanged`.
+            d.sync();
+        });
+        Some(sheet)
+    }
+
+    /// The most recent Replace WSDL sheet, if one was shown.
+    pub fn replace_sheet(&self) -> Option<Retained<ImportSheetController>> {
+        self.ivars().replace.borrow().clone()
+    }
+
+    /// After Replace WSDL (`WsdlReplaced`): says what changed. The full report is
+    /// WP-REPLACE-REPORT's.
+    pub fn show_replace_outcome(&self) {
+        let key = self.key();
+        let Some(summary) = self
+            .read(|app| app.project(key)?.replace_outcome().map(replace_summary))
+            .flatten()
+        else {
+            return;
+        };
+        *self.ivars().replace_summary.borrow_mut() = Some(summary.clone());
+        let alert = NSAlert::new(self.mtm());
+        alert.setMessageText(ns_string!("The WSDL was replaced"));
+        alert.setInformativeText(&NSString::from_str(&summary));
+        alert.beginSheetModalForWindow_completionHandler(&self.project_window(), None);
+    }
+
+    /// The text of the last Replace WSDL alert.
+    pub fn replace_summary(&self) -> Option<String> {
+        self.ivars().replace_summary.borrow().clone()
     }
 
     pub fn split_view(&self) -> &NSSplitViewController {

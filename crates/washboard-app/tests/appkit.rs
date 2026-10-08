@@ -29,6 +29,7 @@ fn main() {
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
+        ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_sheet", checks::settings_sheet),
     ];
@@ -70,12 +71,13 @@ mod checks {
     };
     use tempfile::TempDir;
     use washboard_app::{
-        AppDelegate, EditorController, NodeKind, Options, ProjectWindowController, SidebarNode,
+        AppDelegate, EditorController, ImportSheetController, NodeKind, Options,
+        ProjectWindowController, SidebarNode,
     };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
-    use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs};
+    use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs, ProjectKey};
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1284,9 +1286,59 @@ mod checks {
         }
     }
 
-    /// Create stays disabled while a reference is unresolved, then ends the sheet. Creating the
-    /// project is step 6 of WP-APP-INTEGRATION.
+    /// The model's server names for `key`, in order.
+    fn server_names(ctx: &Ctx, key: ProjectKey) -> Vec<String> {
+        ctx.delegate
+            .read(|app| {
+                app.project(key)
+                    .map(|w| w.servers().iter().map(|s| s.name.clone()).collect())
+            })
+            .flatten()
+            .unwrap_or_default()
+    }
+
+    fn table_column(table: &washboard_app::TextTable, column: usize) -> Vec<String> {
+        table
+            .rows()
+            .into_iter()
+            .map(|r| r[column].clone())
+            .collect()
+    }
+
+    /// Waits for the import check the last file change started.
+    fn wait_checked(sheet: &ImportSheetController) {
+        wait_until("the import check", || {
+            !sheet.status().starts_with("Checking") && !sheet.references().rows().is_empty()
+        });
+    }
+
+    /// `fixtures/customer`'s WSDLs and schemas without `xsd/common/party-ids.xsd`, which
+    /// `party.xsd` includes.
+    fn customer_without_include(dir: &Path) -> PathBuf {
+        let from = fixtures().join("customer");
+        for file in [
+            "CustomerService.wsdl",
+            "CustomerBinding.wsdl",
+            "xsd/customer.xsd",
+            "xsd/common/party.xsd",
+            "xsd/ext/audit.xsd",
+        ] {
+            let to = dir.join(file);
+            std::fs::create_dir_all(to.parent().expect("a parent")).expect("mkdir");
+            std::fs::copy(from.join(file), &to).expect("copy fixture");
+        }
+        dir.to_owned()
+    }
+
+    /// Create stays disabled while a reference is unresolved and enables once the missing
+    /// file is added; Create opens the project with its settings, offering the WSDL's address
+    /// as a server.
     pub fn new_project_sheet(ctx: &Ctx) {
+        let tmp = TempDir::new().expect("temp dir");
+        let files = customer_without_include(&tmp.path().join("incomplete"));
+        let projects = tmp.path().join("projects");
+        std::fs::create_dir(&projects).expect("mkdir");
+
         // SAFETY: `newProject:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
         let welcome = ctx.delegate.welcome().window().retain();
@@ -1303,42 +1355,120 @@ mod checks {
             Some(sheet.window() as *const NSWindow),
             "one New Project sheet, on the welcome window"
         );
+        assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
+        assert_eq!(sheet.status(), "Choose the WSDL.");
 
-        let marks: Vec<String> = sheet
-            .table()
-            .rows()
-            .into_iter()
-            .map(|r| r[0].clone())
-            .collect();
-        assert_eq!(marks, ["✓", "✓", "✗"]);
-        assert!(!sheet.create_button().isEnabled(), "disabled while ✗");
-        sheet.create();
-        assert!(
-            ctx.delegate.projects().is_empty(),
+        sheet.set_name("Customers");
+        sheet.choose_location(projects.clone());
+        sheet.choose_wsdl(files.join("CustomerService.wsdl"));
+        sheet.add_files(vec![files.clone()]);
+        wait_checked(&sheet);
+        let rows = sheet.references().rows();
+        let missing: Vec<&Vec<String>> = rows.iter().filter(|r| r[0] == "✗").collect();
+        assert_eq!(missing.len(), 1, "{rows:?}");
+        assert_eq!(missing[0][1], "xs:include party-ids.xsd");
+        assert_eq!(missing[0][2], "not supplied");
+        assert!(!sheet.messages().rows().is_empty(), "the finding is listed");
+        assert!(!sheet.finish_button().isEnabled(), "disabled while ✗");
+        let open = ctx.delegate.projects().len();
+        sheet.finish();
+        assert_eq!(
+            ctx.delegate.projects().len(),
+            open,
             "disabled Create does nothing"
         );
 
-        let all_resolved = washboard_app::sample_references()
-            .into_iter()
-            .map(|mut r| {
-                r.resolved_to.get_or_insert_with(|| "addresses.xsd".into());
-                r
-            })
-            .collect();
-        sheet.set_references(all_resolved);
-        assert!(sheet.create_button().isEnabled(), "enabled once all ✓");
+        sheet.add_files(vec![fixtures().join("customer/xsd/common/party-ids.xsd")]);
+        wait_checked(&sheet);
+        assert!(
+            table_column(sheet.references(), 0).iter().all(|m| m == "✓"),
+            "{:?}",
+            sheet.references().rows()
+        );
+        assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
-        sheet
-            .name_field()
-            .setStringValue(&NSString::from_str("Billing"));
-        sheet.create();
+        sheet.finish();
         wait_until("the sheet to end", || welcome.attachedSheet().is_none());
+        let project = ctx
+            .delegate
+            .projects()
+            .into_iter()
+            .find(|p| p.name() == "Customers")
+            .expect("Create opens the project");
+        // The files come from two folder trees, so they keep their full paths under `wsdl/`.
+        assert!(projects.join("Customers/wsdl").is_dir());
+
+        let window = project.project_window();
+        let settings = project
+            .settings()
+            .expect("opened to confirm the suggested server");
+        assert!(window.attachedSheet().is_some());
+        assert!(settings.servers().is_empty(), "nothing before confirming");
+        let suggested = settings.suggestions().rows();
+        assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
+        settings.confirm_suggestion(0);
+        assert!(settings.suggestions().rows().is_empty());
+        assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
+        assert_eq!(settings.selected(), Some(0));
+        assert_eq!(
+            settings.url_field().stringValue().to_string(),
+            suggested[0][1]
+        );
+
+        // SAFETY: `done:` takes the sender.
+        let _: () = unsafe { msg_send![settings, done: None::<&AnyObject>] };
+        wait_until("the sheet to end", || window.attachedSheet().is_none());
+        autoreleasepool(|_| window.performClose(None));
     }
 
-    /// Project Settings opens on Servers; the form edits the selected row, auth enables the
-    /// user field, and + / − add and remove rows.
+    /// Replace WSDL checks the new files like New Project, swaps the WSDL and says what
+    /// changed.
+    pub fn replace_wsdl(ctx: &Ctx) {
+        let key = ctx
+            .delegate
+            .open_project_at(&ctx.other)
+            .expect("the other project opens");
+        let project = ctx.delegate.project(key).expect("a window");
+        wait_loaded(&project);
+        let window = project.project_window();
+        // SAFETY: `replaceWsdl:` takes the sender.
+        let _: () = unsafe { msg_send![&*project, replaceWsdl: None::<&AnyObject>] };
+        wait_until("the sheet to attach", || window.attachedSheet().is_some());
+        let sheet = project.replace_sheet().expect("created by replaceWsdl:");
+        assert_eq!(sheet.finish_button().title().to_string(), "Replace");
+        assert!(!sheet.finish_button().isEnabled());
+
+        let customer = fixtures().join("customer");
+        sheet.choose_wsdl(customer.join("CustomerService.wsdl"));
+        sheet.add_files(vec![customer]);
+        wait_checked(&sheet);
+        assert!(
+            sheet.finish_button().isEnabled(),
+            "{:?}",
+            sheet.references().rows()
+        );
+        sheet.finish();
+        wait_until("the outcome", || project.replace_summary().is_some());
+        let summary = project.replace_summary().expect("shown");
+        assert!(summary.contains("removed"), "{summary}");
+        wait_until("the outcome alert", || window.attachedSheet().is_some());
+        let alert = window.attachedSheet().expect("the outcome alert");
+        window.endSheet(&alert);
+        wait_until("the new services", || {
+            project.sidebar().roots()[1]
+                .children()
+                .iter()
+                .any(|n| n.title() == "CustomerService")
+        });
+        autoreleasepool(|_| window.performClose(None));
+    }
+
+    /// Project Settings opens on Servers and edits the model's servers: rename, Basic auth with
+    /// a password in the secret store, + and −. The edits survive closing and reopening the
+    /// project.
     pub fn settings_sheet(ctx: &Ctx) {
         let project = ctx.open();
+        let key = project.key();
         let window = project.project_window();
         // SAFETY: `projectSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };
@@ -1350,28 +1480,23 @@ mod checks {
             .map(|t| t.label().to_string());
         assert_eq!(selected_tab.as_deref(), Some("Servers"));
 
-        let names = |sheet: &washboard_app::SettingsSheet| -> Vec<String> {
-            sheet
-                .table()
-                .rows()
-                .into_iter()
-                .map(|r| r[0].clone())
-                .collect()
-        };
-        assert_eq!(names(sheet), ["Production", "Staging", "Local"]);
+        let names = table_column(sheet.table(), 0);
+        assert_eq!(names, server_names(ctx, key));
+        assert_eq!(names[1], "Production");
+        assert!(sheet.suggestions().rows().is_empty());
 
         sheet.table().click(1);
         assert_eq!(sheet.selected(), Some(1));
-        assert_eq!(
-            sheet.url_field().stringValue().to_string(),
-            "https://stg.example.com/ws/customer"
-        );
+        let server = sheet.servers()[1].clone();
+        assert_eq!(sheet.url_field().stringValue().to_string(), server.url);
         sheet
             .name_field()
-            .setStringValue(&NSString::from_str("Staging EU"));
+            .setStringValue(&NSString::from_str("Production EU"));
         sheet.commit_form();
-        assert_eq!(names(sheet), ["Production", "Staging EU", "Local"]);
+        assert_eq!(table_column(sheet.table(), 0)[1], "Production EU");
+        assert_eq!(server_names(ctx, key)[1], "Production EU");
 
+        assert_eq!(server.auth, Auth::None);
         assert!(
             !sheet.user_field().isEnabled(),
             "no user without Basic auth"
@@ -1382,14 +1507,52 @@ mod checks {
             sheet.user_field().isEnabled(),
             "Basic auth enables the user field"
         );
-        assert!(sheet.servers()[1].basic_auth);
+        sheet
+            .user_field()
+            .setStringValue(&NSString::from_str("bob"));
+        sheet
+            .password_field()
+            .setStringValue(&NSString::from_str("hunter2"));
+        sheet.commit_form();
+        let basic = Auth::Basic {
+            username: "bob".into(),
+        };
+        assert_eq!(sheet.servers()[1].auth, basic);
+        // By project key, which changes when the project is reopened.
+        let password = |ctx: &Ctx, key: ProjectKey| {
+            ctx.delegate
+                .read(|app| app.server_password(key, server.id))
+                .and_then(Result::ok)
+                .flatten()
+        };
+        assert_eq!(password(ctx, key).as_deref(), Some("hunter2"));
+        assert_eq!(
+            sheet.password_field().stringValue().to_string(),
+            "",
+            "a saved password leaves the field"
+        );
 
         sheet.add_server();
-        assert_eq!(sheet.servers().len(), 4);
-        assert_eq!(sheet.selected(), Some(3));
+        assert_eq!(server_names(ctx, key).len(), names.len() + 1);
+        assert_eq!(sheet.selected(), Some(names.len()));
         sheet.remove_selected();
-        assert_eq!(names(sheet), ["Production", "Staging EU", "Local"]);
+        assert_eq!(table_column(sheet.table(), 0), server_names(ctx, key));
+        assert_eq!(server_names(ctx, key).len(), names.len());
 
+        // SAFETY: `done:` takes the sender.
+        let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
+        wait_until("the sheet to end", || window.attachedSheet().is_none());
+        autoreleasepool(|_| window.performClose(None));
+        assert!(ctx.delegate.project(key).is_none(), "closed");
+
+        let project = ctx.open();
+        let window = project.project_window();
+        let sheet = project.show_settings();
+        assert_eq!(table_column(sheet.table(), 0)[1], "Production EU");
+        sheet.select(1);
+        assert_eq!(sheet.servers()[1].auth, basic);
+        assert_eq!(sheet.user_field().stringValue().to_string(), "bob");
+        assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
         // SAFETY: `done:` takes the sender.
         let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
         wait_until("the sheet to end", || window.attachedSheet().is_none());
