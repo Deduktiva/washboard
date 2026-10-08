@@ -7,8 +7,8 @@
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{
-    NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
-    NSLayoutPriorityDefaultLow, NSStackView, NSStackViewDistribution,
+    NSAutoresizingMaskOptions, NSLayoutAttribute, NSLayoutConstraintOrientation,
+    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow, NSStackView, NSStackViewDistribution,
     NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{NSArray, NSEdgeInsets};
@@ -61,4 +61,29 @@ pub fn set_height(view: &NSView, height: f64) {
     view.heightAnchor()
         .constraintEqualToConstant(height)
         .setActive(true);
+}
+
+/// A tab view item's view: a plain container that the tab view resizes, with `content` pinned
+/// to its edges. A stack view handed to the tab view directly kept its fitting size when its
+/// tab was selected after the window's first layout.
+pub fn tab_page(content: &NSView, mtm: MainThreadMarker) -> Retained<NSView> {
+    let page = NSView::new(mtm);
+    page.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+    );
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    page.addSubview(content);
+    for (a, b) in [
+        (content.leadingAnchor(), page.leadingAnchor()),
+        (content.trailingAnchor(), page.trailingAnchor()),
+    ] {
+        a.constraintEqualToAnchor(&b).setActive(true);
+    }
+    for (a, b) in [
+        (content.topAnchor(), page.topAnchor()),
+        (content.bottomAnchor(), page.bottomAnchor()),
+    ] {
+        a.constraintEqualToAnchor(&b).setActive(true);
+    }
+    page
 }

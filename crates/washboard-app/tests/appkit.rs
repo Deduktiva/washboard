@@ -644,12 +644,26 @@ mod checks {
             "the issues bar sits below the editor: {issues:?} vs {editor:?}"
         );
         project.response().tabs().selectTabViewItemAtIndex(2);
-        window.displayIfNeeded();
-        window.layoutIfNeeded();
-        let history = project.response().history().view().frame();
+        let history = || project.response().history().view().frame();
+        // Give AppKit a few turns to frame the newly selected page.
+        for _ in 0..40 {
+            if history().size.height > 40.0 {
+                break;
+            }
+            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+        }
+        let history = history();
+        // SAFETY: reading the view hierarchy on the main thread; nothing is changed.
+        let page = unsafe { project.response().history().view().superview() };
+        // SAFETY: as above.
+        let container = page.as_ref().and_then(|p| unsafe { p.superview() });
         assert!(
-            history.size.height > 40.0,
-            "the history list has room: {history:?} in tabs {:?}, pane {:?}",
+            history.size.height > 40.0 && history.size.width > 400.0,
+            "the history list has room: {history:?} in page {:?} in container {:?}, tab content \
+             {:?}, tabs {:?}, pane {:?}",
+            page.map(|v| v.frame()),
+            container.map(|v| v.frame()),
+            project.response().tabs().contentRect(),
             project.response().tabs().frame(),
             project.response().view().frame()
         );

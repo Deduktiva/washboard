@@ -299,7 +299,7 @@ impl ResponsePane {
         for (label, page) in RESPONSE_TABS.iter().zip(&pages) {
             let item = NSTabViewItem::new();
             item.setLabel(&NSString::from_str(label));
-            item.setView(Some(page));
+            item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
         let status = layout::row(
