@@ -51,6 +51,15 @@ impl Issue {
         }
     }
 
+    /// One issue per diagnostic, in order.
+    pub(crate) fn all(text: &str, diagnostics: Vec<Diagnostic>) -> Vec<Issue> {
+        let lines = LineIndex::new(text);
+        diagnostics
+            .into_iter()
+            .map(|d| Issue::new(text, &lines, d))
+            .collect()
+    }
+
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
@@ -216,9 +225,5 @@ fn full_check(text: &str, against: &Against, hint: Option<&OperationRef>) -> Vec
             out
         }
     };
-    let lines = LineIndex::new(text);
-    diagnostics
-        .into_iter()
-        .map(|d| Issue::new(text, &lines, d))
-        .collect()
+    Issue::all(text, diagnostics)
 }

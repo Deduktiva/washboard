@@ -4,7 +4,6 @@
 use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
 
-use washboard_core::diag::LineIndex;
 use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
 use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
 use washboard_core::project::HistoryRecord;
@@ -182,13 +181,7 @@ impl App {
                     validate_request(&schema.wsdl, &request_schema, &text, hint.as_ref())
                 };
                 if validation.has_errors() {
-                    let lines = LineIndex::new(&text);
-                    let issues = validation
-                        .diagnostics
-                        .into_iter()
-                        .map(|d| Issue::new(&text, &lines, d))
-                        .collect();
-                    return Outcome::Refused(issues);
+                    return Outcome::Refused(Issue::all(&text, validation.diagnostics));
                 }
                 let exchange = http::send(&SendRequest {
                     server: to,
