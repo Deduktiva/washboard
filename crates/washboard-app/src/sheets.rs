@@ -12,16 +12,18 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezelStyle, NSButton, NSControlStateValue, NSControlStateValueOff,
-    NSControlStateValueOn, NSControlTextEditingDelegate, NSGridCellPlacement, NSGridRowAlignment,
-    NSGridView, NSLayoutAttribute, NSModalResponse, NSModalResponseOK, NSOpenPanel,
-    NSSecureTextField, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField,
-    NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate,
-    NSWindowStyleMask,
+    NSBackingStoreType, NSBezelStyle, NSBorderType, NSButton, NSControlStateValue,
+    NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate,
+    NSGridCellPlacement, NSGridRowAlignment, NSGridView, NSLayoutAttribute,
+    NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow,
+    NSLineBreakMode, NSModalResponse, NSModalResponseOK, NSOpenPanel, NSPathControl, NSPathStyle,
+    NSSecureTextField, NSStackView, NSStackViewDistribution, NSStackViewGravity, NSTabView,
+    NSTabViewItem, NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView,
+    NSWindow, NSWindowDelegate, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString, ns_string,
+    NSSize, NSString, NSURL, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{
@@ -29,11 +31,15 @@ use washboard_ui_model::{
 };
 
 use crate::app::with_delegate;
+use crate::layout;
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
 
 /// The ✓/✗ columns: wide enough for the mark, so the reference text gets the room.
 const MARK_WIDTH: f64 = 22.0;
+/// The import sheet's tables: the references grow with the window, the findings do not.
+const MIN_REFERENCES_HEIGHT: f64 = 120.0;
+const MESSAGES_HEIGHT: f64 = 90.0;
 /// The Servers tab's list column.
 const LIST_WIDTH: f64 = 180.0;
 const TIMEOUT_WIDTH: f64 = 60.0;
@@ -44,8 +50,8 @@ const SQUARE_BUTTON: f64 = 24.0;
 struct ImportViews {
     window: Retained<NSWindow>,
     name: Retained<NSTextField>,
-    location: Retained<NSTextField>,
-    wsdl: Retained<NSTextField>,
+    location: Retained<NSPathControl>,
+    wsdl: Retained<NSPathControl>,
     files: Retained<NSTextField>,
     add: Retained<NSButton>,
     clear: Retained<NSButton>,
@@ -150,8 +156,22 @@ impl ImportSheetController {
         // SAFETY: this object owns the field through its window, so it outlives the field's
         // weak delegate reference.
         unsafe { name.setDelegate(Some(ProtocolObject::from_ref(&*this))) };
-        let value = || NSTextField::labelWithString(ns_string!(""), mtm);
-        let (location, wsdl, files) = (value(), value(), value());
+        let value = || {
+            let field = NSTextField::labelWithString(ns_string!(""), mtm);
+            field.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
+            shrinkable(&field);
+            field
+        };
+        let path = || {
+            // Folder icons and names, shortened in the middle when space runs out, as Xcode
+            // and Finder show a location, instead of a label as wide as the path.
+            let control = NSPathControl::new(mtm);
+            control.setPathStyle(NSPathStyle::Standard);
+            control.setPlaceholderString(Some(ns_string!("Not chosen")));
+            shrinkable(&control);
+            control
+        };
+        let (location, wsdl, files) = (path(), path(), value());
         let button = |title: &str, action: Sel| target_button(title, &this, action, mtm);
         let add = button("Add…", sel!(addFiles:));
         let clear = button("Clear", sel!(clearFiles:));
@@ -161,7 +181,7 @@ impl ImportSheetController {
             rows.push(vec![label("Name:", mtm), view(name.clone())]);
             rows.push(vec![
                 label("Location:", mtm),
-                row(
+                value_row(
                     vec![
                         view(location.clone()),
                         view(button("Choose…", sel!(chooseLocation:))),
@@ -172,7 +192,7 @@ impl ImportSheetController {
         }
         rows.push(vec![
             label("WSDL:", mtm),
-            row(
+            value_row(
                 vec![
                     view(wsdl.clone()),
                     view(button("Choose…", sel!(chooseWsdl:))),
@@ -182,7 +202,7 @@ impl ImportSheetController {
         ]);
         rows.push(vec![
             label("XSD files:", mtm),
-            row(
+            value_row(
                 vec![view(files.clone()), view(add.clone()), view(clear.clone())],
                 mtm,
             ),
@@ -202,11 +222,19 @@ impl ImportSheetController {
         let buttons = trailing_row(vec![view(cancel), view(finish.clone())], mtm);
         references.fix_column_width(0, MARK_WIDTH);
         messages.fix_column_width(0, MARK_WIDTH);
+        // The references take the spare height; the findings keep a few rows.
+        references.view().setBorderType(NSBorderType::BezelBorder);
+        messages.view().setBorderType(NSBorderType::BezelBorder);
+        references
+            .view()
+            .heightAnchor()
+            .constraintGreaterThanOrEqualToConstant(MIN_REFERENCES_HEIGHT)
+            .setActive(true);
+        layout::set_height(messages.view(), MESSAGES_HEIGHT);
 
         let content = window_content(
             vec![
                 form,
-                label("References", mtm),
                 view(references.view().retain()),
                 view(messages.view().retain()),
                 view(status.clone()),
@@ -219,7 +247,7 @@ impl ImportSheetController {
         } else {
             "Replace WSDL"
         };
-        let size = NSSize::new(600.0, 480.0);
+        let size = NSSize::new(640.0, 560.0);
         let window = sheet_window(title, size, mtm);
         if new_project {
             // Its own window, so that open projects stay usable meanwhile.
@@ -260,6 +288,11 @@ impl ImportSheetController {
 
     pub fn name_field(&self) -> &NSTextField {
         &self.views().name
+    }
+
+    /// The chosen project location.
+    pub fn location(&self) -> &NSPathControl {
+        &self.views().location
     }
 
     /// One row per reference: mark, reference as written, resolved file.
@@ -311,8 +344,13 @@ impl ImportSheetController {
             views.name.setStringValue(&NSString::from_str(&shown.name));
         }
         let set = |field: &NSTextField, text: &str| field.setStringValue(&NSString::from_str(text));
-        set(&views.location, &shown.location);
-        set(&views.wsdl, &shown.wsdl);
+        let set_path = |control: &NSPathControl, path: Option<&Path>| {
+            let url =
+                path.map(|p| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy())));
+            control.setURL(url.as_deref());
+        };
+        set_path(&views.location, shown.location.as_deref());
+        set_path(&views.wsdl, shown.wsdl.as_deref());
         set(&views.files, &shown.files);
         set(&views.status, &shown.status);
         views.add.setEnabled(shown.has_entry);
@@ -491,8 +529,8 @@ impl ImportSheetController {
 /// What the import sheet shows, read from the model in one borrow.
 struct Shown {
     name: String,
-    location: String,
-    wsdl: String,
+    location: Option<PathBuf>,
+    wsdl: Option<PathBuf>,
     files: String,
     has_entry: bool,
     has_extra: bool,
@@ -519,14 +557,8 @@ impl Shown {
             .join(", ");
         Self {
             name: sheet.name.clone(),
-            location: sheet
-                .parent
-                .as_ref()
-                .map_or_else(|| "Not chosen".to_owned(), |p| p.display().to_string()),
-            wsdl: sheet
-                .entry
-                .as_deref()
-                .map_or_else(|| "Not chosen".to_owned(), file_name),
+            location: sheet.parent.clone(),
+            wsdl: sheet.entry.clone(),
             files: if files.is_empty() {
                 "None".to_owned()
             } else {
@@ -1174,6 +1206,28 @@ fn row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> 
     view(stack)
 }
 
+/// Lets `v` take a form row's spare width and give it up first, so a long value is shortened
+/// rather than widening the window or pushing its buttons out.
+fn shrinkable(v: &NSView) {
+    v.setContentHuggingPriority_forOrientation(
+        NSLayoutPriorityDefaultLow - 1.0,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
+    v.setContentCompressionResistancePriority_forOrientation(
+        NSLayoutPriorityDefaultLow - 1.0,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
+}
+
+/// A form value with its buttons: the value takes the spare width, the buttons keep theirs.
+fn value_row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    stack.setDistribution(NSStackViewDistribution::Fill);
+    stack.setAlignment(NSLayoutAttribute::FirstBaseline);
+    view(stack)
+}
+
 fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
     view(column_stack(views, mtm))
 }
@@ -1186,22 +1240,26 @@ fn column_stack(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained
 }
 
 /// A window's content: a column with the standard 20 pt margin, its buttons at the trailing
-/// edge.
+/// edge. Every view spans the width inside the margins, and the column fills the window's
+/// height (see `layout`): views without an intrinsic height, such as tables, take the slack.
 fn window_content(
-    views: Vec<Retained<NSView>>,
+    mut views: Vec<Retained<NSView>>,
     buttons: Retained<NSView>,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
-    let stack = column_stack(views, mtm);
-    stack.addView_inGravity(&buttons, NSStackViewGravity::Bottom);
-    stack.setEdgeInsets(NSEdgeInsets {
-        top: 20.0,
-        left: 20.0,
-        bottom: 20.0,
-        right: 20.0,
-    });
+    const MARGIN: f64 = 20.0;
+    views.push(buttons);
+    let stack = column_stack(views.clone(), mtm);
+    stack.setDistribution(NSStackViewDistribution::Fill);
+    stack.setEdgeInsets(layout::insets(MARGIN, MARGIN, MARGIN, MARGIN));
     stack.setSpacing(12.0);
-    stack.setAlignment(NSLayoutAttribute::Width);
+    // Pinned rather than left to the stack's alignment, which let a long value widen its
+    // row past the window's edges.
+    for v in &views {
+        v.widthAnchor()
+            .constraintEqualToAnchor_constant(&stack.widthAnchor(), -2.0 * MARGIN)
+            .setActive(true);
+    }
     view(stack)
 }
 
@@ -1218,6 +1276,14 @@ fn grid(rows: Vec<Vec<Retained<NSView>>>, mtm: MainThreadMarker) -> Retained<NSV
     grid.setRowSpacing(10.0);
     grid.columnAtIndex(0)
         .setXPlacement(NSGridCellPlacement::Trailing);
+    // Labels keep their width so the controls' column takes the spare width; otherwise the
+    // grid gives it to the labels and the form sits at the window's trailing edge.
+    for label in rows.iter().filter_map(|r| r.firstObject()) {
+        label.setContentHuggingPriority_forOrientation(
+            NSLayoutPriorityDefaultHigh,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
+    }
     grid.columnAtIndex(1)
         .setXPlacement(NSGridCellPlacement::Fill);
     view(grid)
