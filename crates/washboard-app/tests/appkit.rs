@@ -26,7 +26,8 @@ fn main() {
         ("sidebar_commands", checks::sidebar_commands),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
-        ("issues_and_fake_send", checks::issues_and_fake_send),
+        ("diagnostics", checks::diagnostics),
+        ("fake_send", checks::fake_send),
         ("http_log", checks::http_log),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_sheet", checks::settings_sheet),
@@ -967,24 +968,66 @@ mod checks {
         print!("(keystroke {} ms) ", started.elapsed().as_millis());
     }
 
-    /// Clicking an issue selects its line; a fake send finishes on the main thread and fills
-    /// the response pane.
-    pub fn issues_and_fake_send(ctx: &Ctx) {
+    /// An invalid value in a fixture request is listed, marked in the gutter and on the
+    /// sidebar row, and a click selects it; fixing it and validating clears all three.
+    pub fn diagnostics(ctx: &Ctx) {
         let project = ctx.open();
+        wait_loaded(&project);
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        let issues = project.issues().table();
+        let text = text_view.string().to_string();
+        let start = text.find("<asOf>").expect("the template has asOf") + "<asOf>".len();
+        let end = start + text[start..].find("</asOf>").expect("asOf is closed");
+        let date = text[start..end].to_owned();
+        // The template is ASCII up to here, so byte offsets are UTF-16 offsets.
+        assert!(text[..end].is_ascii());
+        let line = text[..start].matches('\n').count() + 1;
+        wait_until("the first check", || issues.rows().is_empty());
 
-        let issues = project.issues().table().rows();
-        assert_eq!(issues.len(), 1, "sample issue listed");
-        assert_eq!(issues[0][0], "6");
-        project.issues().table().click(0);
-        let text = project.editor().text_view().string().to_string();
-        assert!(text.lines().count() >= 6, "{text}");
-        let line6 = text
-            .split_inclusive('\n')
-            .take(5)
-            .map(|l| l.encode_utf16().count())
-            .sum::<usize>();
-        let selected = project.editor().text_view().selectedRange();
-        assert_eq!(selected.location, line6, "click selects line 6");
+        let replace = |at: usize, len: usize, with: &str| {
+            // SAFETY: replacing a range inside the text, as typing over a selection does.
+            unsafe {
+                text_view
+                    .insertText_replacementRange(&NSString::from_str(with), NSRange::new(at, len))
+            };
+        };
+        replace(start, date.len(), "someday");
+        wait_until("the invalid date to be listed", || {
+            !issues.rows().is_empty()
+        });
+        assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
+        assert!(
+            editor.ruler().error_lines().contains(&line),
+            "gutter marker"
+        );
+        wait_until("the invalid marker", || selected_markers(&project).1);
+
+        issues.click(0);
+        let selected = text_view.selectedRange();
+        let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+        assert!(
+            (line_start..start + "someday".len() + "</asOf>".len()).contains(&selected.location),
+            "click selects the issue: {selected:?}"
+        );
+
+        replace(start, "someday".len(), &date);
+        let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
+        // SAFETY: the window controller's actions take the sender.
+        let sent = unsafe {
+            ctx.app
+                .sendAction_to_from(Sel::register(&validate), Some(&project), None)
+        };
+        assert!(sent);
+        wait_until("the issues to clear", || issues.rows().is_empty());
+        assert!(editor.ruler().error_lines().is_empty(), "gutter cleared");
+        wait_until("the marker to clear", || !selected_markers(&project).1);
+        autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// A fake send finishes on the main thread and fills the response pane.
+    pub fn fake_send(ctx: &Ctx) {
+        let project = ctx.open();
 
         let response = project.response();
         let tabs: Vec<String> = response
