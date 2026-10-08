@@ -1131,6 +1131,11 @@ mod checks {
             };
         };
         replace(start, date.len(), "someday");
+        // Still well-formed: until the schema check runs, the text is neither valid nor
+        // invalid.
+        wait_until("the edit to read as unchecked", || {
+            project.issues().summary() == "Checking…"
+        });
         wait_until("the invalid date to be listed", || {
             !issues.rows().is_empty()
         });
@@ -1152,9 +1157,6 @@ mod checks {
         );
 
         replace(start, "someday".len(), &date);
-        wait_until("the edit to read as unchecked", || {
-            project.issues().summary() == "Checking…"
-        });
         let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
         // SAFETY: the window controller's actions take the sender.
         let sent = unsafe {
