@@ -1306,6 +1306,19 @@ mod checks {
             history + 1,
             "history row added"
         );
+        // Which server and when, in the status line and the history row.
+        let status = response.status();
+        assert!(status.contains(" · Local · "), "{status}");
+        assert!(
+            status
+                .split(" · ")
+                .last()
+                .is_some_and(|sent| !sent.is_empty()),
+            "{status}"
+        );
+        let newest = &response.history().rows()[0];
+        assert_eq!(newest[1], "Local", "{newest:?}");
+        assert!(newest[3].ends_with(" ms"), "{newest:?}");
         server.join().expect("the server thread");
         assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
 

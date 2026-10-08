@@ -179,6 +179,14 @@ impl ProjectWindow {
         &self.servers
     }
 
+    /// How a response or history entry names its server: the server's current name, or the
+    /// host of the URL it went to when that server has been deleted since.
+    pub fn server_label(&self, server: Option<ServerId>, url: &str) -> String {
+        server
+            .and_then(|id| self.servers.iter().find(|s| s.id == id))
+            .map_or_else(|| url_host(url).to_owned(), |s| s.name.clone())
+    }
+
     /// The server popup's selection: the selected request's last server, else the project's
     /// most recently used one, else the first.
     pub fn selected_server(&self) -> Option<ServerId> {
@@ -265,4 +273,14 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                 .collect(),
         })
         .collect()
+}
+
+/// `https://user@api.example.com:8443/soap` → `api.example.com:8443`; anything else as is.
+fn url_host(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    if host.is_empty() { url } else { host }
 }

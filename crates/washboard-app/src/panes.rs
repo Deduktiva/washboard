@@ -1,13 +1,14 @@
 //! The issues bar under the editor and the response pane below it (PLAN §8).
 
 use std::cell::{OnceCell, RefCell};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlSize, NSFont, NSScrollView, NSStackView, NSStackViewGravity,
+    NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView, NSStackViewGravity,
     NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
 };
 use objc2_foundation::{
@@ -244,10 +245,16 @@ impl ResponsePane {
         {
             text.setEditable(false);
         }
-        let history = TextTable::new(&["Sent", "Status", "Time"], mtm);
+        let history = TextTable::new(&["Sent", "Server", "Status", "Duration"], mtm);
         let tabs = NSTabView::new(mtm);
         let status = NSTextField::labelWithString(ns_string!("No response yet"), mtm);
         status.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        // A long fault message is cut off rather than widening the window.
+        status.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        status.setContentCompressionResistancePriority_forOrientation(
+            NSLayoutPriorityDefaultLow,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
 
         let this = Self::alloc(mtm).set_ivars(ResponseIvars {
             key,
@@ -359,21 +366,31 @@ impl ResponsePane {
     /// Shows the model's response for the window (`ResponseChanged`, `SendStateChanged`).
     pub fn show_response(&self) {
         let key = self.ivars().key;
-        let Some((response, sending)) = self
+        let Some((response, server, sending)) = self
             .read(|app| {
                 let window = app.project(key)?;
-                Some((window.response().cloned(), window.sending()))
+                let response = window.response().cloned();
+                let server = response
+                    .as_ref()
+                    .map(|r| window.server_label(r.server, &r.url));
+                Some((response, server, window.sending()))
             })
             .flatten()
         else {
             return;
         };
-        let status = match (&response, sending) {
-            (_, true) => "Sending…".to_owned(),
-            (None, false) => "No response yet".to_owned(),
-            (Some(response), false) => status_line(response),
+        let status = match (&response, server, sending) {
+            (_, _, true) => "Sending…".to_owned(),
+            (Some(response), Some(server), false) => {
+                let sent = sent_text(&sent_formatter(), response.sent_at);
+                format!("{} · {server} · {sent}", status_line(response))
+            }
+            _ => "No response yet".to_owned(),
         };
         self.set_status(&status);
+        // The full URL, for when the server's name is not enough.
+        let url = response.as_ref().map(|r| NSString::from_str(&r.url));
+        self.ivars().status.setToolTip(url.as_deref());
         let body = response
             .as_ref()
             .and_then(|r| r.body.clone())
@@ -398,31 +415,39 @@ impl ResponsePane {
     pub fn show_history(&self) {
         let key = self.ivars().key;
         let entries = self
-            .read(|app| app.project(key).map(|w| w.history().to_vec()))
+            .read(|app| {
+                let window = app.project(key)?;
+                let entries = window.history().iter().map(|e| {
+                    let server = window.server_label(e.server_id, &e.url);
+                    (e.clone(), server)
+                });
+                Some(entries.collect::<Vec<_>>())
+            })
             .flatten()
             .unwrap_or_default();
-        let formatter = NSDateFormatter::new();
-        formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
-        formatter.setTimeStyle(NSDateFormatterStyle::MediumStyle);
+        let formatter = sent_formatter();
         let rows = entries
             .iter()
-            .map(|e| {
-                let since_epoch = e.sent_at.duration_since(UNIX_EPOCH).unwrap_or_default();
-                let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
+            .map(|(e, server)| {
                 let status = match (&e.error, e.http_status) {
                     (Some(_), _) => "Failed".to_owned(),
                     (None, Some(code)) if e.soap_fault => format!("{code} Fault"),
                     (None, Some(code)) => code.to_string(),
                     (None, None) => "—".to_owned(),
                 };
-                let time = e
+                let duration = e
                     .duration
                     .map_or_else(String::new, |d| format!("{} ms", d.as_millis()));
-                vec![formatter.stringFromDate(&date).to_string(), status, time]
+                vec![
+                    sent_text(&formatter, e.sent_at),
+                    server.clone(),
+                    status,
+                    duration,
+                ]
             })
             .collect();
         self.ivars().history.set_rows(rows);
-        *self.ivars().history_ids.borrow_mut() = entries.iter().map(|e| e.id).collect();
+        *self.ivars().history_ids.borrow_mut() = entries.iter().map(|(e, _)| e.id).collect();
     }
 
     /// A click on a history row shows that exchange.
@@ -458,6 +483,23 @@ impl ResponsePane {
     fn command<R>(&self, title: &str, f: impl FnOnce(&mut App) -> Result<R, ModelError>) {
         with_delegate(self.mtm(), |d| d.command(title, f));
     }
+}
+
+/// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
+fn sent_formatter() -> Retained<NSDateFormatter> {
+    let formatter = NSDateFormatter::new();
+    formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
+    formatter.setTimeStyle(NSDateFormatterStyle::MediumStyle);
+    formatter.setDoesRelativeDateFormatting(true);
+    formatter
+}
+
+/// When a request was sent: the received time differs only by the duration shown beside it,
+/// and a failed send has none.
+fn sent_text(formatter: &NSDateFormatter, sent_at: SystemTime) -> String {
+    let since_epoch = sent_at.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
+    formatter.stringFromDate(&date).to_string()
 }
 
 /// `200 · 120 ms · 1.2 KB`, `500 · SOAP Fault: soapenv:Server: no such customer`, or
