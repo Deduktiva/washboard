@@ -26,6 +26,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --target aarch64-apple-darwin -- -D warnings   # macOS type-check from Linux
 uv run --script fixtures/check_fixtures.py                                   # after changing fixtures
+make app                                                                     # Washboard.app, on a Mac
 ```
 
 Run all of the first four before every commit. CI runs fmt, clippy and tests on Linux and
