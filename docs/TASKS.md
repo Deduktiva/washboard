@@ -76,6 +76,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
 | WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
 | WP-SIDEBAR-MENU | APP-INTEGRATION (done) | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs`; request order in `crates/washboard-ui-model` | Replace the +/−/⋯ buttons under the sidebar with a context menu per row: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request; the REQUESTS header gets New Request. The Project menu and its shortcuts (⌘N, ⌘D, ⌘⌫, ⌘B) stay. Requests sort by name (Finder order: case-insensitive, numbers by value), not by creation; a renamed or new request moves to its place and stays selected. The `sort_order` column stays in the database, unused. |
+| WP-SETTINGS-WINDOW | APP-INTEGRATION (done); coordinate with WP-FORMAT-XML, which adds the first app setting | new `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (replaced); the Settings… and Project Settings… items in `menu.rs` | One Settings window for the app and the open projects, replacing the Project Settings sheet. Below. |
 
 ### WP-FORMAT-XML in detail
 
@@ -109,3 +110,34 @@ error is shown as usual. Spaces only, no tabs.
   text, editor marked dirty and autosaved); format on save on Save All and not on autosave; the
   CLI's exit codes; in `tests/appkit.rs`, ⌃I then ⌘Z restores the text, and the settings round
   trip through a scratch defaults domain.
+
+### WP-SETTINGS-WINDOW in detail
+
+One window, opened by Washboard ▸ Settings… (⌘,), the standard place for settings on macOS.
+Project ▸ Project Settings… opens the same window on that project's pane. It is an ordinary
+window, not a sheet: it stays open beside the project window and changes apply as they are made,
+so there is no Done button.
+
+- **Layout, macOS 26 style:** a sidebar split view (`NSSplitViewItem` sidebar behaviour, so it
+  gets the Liquid Glass sidebar) with a unified, title-only toolbar whose title is the selected
+  pane, like System Settings. Panes are grouped forms: rounded inset sections on the window
+  background, one setting per row, label on the leading edge, control on the trailing edge, a
+  hairline between rows, an explanation in secondary text under a section where needed. No
+  `NSTabView`, no bezeled boxes. Built from AppKit views (no SwiftUI).
+- **App and project, clearly separated:** the sidebar has two sections. "Washboard" holds the
+  app settings (General: indent width and format on save from WP-FORMAT-XML; later ones join
+  here), stored in user defaults. Below it, one section per open project, titled with the
+  project's name and folder icon, with General (name, folder, WSDL files) and Servers. Project
+  settings stay in the project's database as today. Each project pane repeats in its header that
+  its settings belong to that project and are saved in its folder, so nobody mistakes them for
+  app-wide ones. A closed project's section disappears; with no project open there is only the
+  app section.
+- **Servers pane:** the server list as a grouped section with the +/− buttons inside it, the
+  selected server's form as a second section below (Name, URL, Ignore certificate errors, Auth,
+  User, Password, Timeout), and the WSDL's suggested servers as a third section with an Add
+  button per row. Same model API and Keychain handling as the sheet.
+- **State:** the selected pane is remembered (user defaults); the window's frame autosaves.
+- **Tests:** in `tests/appkit.rs`: ⌘, opens the window on the app section; Project Settings…
+  selects that project's Servers pane; closing a project removes its section; editing a server
+  in the window is saved without a Done button; the existing settings sheet checks move to the
+  window. The manual checks on a Mac judge the look against System Settings.
