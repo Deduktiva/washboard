@@ -10,28 +10,37 @@
 //! the text view owns the visible text and undo, each change (typing, paste, undo) goes to
 //! `App::edit` as the UTF-16 range and string AppKit reports, and colours come from the model
 //! on `TokensChanged`. An unbound editor (the response body) keeps its own `TokenBuffer`.
+//!
+//! A bound editor also completes and explains from the model's schema: `complete:` (⌥⎋, or
+//! typing `<`, a space in a tag or `="`) asks `App::completions` for the range and the
+//! items, and resting the mouse on an element name shows `App::hover` as a tool tip.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::ffi::c_void;
 use std::ops::Range;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::sel;
+use objc2::{
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
+};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSAutoresizingMaskOptions, NSColor, NSEvent, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSLayoutManager, NSResponder, NSRulerOrientation, NSRulerView,
-    NSScrollView, NSStringDrawing, NSTextDelegate, NSTextView, NSTextViewDelegate,
-    NSUnderlineColorAttributeName, NSUnderlineStyle, NSUnderlineStyleAttributeName, NSView,
+    NSScrollView, NSStringDrawing, NSText, NSTextDelegate, NSTextView, NSTextViewDelegate,
+    NSToolTipTag, NSTrackingArea, NSTrackingAreaOptions, NSUnderlineColorAttributeName,
+    NSUnderlineStyle, NSUnderlineStyleAttributeName, NSView,
 };
 use objc2_foundation::{
-    NSDictionary, NSNotification, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect,
-    NSSize, NSString,
+    NSArray, NSDictionary, NSInteger, NSNotFound, NSNotification, NSNumber, NSObject,
+    NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString,
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
-use washboard_ui_model::ProjectKey;
+use washboard_ui_model::{App, Completions, ProjectKey};
 
 use crate::app::with_delegate;
-use crate::text::{changed_range, utf16_edit};
+use crate::text::{changed_range, completion_kinds, hover_text, utf16_edit};
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
@@ -214,7 +223,37 @@ pub struct EditorIvars {
     scroll: OnceCell<Retained<NSScrollView>>,
     text_view: OnceCell<Retained<NSTextView>>,
     ruler: OnceCell<Retained<LineNumberRuler>>,
+    /// The element name the tool tip rect covers, and its text.
+    tool_tip: RefCell<Option<(Range<usize>, String)>>,
 }
+
+define_class!(
+    // SAFETY:
+    // - NSTextView has no subclassing requirements; `text_view` calls its initializer.
+    // - `EditorTextView` does not implement `Drop`.
+    /// A text view whose completion range comes from the model, not from word boundaries:
+    /// `cus:li` is replaced whole, and after `<` nothing is.
+    #[unsafe(super(NSTextView, NSText, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[derive(Debug)]
+    struct EditorTextView;
+
+    impl EditorTextView {
+        // SAFETY: the signature matches `rangeForUserCompletion`.
+        #[unsafe(method(rangeForUserCompletion))]
+        fn range_for_user_completion(&self) -> NSRange {
+            let controller = self.delegate().and_then(|d| {
+                let d: &AnyObject = d.as_ref();
+                d.downcast_ref::<EditorController>().map(|c| c.retain())
+            });
+            match controller {
+                Some(c) if c.ivars().key.get().is_some() => c.completion_range(),
+                // SAFETY: calling the superclass's implementation of this very method.
+                _ => unsafe { msg_send![super(self), rangeForUserCompletion] },
+            }
+        }
+    }
+);
 
 define_class!(
     // SAFETY:
@@ -267,6 +306,45 @@ define_class!(
             }
             true
         }
+
+        // SAFETY: the signature matches
+        // `textView:completions:forPartialWordRange:indexOfSelectedItem:`.
+        #[unsafe(method_id(textView:completions:forPartialWordRange:indexOfSelectedItem:))]
+        fn completions_for(
+            &self,
+            _text_view: &NSTextView,
+            words: &NSArray<NSString>,
+            _range: NSRange,
+            _index: *mut NSInteger,
+        ) -> Retained<NSArray<NSString>> {
+            self.completion_words(words)
+        }
+    }
+
+    impl EditorController {
+        // The tracking area added in `for_project`.
+        // SAFETY: the signature matches `mouseMoved:`.
+        #[unsafe(method(mouseMoved:))]
+        fn mouse_moved(&self, event: &NSEvent) {
+            let text_view = self.text_view();
+            let point = text_view.convertPoint_fromView(event.locationInWindow(), None);
+            let at = text_view.characterIndexForInsertionAtPoint(point);
+            self.show_tool_tip_at(at);
+        }
+
+        // The tool tip rect's owner (`NSViewToolTipOwner`).
+        // SAFETY: the signature matches `view:stringForToolTip:point:userData:`.
+        #[unsafe(method_id(view:stringForToolTip:point:userData:))]
+        fn string_for_tool_tip(
+            &self,
+            _view: &NSView,
+            _tag: NSToolTipTag,
+            _point: NSPoint,
+            _data: *mut c_void,
+        ) -> Retained<NSString> {
+            let text = self.ivars().tool_tip.borrow();
+            NSString::from_str(text.as_ref().map_or("", |(_, t)| t.as_str()))
+        }
     }
 );
 
@@ -307,7 +385,114 @@ impl EditorController {
         let this = Self::new(mtm);
         this.ivars().key.set(Some(key));
         this.text_view().setEditable(false);
+        let options = NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::ActiveInKeyWindow
+            | NSTrackingAreaOptions::InVisibleRect;
+        let owner: &AnyObject = &this;
+        // SAFETY: this controller owns the text view and so the tracking area, which holds
+        // its owner weakly; `mouseMoved:` is implemented above.
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                options,
+                Some(owner),
+                None,
+            )
+        };
+        this.text_view().addTrackingArea(&area);
         this
+    }
+
+    /// The model's completions at the insertion point; `None` with a selection.
+    pub fn completions_at_cursor(&self) -> Option<Completions> {
+        let key = self.ivars().key.get()?;
+        let selected = self.text_view().selectedRange();
+        if selected.length > 0 {
+            return None;
+        }
+        self.read(|app| app.completions(key, selected.location))
+            .flatten()
+            .filter(|c| !c.items.is_empty())
+    }
+
+    /// The completion list: the model's items for a bound editor, AppKit's words otherwise.
+    fn completion_words(&self, words: &NSArray<NSString>) -> Retained<NSArray<NSString>> {
+        if self.ivars().key.get().is_none() {
+            return words.retain();
+        }
+        let items: Vec<Retained<NSString>> = self
+            .completions_at_cursor()
+            .map(|c| {
+                c.items
+                    .iter()
+                    .map(|i| NSString::from_str(&i.text))
+                    .collect()
+            })
+            .unwrap_or_default();
+        NSArray::from_retained_slice(&items)
+    }
+
+    /// What `rangeForUserCompletion` answers: the model's range, or none to complete.
+    fn completion_range(&self) -> NSRange {
+        match self.completions_at_cursor() {
+            Some(c) => NSRange::new(c.replace.start, c.replace.len()),
+            None => NSRange::new(NSNotFound as usize, 0),
+        }
+    }
+
+    /// The hover text for the element name at UTF-16 offset `at`, if any.
+    pub fn hover_text(&self, at: usize) -> Option<String> {
+        let key = self.ivars().key.get()?;
+        self.read(|app| app.hover(key, at).as_ref().map(hover_text))
+            .flatten()
+    }
+
+    /// Puts the tool tip on the element name at `at` (what the mouse rests on) and returns its
+    /// text. One rect per name: AppKit asks for a rect's text once while the mouse is in it.
+    pub fn show_tool_tip_at(&self, at: usize) -> Option<String> {
+        let key = self.ivars().key.get()?;
+        let hover = self
+            .read(|app| {
+                app.hover(key, at)
+                    .map(|h| (h.range.clone(), hover_text(&h)))
+            })
+            .flatten();
+        let shown = self
+            .ivars()
+            .tool_tip
+            .borrow()
+            .as_ref()
+            .map(|(r, _)| r.clone());
+        if hover.as_ref().map(|(r, _)| r) == shown.as_ref() {
+            return hover.map(|(_, text)| text);
+        }
+        let text_view = self.text_view();
+        text_view.removeAllToolTips();
+        *self.ivars().tool_tip.borrow_mut() = hover.clone();
+        let (range, text) = hover?;
+        let layout = self.layout_manager();
+        // SAFETY: plain getters on a TextKit 1 stack; a null actual range is allowed.
+        let rect = unsafe {
+            let container = text_view.textContainer()?;
+            let glyphs = layout.glyphRangeForCharacterRange_actualCharacterRange(
+                NSRange::new(range.start, range.len()),
+                std::ptr::null_mut(),
+            );
+            layout.boundingRectForGlyphRange_inTextContainer(glyphs, &container)
+        };
+        let origin = text_view.textContainerOrigin();
+        let rect = NSRect::new(
+            NSPoint::new(rect.origin.x + origin.x, rect.origin.y + origin.y),
+            rect.size,
+        );
+        let owner: &AnyObject = self;
+        // SAFETY: this controller owns the text view, so it outlives the tool tip's
+        // unretained owner reference; it implements `view:stringForToolTip:point:userData:`.
+        unsafe {
+            text_view.addToolTipRect_owner_userData(rect, owner, std::ptr::null_mut());
+        }
+        Some(text)
     }
 
     /// Shows the model's editor text, or nothing without a selected request
@@ -455,6 +640,10 @@ impl EditorController {
             return;
         };
         let title = "Could not edit the request";
+        let typed = match edits.as_slice() {
+            [(range, text)] if range.is_empty() => Some((range.start, text.clone())),
+            _ => None,
+        };
         if !edits.is_empty() {
             delegate.command(title, |app| {
                 edits
@@ -471,6 +660,48 @@ impl EditorController {
         if let Some((range, text)) = fix {
             delegate.command(title, |app| app.edit(key, range, &text));
         }
+        if let Some((at, text)) = typed {
+            self.complete_after_typing(at, &text);
+        }
+    }
+
+    /// Opens the completion list after `<`, a space in a tag or `="` was typed at `at`, if the
+    /// model has completions of the matching kind there. Not on undo or redo.
+    fn complete_after_typing(&self, at: usize, typed: &str) {
+        let text_view = self.text_view();
+        if text_view
+            .undoManager()
+            .is_some_and(|u| u.isUndoing() || u.isRedoing())
+        {
+            return;
+        }
+        let string = text_view.string();
+        let before = at
+            .checked_sub(1)
+            .and_then(|i| char::from_u32(string.characterAtIndex(i).into()));
+        let kinds = completion_kinds(before, typed);
+        if kinds.is_empty() {
+            return;
+        }
+        let offered = self
+            .completions_at_cursor()
+            .is_some_and(|c| c.items.iter().any(|i| kinds.contains(&i.kind)));
+        if offered {
+            // After this edit has finished: `complete:` edits the text itself.
+            // SAFETY: `complete:` takes the sender; a nil sender is allowed.
+            unsafe {
+                let _: () = msg_send![
+                    text_view,
+                    performSelector: sel!(complete:),
+                    withObject: None::<&AnyObject>,
+                    afterDelay: 0.0f64
+                ];
+            }
+        }
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.read(f)).flatten()
     }
 
     fn text_changed(&self) {
@@ -546,7 +777,11 @@ impl EditorController {
 }
 
 fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
-    let text_view = NSTextView::initUsingTextLayoutManager(NSTextView::alloc(mtm), false);
+    let this = EditorTextView::alloc(mtm).set_ivars(());
+    // SAFETY: `initUsingTextLayoutManager:` is a designated initializer of NSTextView.
+    let text_view: Retained<EditorTextView> =
+        unsafe { msg_send![super(this), initUsingTextLayoutManager: false] };
+    let text_view = Retained::into_super(text_view);
     text_view.setFrame(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(600.0, 400.0),

@@ -29,6 +29,7 @@ fn main() {
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
+        ("completion_and_hover", checks::completion_and_hover),
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_sheet", checks::settings_sheet),
@@ -66,8 +67,8 @@ mod checks {
         NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView, NSWindow,
     };
     use objc2_foundation::{
-        NSDate, NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint,
-        NSRange, NSRunLoop, NSString,
+        NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
+        NSObjectProtocol, NSPoint, NSRange, NSRunLoop, NSString,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -1284,6 +1285,81 @@ mod checks {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
         }
+    }
+
+    /// Completion inside the Lookup body element asks the model for its range and items, and
+    /// the tool tip on an element name is the model's hover text.
+    pub fn completion_and_hover(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let key = project.key();
+        ctx.delegate
+            .command("new request", |app| {
+                let op = app.default_operation(key)?;
+                app.new_request(key, &op)
+            })
+            .expect("a Lookup request");
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        project
+            .project_window()
+            .makeFirstResponder(Some(text_view.as_ref()));
+        let text = text_view.string().to_string();
+        assert!(text.is_ascii(), "offsets below count bytes as UTF-16 units");
+        let as_of = text.find("<asOf>").expect("the template has asOf");
+
+        // Typing `<` before `<asOf>` goes through the model; typing it in the view would
+        // open the completion window, which a headless run cannot dismiss.
+        let edit = |range: std::ops::Range<usize>, with: &'static str| {
+            ctx.delegate
+                .command("edit", |app| app.edit(key, range, with))
+                .expect("edited");
+            editor.show_model_text();
+        };
+        edit(as_of..as_of, "<");
+        text_view.setSelectedRange(NSRange::new(as_of + 1, 0));
+        // SAFETY: `rangeForUserCompletion` takes nothing and returns a range.
+        let range: NSRange = unsafe { msg_send![text_view, rangeForUserCompletion] };
+        assert_eq!((range.location, range.length), (as_of + 1, 0));
+        let mut index: NSInteger = 0;
+        let empty = NSArray::<NSString>::new();
+        // SAFETY: the delegate method's signature; `index` outlives the call.
+        let words: Retained<NSArray<NSString>> = unsafe {
+            msg_send![
+                editor,
+                textView: text_view,
+                completions: &*empty,
+                forPartialWordRange: range,
+                indexOfSelectedItem: &mut index
+            ]
+        };
+        let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+        assert_eq!(words, ["customerNo", "asOf"]);
+        text_view.setSelectedRange(NSRange::new(0, 4));
+        assert!(
+            editor.completions_at_cursor().is_none(),
+            "not with a selection"
+        );
+        edit(as_of..as_of + 1, "");
+
+        let hover = editor
+            .show_tool_tip_at(as_of + 2)
+            .expect("asOf has a hover");
+        assert!(hover.starts_with("asOf\n"), "{hover}");
+        assert!(hover.contains("exactly 1"), "{hover}");
+        // SAFETY: the tool tip owner's method; the user data is unused.
+        let shown: Retained<NSString> = unsafe {
+            msg_send![
+                editor,
+                view: AsRef::<NSView>::as_ref(text_view),
+                stringForToolTip: 0 as NSInteger,
+                point: NSPoint::new(0.0, 0.0),
+                userData: std::ptr::null_mut::<std::ffi::c_void>()
+            ]
+        };
+        assert_eq!(shown.to_string(), hover);
+        assert_eq!(editor.show_tool_tip_at(1), None, "no hover on the envelope");
+        autoreleasepool(|_| project.project_window().performClose(None));
     }
 
     /// The model's server names for `key`, in order.
