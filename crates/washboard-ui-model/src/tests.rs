@@ -13,8 +13,8 @@ use washboard_core::xml::TokenKind;
 use crate::fake::Fake;
 use crate::server;
 use crate::{
-    App, CheckState, DialogAnswer, Event, ImportTarget, Issue, ModelError, OperationNode,
-    ProjectKey, SchemaState,
+    App, CheckState, CompletionKind, Completions, DialogAnswer, Event, ImportTarget, Issue,
+    ModelError, OperationNode, ProjectKey, SchemaState,
 };
 
 fn fixtures() -> PathBuf {
@@ -1234,4 +1234,133 @@ fn replace_wsdl_revalidates_every_request() {
     // The open editor is checked against the new schema too.
     let issues = window.editor().expect("editor").issues();
     assert!(issues.iter().any(Issue::is_error), "{issues:?}");
+}
+
+/// A project made from `fixtures/customer` with one CreateOrder request holding the fixture's
+/// valid CreateOrder text.
+fn customer_editor(setup: &Setup) -> (Fake, App, ProjectKey, String) {
+    let (fake, mut app) = setup.launch();
+    let target = ImportTarget::NewProject;
+    app.begin_import(target);
+    app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
+        .expect("destination");
+    app.set_import_files(
+        target,
+        customer().join("CustomerService.wsdl"),
+        vec![customer()],
+    )
+    .expect("files");
+    fake.pump_until(&mut app, |app| checked(app, target));
+    let key = app.create_project().expect("create");
+    fake.pump_until(&mut app, |app| loaded(app, key));
+    let window = app.project(key).expect("open");
+    let op = window.sidebar().services[0].ports[0]
+        .operations
+        .iter()
+        .find(|o| o.name() == "CreateOrder")
+        .expect("CreateOrder")
+        .operation
+        .clone();
+    app.new_request(key, &op).expect("new");
+    let text =
+        fs::read_to_string(customer().join("requests/valid-create-order.xml")).expect("fixture");
+    set_text(&mut app, key, &text);
+    settle(&fake, &mut app);
+    (fake, app, key, text)
+}
+
+/// UTF-16 offset of `needle` plus `skip`; the fixture is ASCII, so bytes are UTF-16 units.
+fn offset(text: &str, needle: &str, skip: usize) -> usize {
+    text.find(needle).expect("needle") + skip
+}
+
+fn texts(completions: &Completions) -> Vec<&str> {
+    completions.items.iter().map(|i| i.text.as_str()).collect()
+}
+
+#[test]
+fn completes_child_elements_with_the_prefix_in_scope() {
+    let setup = Setup::new();
+    let (_fake, app, key, text) = customer_editor(&setup);
+    let at = offset(&text, "<cus:line", 1);
+    let c = app.completions(key, at).expect("completions");
+    assert_eq!(texts(&c), ["cus:line", "cus:status"]);
+    assert_eq!(c.replace, at..at + "cus:line".len());
+    assert_eq!(c.items[0].kind, CompletionKind::Element);
+    assert!(
+        c.items[0]
+            .detail
+            .as_deref()
+            .expect("detail")
+            .contains("1..*")
+    );
+}
+
+#[test]
+fn completes_attributes_values_and_types() {
+    let setup = Setup::new();
+    let (_fake, app, key, text) = customer_editor(&setup);
+
+    let c = app
+        .completions(key, offset(&text, "sku=", 0))
+        .expect("attributes");
+    assert_eq!(texts(&c), ["sku", "qty"]);
+    assert!(
+        c.items
+            .iter()
+            .all(|i| i.detail.as_deref() == Some("required"))
+    );
+
+    let c = app
+        .completions(key, offset(&text, ">NEW<", 1))
+        .expect("values");
+    assert_eq!(texts(&c), ["NEW", "SHIPPED", "CANCELLED"]);
+
+    let at = offset(&text, "com:PublicCompany\"", 0);
+    let c = app.completions(key, at).expect("types");
+    assert_eq!(c.items[0].kind, CompletionKind::Type);
+    assert!(texts(&c).contains(&"com:PublicCompany"), "{:?}", texts(&c));
+    assert_eq!(c.replace, at..at + "com:PublicCompany".len());
+
+    let c = app
+        .completions(key, offset(&text, "</cus:status>", 2))
+        .expect("end tag");
+    assert_eq!(texts(&c), ["cus:status"]);
+}
+
+#[test]
+fn hover_shows_the_type_in_effect() {
+    let setup = Setup::new();
+    let (_fake, app, key, text) = customer_editor(&setup);
+    let at = offset(&text, "<cus:party", 3);
+    let hover = app.hover(key, at).expect("hover");
+    assert_eq!(hover.name, "cus:party");
+    let start = offset(&text, "<cus:party", 1);
+    assert_eq!(hover.range, start..start + "cus:party".len());
+    assert!(
+        hover
+            .lines
+            .contains(&"type com:PublicCompany (declared com:Party)".to_owned()),
+        "{hover:?}"
+    );
+    assert!(hover.lines.contains(&"exactly 1".to_owned()), "{hover:?}");
+}
+
+#[test]
+fn nothing_is_offered_outside_header_and_body_blocks() {
+    let setup = Setup::new();
+    let (_fake, app, key, text) = customer_editor(&setup);
+    assert_eq!(app.completions(key, offset(&text, "<!-- expect", 6)), None);
+    assert_eq!(app.hover(key, offset(&text, "<soapenv:Body", 3)), None);
+}
+
+#[test]
+fn a_fresh_end_tag_offers_the_open_element() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, text) = customer_editor(&setup);
+    let at = offset(&text, "<cus:status>NEW", "<cus:status>NEW".len());
+    let end = offset(&text, "</cus:status>", "</cus:status>".len());
+    app.edit(key, at..end, "</").expect("edit");
+    let c = app.completions(key, at + 2).expect("end tag");
+    assert_eq!(texts(&c), ["cus:status"]);
 }

@@ -22,7 +22,7 @@ use roxmltree::Node;
 
 use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
-use crate::schema::{PathStep, SchemaModel, SuggestionSource};
+use crate::schema::{SchemaModel, SuggestionSource, block_path};
 use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
 use crate::wsdl::{Dispatch, Wsdl};
 use crate::xml;
@@ -376,29 +376,6 @@ fn explain_abstract(
     if !names.is_empty() {
         d.message = format!("{} {lead}: {}.", d.message, names.join(", "));
     }
-}
-
-/// The schema path for an editor path (outermost first): from the element inside a SOAP
-/// `Header` or `Body` down to the last one. `None` outside header and body blocks, or if a
-/// name on the way does not resolve.
-fn block_path(path: &[xml::PathElement]) -> Option<Vec<PathStep>> {
-    let is_block_parent = |e: &xml::PathElement| {
-        e.name
-            .as_ref()
-            .is_some_and(|n| n.ns == SOAP11_ENV_NS && matches!(n.local.as_str(), "Body" | "Header"))
-    };
-    let first = path.iter().position(is_block_parent)? + 1;
-    path.get(first..)
-        .filter(|block| !block.is_empty())?
-        .iter()
-        .map(|e| {
-            let step = PathStep::new(e.name.clone()?);
-            Some(match e.xsi_type.as_ref().and_then(|t| t.name.clone()) {
-                Some(t) => step.with_xsi_type(t),
-                None => step,
-            })
-        })
-        .collect()
 }
 
 fn in_env(n: &Node<'_, '_>, local: &str) -> bool {

@@ -10,6 +10,7 @@
 //! Owned by WP-UI-MODEL (`docs/TASKS.md`).
 
 mod app;
+mod assist;
 mod commands;
 mod diagnostics;
 mod editor;
@@ -29,6 +30,7 @@ mod server;
 mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
+pub use assist::{CompletionItem, CompletionKind, Completions, Hover};
 pub use diagnostics::Issue;
 pub use editor::Editor;
 pub use event::Event;
