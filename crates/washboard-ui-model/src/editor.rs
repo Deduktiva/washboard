@@ -123,7 +123,7 @@ impl App {
         text: &str,
     ) -> Result<(), ModelError> {
         let version = self.next();
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let editor = window
             .editor
             .as_mut()
@@ -181,7 +181,7 @@ impl App {
 
     /// Saves the project's editor if it is dirty.
     pub(crate) fn flush(&mut self, key: ProjectKey) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let saved = match &mut window.editor {
             Some(editor) if editor.dirty => {
                 window.project.write_request(editor.request, &editor.text)?;

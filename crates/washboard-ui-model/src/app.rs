@@ -362,6 +362,11 @@ impl App {
         self.start_check(key, Check::Full);
     }
 
+    /// For commands: a project closed in the meantime is [`ModelError::UnknownProject`].
+    pub(crate) fn window(&mut self, key: ProjectKey) -> Result<&mut ProjectWindow, ModelError> {
+        self.window_mut(key).ok_or(ModelError::UnknownProject)
+    }
+
     pub(crate) fn window_mut(&mut self, key: ProjectKey) -> Option<&mut ProjectWindow> {
         self.projects
             .iter_mut()

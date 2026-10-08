@@ -312,6 +312,19 @@ fn bad_urls_are_rejected_before_connecting() {
 }
 
 #[test]
+fn host_label_is_the_host_header() {
+    assert_eq!(
+        host_label("https://api.example.com:443/soap").as_deref(),
+        Some("api.example.com")
+    );
+    assert_eq!(
+        host_label("http://api.example.com:8080/soap").as_deref(),
+        Some("api.example.com:8080")
+    );
+    assert_eq!(host_label("not a url"), None);
+}
+
+#[test]
 fn host_header_omits_default_port() {
     let t = Target::parse("https://Example.org:443").expect("parse");
     assert_eq!(t.host_header, "Example.org");

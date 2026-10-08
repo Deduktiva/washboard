@@ -281,4 +281,37 @@ impl Wsdl {
     pub fn entry_dest(&self) -> &str {
         self.layout.first().map_or("", |l| l.dest.as_str())
     }
+
+    /// Every supported operation, in document order: what a project can create requests for.
+    pub fn supported_operations(&self) -> Vec<OperationRef> {
+        self.definitions
+            .bindings
+            .iter()
+            .flat_map(|b| {
+                b.operations
+                    .iter()
+                    .filter(|o| o.is_supported())
+                    .map(|o| OperationRef {
+                        binding: b.name.clone(),
+                        operation: o.name.clone(),
+                    })
+            })
+            .collect()
+    }
+
+    /// `(port name, address)` of every port bound to a SOAP 1.1 binding, offered as servers
+    /// when a project is created.
+    pub fn soap11_addresses(&self) -> Vec<(String, String)> {
+        self.definitions
+            .services
+            .iter()
+            .flat_map(|s| &s.ports)
+            .filter(|p| {
+                self.definitions
+                    .binding(&p.binding)
+                    .is_some_and(|b| b.protocol == Protocol::Soap11)
+            })
+            .filter_map(|p| Some((p.name.clone(), p.address.clone()?)))
+            .collect()
+    }
 }

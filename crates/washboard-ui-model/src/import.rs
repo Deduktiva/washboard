@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 
 use washboard_core::diag::{self, Diagnostic};
 use washboard_core::model::{OperationRef, RequestId};
-use washboard_core::project::{OpenProject, Project, WsdlFile, WsdlSet};
+use washboard_core::project::{OpenProject, Project, WsdlSet};
 use washboard_core::validate::validate_request;
 use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::wsdl::{self, ImportCheck, Protocol, Sources, StructuralReport, Wsdl};
+use washboard_core::wsdl::{self, ImportCheck, Sources, StructuralReport};
 
 use crate::app::{App, ModelError, ProjectKey};
 use crate::event::Event;
@@ -210,13 +210,13 @@ impl App {
         index: usize,
         url: &str,
     ) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if index >= window.suggested_servers.len() {
             return Ok(());
         }
         let suggestion = window.suggested_servers.remove(index);
         let id = self.add_server(key)?;
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let mut server = window
             .servers
             .iter()
@@ -243,9 +243,9 @@ impl App {
         let set = checked.set.clone();
         let new_operations = checked.operations.clone();
         self.flush(key)?;
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let old_operations = match &window.schema {
-            crate::window::SchemaState::Ready(s) => supported_operations(&s.wsdl),
+            crate::window::SchemaState::Ready(s) => s.wsdl.supported_operations(),
             _ => Vec::new(),
         };
         window.project.replace_wsdl(&set)?;
@@ -303,24 +303,10 @@ fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String
             Err(diagnostics) => diagnostics,
         }
     };
-    let files = sources
-        .files()
-        .iter()
-        .zip(&w.layout)
-        .zip(&w.check.files)
-        .filter(|(_, info)| info.used)
-        .map(|((src, layout), _)| WsdlFile {
-            source: PathBuf::from(&src.path),
-            dest: layout.dest.clone(),
-        })
-        .collect();
-    let set = WsdlSet {
-        files,
-        entry: w.entry_dest().to_owned(),
-    };
+    let set = WsdlSet::from_import(&sources, &w);
     Ok(CheckedImport {
-        addresses: soap11_addresses(&w),
-        operations: supported_operations(&w),
+        addresses: w.soap11_addresses(),
+        operations: w.supported_operations(),
         check: w.check,
         report: w.report,
         compile,
@@ -331,37 +317,6 @@ fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String
 /// The operations of `a` that `b` lacks, in `a`'s order.
 fn missing_from(a: &[OperationRef], b: &[OperationRef]) -> Vec<OperationRef> {
     a.iter().filter(|op| !b.contains(op)).cloned().collect()
-}
-
-/// In document order.
-fn supported_operations(w: &Wsdl) -> Vec<OperationRef> {
-    w.definitions
-        .bindings
-        .iter()
-        .flat_map(|b| {
-            b.operations
-                .iter()
-                .filter(|o| o.is_supported())
-                .map(|o| OperationRef {
-                    binding: b.name.clone(),
-                    operation: o.name.clone(),
-                })
-        })
-        .collect()
-}
-
-fn soap11_addresses(w: &Wsdl) -> Vec<(String, String)> {
-    w.definitions
-        .services
-        .iter()
-        .flat_map(|s| &s.ports)
-        .filter(|p| {
-            w.definitions
-                .binding(&p.binding)
-                .is_some_and(|b| b.protocol == Protocol::Soap11)
-        })
-        .filter_map(|p| Some((p.name.clone(), p.address.clone()?)))
-        .collect()
 }
 
 /// Validates every request against the new schema; without a usable one, every request

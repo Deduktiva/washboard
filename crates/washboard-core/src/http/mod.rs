@@ -51,6 +51,12 @@ pub const USER_AGENT: &str = concat!("Washboard/", env!("CARGO_PKG_VERSION"));
 
 pub const CONTENT_TYPE: &str = "text/xml; charset=utf-8";
 
+/// How a server URL is named where its server is not known: the host as sent in `Host`, with
+/// the port only if it isn't the scheme's default. `None` for a URL [`send`] would refuse.
+pub fn host_label(url: &str) -> Option<String> {
+    Target::parse(url).ok().map(|t| t.host_header)
+}
+
 /// Sends one SOAP 1.1 request and records what went over the wire.
 ///
 /// Never fails: transport problems (bad URL, DNS, connect, TLS, timeout, oversized body) are

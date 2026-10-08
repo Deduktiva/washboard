@@ -4,12 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use washboard_core::diag::Diagnostic;
+use washboard_core::http;
 use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
+use crate::app::ModelError;
 use crate::editor::Editor;
 use crate::import::{ReplaceOutcome, SuggestedServer};
 use crate::send::{ResponseView, Sending};
@@ -66,6 +68,29 @@ pub enum SchemaState {
     Ready(Arc<ProjectSchema>),
     /// The WSDL set could not be read; the message is for the sidebar's placeholder.
     Failed(String),
+}
+
+impl SchemaState {
+    /// The loaded WSDL, for commands that need it; the error says why there is none.
+    pub(crate) fn ready(&self) -> Result<&Arc<ProjectSchema>, ModelError> {
+        match self {
+            SchemaState::Ready(schema) => Ok(schema),
+            SchemaState::Loading => Err(ModelError::SchemaNotReady),
+            SchemaState::Failed(m) => Err(ModelError::SchemaFailed(m.clone())),
+        }
+    }
+
+    /// The loaded WSDL with schemas that compiled, so requests can be validated against it.
+    pub(crate) fn validating(&self) -> Result<&Arc<ProjectSchema>, ModelError> {
+        let schema = self.ready()?;
+        if schema.compile_errors().is_empty() {
+            Ok(schema)
+        } else {
+            Err(ModelError::SchemaFailed(
+                "the WSDL's schemas could not be compiled".into(),
+            ))
+        }
+    }
 }
 
 /// The sidebar's two sections (PLAN §8).
@@ -180,11 +205,15 @@ impl ProjectWindow {
     }
 
     /// How a response or history entry names its server: the server's current name, or the
-    /// host of the URL it went to when that server has been deleted since.
+    /// host of the URL it went to when that server has been deleted since
+    /// ([`http::host_label`]; the URL itself if it doesn't parse).
     pub fn server_label(&self, server: Option<ServerId>, url: &str) -> String {
         server
             .and_then(|id| self.servers.iter().find(|s| s.id == id))
-            .map_or_else(|| url_host(url).to_owned(), |s| s.name.clone())
+            .map_or_else(
+                || http::host_label(url).unwrap_or_else(|| url.to_owned()),
+                |s| s.name.clone(),
+            )
     }
 
     /// The server popup's selection: the selected request's last server, else the project's
@@ -273,14 +302,4 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                 .collect(),
         })
         .collect()
-}
-
-/// `https://user@api.example.com:8443/soap` → `api.example.com:8443`; anything else as is.
-fn url_host(url: &str) -> &str {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let host = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    if host.is_empty() { url } else { host }
 }

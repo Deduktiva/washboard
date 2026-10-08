@@ -33,6 +33,12 @@ pub enum DecodeError {
     Invalid { encoding: Encoding, offset: usize },
 }
 
+/// [`decode`]'s text, or the bytes as lossy UTF-8 if they don't decode: for showing what was
+/// sent or received, which need not be XML at all.
+pub fn decode_lossy(bytes: &[u8]) -> String {
+    decode(bytes).map_or_else(|_| String::from_utf8_lossy(bytes).into_owned(), |d| d.text)
+}
+
 /// Decodes raw XML bytes to text, honouring a BOM and the XML declaration's `encoding`.
 pub fn decode(bytes: &[u8]) -> Result<Decoded, DecodeError> {
     if let Some(rest) = bytes.strip_prefix(UTF8_BOM) {
@@ -146,6 +152,12 @@ pub(crate) fn declared_encoding(bytes: &[u8]) -> Option<Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_lossy_falls_back_to_lossy_utf8() {
+        assert_eq!(decode_lossy(b"\xEF\xBB\xBF<a/>"), "<a/>");
+        assert_eq!(decode_lossy(b"<a>\xFF</a>"), "<a>\u{FFFD}</a>");
+    }
 
     #[test]
     fn utf8_bom_is_stripped() {

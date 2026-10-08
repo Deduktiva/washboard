@@ -51,6 +51,15 @@ impl Issue {
         }
     }
 
+    /// One issue per diagnostic, in order.
+    pub(crate) fn all(text: &str, diagnostics: Vec<Diagnostic>) -> Vec<Issue> {
+        let lines = LineIndex::new(text);
+        diagnostics
+            .into_iter()
+            .map(|d| Issue::new(text, &lines, d))
+            .collect()
+    }
+
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
@@ -86,7 +95,7 @@ enum Against {
 impl App {
     /// The Validate command: checks right away instead of waiting for the debounce.
     pub fn validate(&mut self, key: ProjectKey) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if window.editor.is_none() {
             return Err(ModelError::NoRequestSelected);
         }
@@ -166,10 +175,7 @@ impl App {
         };
         // A schema that changed since the check started starts another check, which replaces
         // this result, so the state now is good enough.
-        let schema = matches!(
-            &window.schema,
-            SchemaState::Ready(s) if s.compile_errors().is_empty()
-        );
+        let schema = window.schema.validating().is_ok();
         let Some(editor) = window.editor.as_mut() else {
             return;
         };
@@ -219,9 +225,5 @@ fn full_check(text: &str, against: &Against, hint: Option<&OperationRef>) -> Vec
             out
         }
     };
-    let lines = LineIndex::new(text);
-    diagnostics
-        .into_iter()
-        .map(|d| Issue::new(text, &lines, d))
-        .collect()
+    Issue::all(text, diagnostics)
 }

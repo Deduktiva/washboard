@@ -27,9 +27,9 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{App, ImportTarget, ModelError, ProjectKey};
+use washboard_ui_model::{ImportTarget, ProjectKey};
 
-use crate::app::with_delegate;
+use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
 use crate::panes::{IssuesBar, ResponsePane};
@@ -437,14 +437,6 @@ impl ProjectWindowController {
             .flatten()
     }
 
-    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.read(f)).flatten()
-    }
-
-    fn command<R>(&self, title: &str, f: impl FnOnce(&mut App) -> Result<R, ModelError>) {
-        with_delegate(self.mtm(), |d| d.command(title, f));
-    }
-
     pub fn editor(&self) -> &EditorController {
         &self.ivars().editor
     }
@@ -768,3 +760,5 @@ fn content_pane(
     split.adjustSubviews();
     Retained::into_super(split)
 }
+
+impl ModelAccess for ProjectWindowController {}

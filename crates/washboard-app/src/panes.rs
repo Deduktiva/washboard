@@ -16,9 +16,9 @@ use objc2_foundation::{
     ns_string,
 };
 use washboard_core::model::HistoryId;
-use washboard_ui_model::{App, Issue, IssuesBasis, ModelError, ProjectKey, ResponseView};
+use washboard_ui_model::{Issue, IssuesBasis, ProjectKey, ResponseView};
 
-use crate::app::with_delegate;
+use crate::app::ModelAccess;
 use crate::editor::EditorController;
 use crate::layout;
 use crate::table::TextTable;
@@ -480,14 +480,6 @@ impl ResponsePane {
             app.restore_request(key, entry)
         });
     }
-
-    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.read(f)).flatten()
-    }
-
-    fn command<R>(&self, title: &str, f: impl FnOnce(&mut App) -> Result<R, ModelError>) {
-        with_delegate(self.mtm(), |d| d.command(title, f));
-    }
 }
 
 /// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
@@ -560,3 +552,5 @@ fn status_line(response: &ResponseView) -> String {
     }
     parts.join(" · ")
 }
+
+impl ModelAccess for ResponsePane {}

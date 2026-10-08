@@ -4,8 +4,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
 
-use washboard_core::diag::LineIndex;
-use washboard_core::http::{self, Exchange, SendRequest, SoapFault, detect_fault};
+use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
 use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
 use washboard_core::project::HistoryRecord;
 use washboard_core::validate::validate_request;
@@ -14,7 +13,7 @@ use washboard_core::xml;
 use crate::app::{App, ModelError, ProjectKey};
 use crate::diagnostics::{Check, Issue};
 use crate::event::Event;
-use crate::window::{ProjectWindow, SchemaState};
+use crate::window::ProjectWindow;
 
 /// The HTTP log keeps this many exchanges, across all projects.
 pub const LOG_CAPACITY: usize = 50;
@@ -73,7 +72,7 @@ impl ResponseView {
             url: server.url.clone(),
             sent_at: exchange.started_at,
             duration: Some(exchange.duration),
-            status: response.and_then(|r| status_code(&r.start_line)),
+            status: response.and_then(RawMessage::status_code),
             error: exchange.error.clone(),
             headers: response.map(|r| r.headers.clone()).unwrap_or_default(),
             size: response.map_or(0, |r| r.body.len()),
@@ -83,11 +82,7 @@ impl ResponseView {
     }
 }
 
-/// `HTTP/1.1 200 OK` → 200.
-fn status_code(start_line: &str) -> Option<u16> {
-    start_line.split_whitespace().nth(1)?.parse().ok()
-}
-
+/// Pretty-printed only if it decodes; a lossy fallback is shown as received.
 fn display_body(bytes: &[u8]) -> String {
     match xml::decode(bytes) {
         Ok(decoded) => xml::pretty_print(&decoded.text).unwrap_or(decoded.text),
@@ -147,7 +142,7 @@ impl App {
         self.flush(key)?;
         let id = self.next();
         let secrets = self.front.secrets.clone();
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         if window.sending.is_some() {
             return Err(ModelError::AlreadySending);
         }
@@ -155,16 +150,7 @@ impl App {
             .editor
             .as_ref()
             .ok_or(ModelError::NoRequestSelected)?;
-        let schema = match &window.schema {
-            SchemaState::Ready(schema) if schema.compile_errors().is_empty() => schema.clone(),
-            SchemaState::Ready(_) => {
-                return Err(ModelError::SchemaFailed(
-                    "the WSDL's schemas could not be compiled".into(),
-                ));
-            }
-            SchemaState::Loading => return Err(ModelError::SchemaNotReady),
-            SchemaState::Failed(m) => return Err(ModelError::SchemaFailed(m.clone())),
-        };
+        let schema = window.schema.validating()?.clone();
         let server_id = window.selected_server().ok_or(ModelError::NoServer)?;
         let server = window
             .servers
@@ -195,13 +181,7 @@ impl App {
                     validate_request(&schema.wsdl, &request_schema, &text, hint.as_ref())
                 };
                 if validation.has_errors() {
-                    let lines = LineIndex::new(&text);
-                    let issues = validation
-                        .diagnostics
-                        .into_iter()
-                        .map(|d| Issue::new(&text, &lines, d))
-                        .collect();
-                    return Outcome::Refused(issues);
+                    return Outcome::Refused(Issue::all(&text, validation.diagnostics));
                 }
                 let exchange = http::send(&SendRequest {
                     server: to,
@@ -299,7 +279,7 @@ impl App {
 
     /// Shows a history entry in the response pane.
     pub fn show_history(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let record = window.project.load_history(entry)?;
         window.response = Some(ResponseView::from_record(record));
         self.events.push(Event::ResponseChanged { project: key });
@@ -309,11 +289,9 @@ impl App {
     /// History ▸ Restore request: puts the request as it was sent into the editor (an edit,
     /// so autosave and checks follow; the widget's undo does not cover it).
     pub fn restore_request(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
-        let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
+        let window = self.window(key)?;
         let record = window.project.load_history(entry)?;
-        let text = xml::decode(&record.request_body)
-            .map(|d| d.text)
-            .unwrap_or_else(|_| String::from_utf8_lossy(&record.request_body).into_owned());
+        let text = xml::decode_lossy(&record.request_body);
         let editor = window
             .editor
             .as_ref()
