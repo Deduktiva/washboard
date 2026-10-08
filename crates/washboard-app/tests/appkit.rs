@@ -1184,7 +1184,11 @@ mod checks {
         let body = response.body().text_view().string().to_string();
         assert!(body.contains("LookupResponse"), "{body}");
         assert!(
-            response.headers().contains("Content-Type"),
+            // HTTP/1.1 header names are case-insensitive; the client hands them lowercased.
+            response
+                .headers()
+                .to_ascii_lowercase()
+                .contains("content-type"),
             "{}",
             response.headers()
         );
@@ -1243,7 +1247,9 @@ mod checks {
 
         let secret = "YWxpY2U6c2VjcmV0";
         assert!(
-            log.request_text().contains("Authorization: Basic ••••••••"),
+            log.request_text()
+                .to_lowercase()
+                .contains("authorization: basic ••••••••"),
             "masked: {}",
             log.request_text()
         );
