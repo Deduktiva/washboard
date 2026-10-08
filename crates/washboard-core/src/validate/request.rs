@@ -170,13 +170,9 @@ pub fn validate_request(
         Err(e) => {
             // libxml2 accepts a few documents roxmltree rejects (very deep nesting, large
             // entity expansion). Without a tree there is no dispatch, so report it.
-            let pos = TextPos {
-                line: e.pos().row,
-                column: e.pos().col,
-            };
             out.diagnostics.push(Diagnostic::error(
                 DiagSource::WellFormedness,
-                Some(pos),
+                Some(e.pos().into()),
                 format!("cannot be read as a SOAP request: {e}"),
             ));
             return out;

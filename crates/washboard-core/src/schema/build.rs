@@ -9,7 +9,6 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use roxmltree::{Document, Node};
 
-use crate::diag::TextPos;
 use crate::model::{QName, SchemaBundle};
 use crate::soap::XSD_NS;
 
@@ -50,23 +49,17 @@ impl SchemaModel {
         let docs: Vec<Option<Document<'_>>> = bundle
             .docs
             .iter()
-            .map(
-                |d| match Document::parse_with_options(&d.text, parse_options()) {
-                    Ok(doc) => Some(doc),
-                    Err(e) => {
-                        let p = e.pos();
-                        b.m.warnings.push(SchemaWarning {
-                            uri: d.uri.clone(),
-                            pos: Some(TextPos {
-                                line: p.row,
-                                column: p.col,
-                            }),
-                            message: format!("not well-formed: {e}"),
-                        });
-                        None
-                    }
-                },
-            )
+            .map(|d| match crate::xml::parse_wsdl_or_xsd(&d.text) {
+                Ok(doc) => Some(doc),
+                Err(e) => {
+                    b.m.warnings.push(SchemaWarning {
+                        uri: d.uri.clone(),
+                        pos: Some(e.pos().into()),
+                        message: format!("not well-formed: {e}"),
+                    });
+                    None
+                }
+            })
             .collect();
         let by_uri: HashMap<&str, usize> = bundle
             .docs
@@ -101,15 +94,6 @@ impl SchemaModel {
             b.process(bundle, &docs, &by_uri, i, own_tns.to_string());
         }
         b.finish()
-    }
-}
-
-fn parse_options<'a>() -> roxmltree::ParsingOptions<'a> {
-    // XMLSchema-style documents may carry an internal DTD subset; roxmltree never loads
-    // external entities.
-    roxmltree::ParsingOptions {
-        allow_dtd: true,
-        ..roxmltree::ParsingOptions::default()
     }
 }
 
@@ -190,13 +174,9 @@ fn documentation(n: Node<'_, '_>) -> Option<String> {
 
 impl Builder {
     fn warn(&mut self, ctx: &Ctx<'_>, node: Node<'_, '_>, message: impl Into<String>) {
-        let p = ctx.doc.text_pos_at(node.range().start);
         self.m.warnings.push(SchemaWarning {
             uri: ctx.uri.to_string(),
-            pos: Some(TextPos {
-                line: p.row,
-                column: p.col,
-            }),
+            pos: Some(ctx.doc.text_pos_at(node.range().start).into()),
             message: message.into(),
         });
     }

@@ -10,7 +10,6 @@ use crate::diag::{DiagSource, Diagnostic, TextPos};
 use crate::model::QName;
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, WSDL_SOAP12_NS};
 
-use super::graph::parse;
 use crate::diag::LineIndex;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -369,7 +368,7 @@ struct Raw {
 pub(crate) fn build(files: &[(usize, &str, &str)], diags: &mut Vec<Diagnostic>) -> Definitions {
     let mut raw = Raw::default();
     for &(fi, name, text) in files {
-        let Ok(doc) = parse(text) else {
+        let Ok(doc) = crate::xml::parse_wsdl_or_xsd(text) else {
             continue;
         };
         let lines = LineIndex::new(text);
