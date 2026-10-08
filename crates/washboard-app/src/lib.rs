@@ -10,6 +10,12 @@
 
 #[cfg(target_os = "macos")]
 mod app;
+#[cfg(target_os = "macos")]
+mod menu;
+#[cfg(target_os = "macos")]
+mod welcome;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};
+#[cfg(target_os = "macos")]
+pub use welcome::{RecentProject, WelcomeController, sample_recent_projects};
