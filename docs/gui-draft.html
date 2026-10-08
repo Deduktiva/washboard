@@ -16,6 +16,8 @@
   --err: #d23a2f;
   --warn: #b7791f;
   --ok: #2b8a3e;
+  --hist: #fbeeb8;
+  --hist-line: #e3c96a;
   --code-bg: #ffffff;
   --tok-tag: #9b2393;
   --tok-attr: #836c28;
@@ -28,26 +30,26 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --desk: #15171b; --fg: #e6e7ea; --muted: #9a9ea8; --win: #1f2024; --chrome: #2a2b30;
   --sidebar: #26272c; --line: #3a3b41; --sel: #2f7cf6; --sel-soft: #24395c; --accent: #4a8ff8;
-  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --code-bg: #1b1c20;
+  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --hist: #4a3d15; --hist-line: #6d5a1f; --code-bg: #1b1c20;
   --tok-tag: #fc5fa3; --tok-attr: #d0a8ff; --tok-str: #fc6a5d; --tok-ns: #a3b1ff; --tok-com: #7f8c98;
   color-scheme: dark } }
 :root[data-theme="dark"] {
   --desk: #15171b; --fg: #e6e7ea; --muted: #9a9ea8; --win: #1f2024; --chrome: #2a2b30;
   --sidebar: #26272c; --line: #3a3b41; --sel: #2f7cf6; --sel-soft: #24395c; --accent: #4a8ff8;
-  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --code-bg: #1b1c20;
+  --err: #ff6b5e; --warn: #e3b341; --ok: #57c26b; --hist: #4a3d15; --hist-line: #6d5a1f; --code-bg: #1b1c20;
   --tok-tag: #fc5fa3; --tok-attr: #d0a8ff; --tok-str: #fc6a5d; --tok-ns: #a3b1ff; --tok-com: #7f8c98;
   color-scheme: dark }
 
 html, body { background: var(--desk); color: var(--fg); font: 13px/1.45 var(--ui); }
 body { padding: 28px 20px 48px; }
-.page { max-width: 1320px; margin: 0 auto; display: grid; gap: 20px; }
+.page { max-width: 1500px; margin: 0 auto; display: grid; gap: 20px; }
 header h1 { font-size: 22px; margin: 0 0 4px; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
 header p { margin: 0; color: var(--muted); max-width: 70ch; }
 
 .seg { display: inline-flex; flex-wrap: wrap; background: var(--chrome); border: 1px solid var(--line); border-radius: 7px; padding: 2px; gap: 2px; }
 .seg button { font: inherit; color: var(--fg); background: transparent; border: 0; border-radius: 5px; padding: 4px 12px; cursor: pointer; }
 .seg button[aria-selected="true"] { background: var(--win); box-shadow: 0 1px 2px rgba(0,0,0,.15); font-weight: 600; }
-.seg button:focus-visible, .btn:focus-visible, .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg button:focus-visible, .btn:focus-visible, .row:focus-visible, .grip:focus-visible, .hist tr:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .stage { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
 @media (max-width: 1000px) { .stage { grid-template-columns: minmax(0,1fr); } }
@@ -61,7 +63,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 
 /* window chrome */
 .win { background: var(--win); border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 18px 50px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08); overflow: hidden; position: relative; }
-.win.main { width: 1000px; height: 640px; display: grid; grid-template-rows: 46px 1fr; }
+.win.main { width: 1180px; height: 660px; display: grid; grid-template-rows: 46px auto minmax(0, 1fr); }
 .titlebar { display: flex; align-items: center; gap: 10px; padding: 0 12px; background: var(--chrome); border-bottom: 1px solid var(--line); }
 .lights { display: flex; gap: 8px; margin-right: 6px; }
 .lights i { width: 12px; height: 12px; border-radius: 50%; display: block; }
@@ -75,7 +77,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .popup::after { content: "⌃"; transform: rotate(180deg); display: inline-block; font-size: 10px; color: var(--muted); }
 .lbl { color: var(--muted); font-size: 12px; }
 
-.body { display: grid; grid-template-columns: 230px 1fr; min-height: 0; }
+.body { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 0; grid-row: 3; }
 .side { background: var(--sidebar); border-right: 1px solid var(--line); display: grid; grid-template-rows: 1fr auto; min-height: 0; }
 .side .scroll { overflow: auto; padding: 8px 8px; }
 .sect { font-size: 11px; font-weight: 600; color: var(--muted); padding: 10px 8px 4px; display: flex; justify-content: space-between; }
@@ -91,8 +93,15 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .disc { font-size: 9px; color: var(--muted); width: 10px; }
 .sidefoot { border-top: 1px solid var(--line); padding: 6px 8px; display: flex; gap: 4px; }
 
-.content { display: grid; grid-template-rows: 32px minmax(0, 1fr) auto 1fr; min-height: 0; min-width: 0; }
-.reqbar { display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+.content { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; min-width: 0; }
+.reqcol { display: grid; grid-template-rows: 30px minmax(0, 1fr) auto; min-height: 0; min-width: 0; border-right: 1px solid var(--line); }
+.reqbar { display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); white-space: nowrap; min-width: 0; }
+.reqcol.ro .editor, .reqcol.ro .gutter { background: var(--sidebar); }
+.robadge { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; background: var(--chrome); }
+/* Titlebar accessory under the toolbar while an older exchange is shown. */
+.histstrip { display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: var(--hist); border-bottom: 1px solid var(--hist-line); font-size: 12px; }
+.histstrip b { font-weight: 600; }
+.tbgroup { display: flex; align-items: center; gap: 10px; }
 .reqbar b { font-weight: 600; }
 .chip { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
 
@@ -115,18 +124,31 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .issues a code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: 6px; }
 .issues.ok .head span { color: var(--ok); font-weight: 600; }
 
-.resp { display: grid; grid-template-rows: 30px 1fr; min-height: 0; }
-.resphead { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
-.status { font-weight: 650; color: var(--ok); font-variant-numeric: tabular-nums; }
-.tabs { display: flex; gap: 2px; margin-left: auto; }
+.resp { display: grid; grid-template-rows: 30px auto minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
+.resphead { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; }
+.resphead .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.status { font-weight: 650; color: var(--ok); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status.bad { color: var(--err); }
+.rtabs { display: flex; justify-content: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.tabs { display: flex; gap: 2px; }
 .tabs button { font: inherit; font-size: 12px; background: none; border: 0; color: var(--muted); padding: 3px 8px; border-radius: 5px; cursor: pointer; }
 .tabs button[aria-selected="true"] { background: var(--chrome); color: var(--fg); font-weight: 600; }
 .respbody { overflow: auto; font: 12px/18px var(--mono); padding: 6px 12px; white-space: pre; background: var(--code-bg); min-height: 0; }
-.hist { font: 12px/1.5 var(--ui); white-space: normal; padding: 0; }
+.hist { font: 12px/1.5 var(--ui); white-space: normal; padding: 0; overflow: auto; height: 168px; background: var(--win); border-top: 1px solid var(--line); }
+.hist table { font: inherit; }
+.hist tr[data-h] { cursor: pointer; }
+.drawer { border-top: 1px solid var(--line); background: var(--sidebar); }
+.grip { display: flex; align-items: center; gap: 8px; width: 100%; height: 26px; padding: 0 10px; border: 0; background: none; font: inherit; font-size: 12px; color: var(--fg); cursor: pointer; text-align: left; }
+.grip b { font-weight: 600; }
+.dots { display: inline-flex; gap: 3px; margin-left: auto; }
+.dots i { width: 7px; height: 7px; border-radius: 50%; display: block; background: var(--ok); }
+.dots i.bad { background: var(--err); }
+.dots i.cur { box-shadow: 0 0 0 1.5px var(--sidebar), 0 0 0 3px var(--accent); }
 .hist table, .log table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .hist td, .hist th, .log td, .log th { text-align: left; padding: 4px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .hist th, .log th { font-weight: 600; color: var(--muted); font-size: 11px; }
-.hist tr.on td, .log tr.on td { background: var(--sel-soft); }
+.hist tr.on td { background: var(--sel); color: #fff; } .hist tr.on td span { color: #fff; }
+.log tr.on td { background: var(--sel-soft); }
 .c500 { color: var(--err); font-weight: 600; } .c200 { color: var(--ok); font-weight: 600; }
 
 [hidden] { display: none !important; }
@@ -182,7 +204,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 <div class="page">
   <header>
     <h1>Washboard — GUI draft</h1>
-    <p>Static mock of the native AppKit windows described in <code>docs/PLAN.md</code>. Pick a screen below. In the project window, requests in the sidebar, the Validate button and the response tabs respond to clicks. Data shown is example data.</p>
+    <p>Static mock of the native AppKit windows described in <code>docs/PLAN.md</code>. Pick a screen below. In the project window, requests in the sidebar, Send, the response tabs and the History drawer respond to clicks; pick an older history row to see how a past exchange is shown. Data shown is example data.</p>
   </header>
 
   <div class="seg" role="tablist" aria-label="Screens">
@@ -196,29 +218,34 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
   <!-- PROJECT WINDOW -->
   <section class="stage" data-panel="main">
     <div class="scroller">
-      <div class="win main">
+      <div class="win main" id="mainWin">
         <div class="titlebar">
           <div class="lights"><i></i><i></i><i></i></div>
-          <button class="btn icon" title="Toggle sidebar">▥</button>
           <div><div class="wtitle">Customer API</div><div class="wsub">~/Projects/soap/Customer API — Edited</div></div>
           <div class="spacer"></div>
-          <button class="btn" id="validateBtn">✓ Validate</button>
-          <span class="lbl">Server</span>
-          <button class="btn popup" id="serverBtn">Staging</button>
-          <button class="btn primary" id="sendBtn">▶ Send</button>
-          <span style="width:8px"></span>
-          <button class="btn icon" title="HTTP Log (⌥⌘L)">≣</button>
+          <div class="tbgroup" id="tbNormal">
+            <button class="btn popup" id="serverBtn" title="Server">Staging</button>
+            <button class="btn primary" id="sendBtn" title="Send (⌘↩)">▶ Send</button>
+            <span style="width:8px"></span>
+            <button class="btn icon" id="logBtn" title="HTTP Log (⌥⌘L)">≣</button>
+          </div>
+        </div>
+        <div class="histstrip" id="histStrip" hidden>
+          <span>Older exchange · <b id="hsWhen"></b> · <span id="hsServer"></span></span>
+          <span class="spacer"></span>
+          <button class="btn" id="restoreBtn" title="Copy the sent request into the editor">Restore Request</button>
+          <button class="btn primary" id="latestBtn" title="Show Latest (Esc)">Show Latest</button>
         </div>
         <div class="body">
           <aside class="side">
             <div class="scroll">
               <div class="sect"><span>Requests</span><span>4</span></div>
-              <div class="row req sel" tabindex="0" data-req="0"><span class="doc"></span>GetCustomer 1</div>
+              <div class="row req sel" tabindex="0" data-req="0" id="reqList"><span class="doc"></span>GetCustomer 1</div>
               <div class="row req" tabindex="0" data-req="1"><span class="doc"></span>GetCustomer 2<span class="dirty" title="Unsaved"></span></div>
               <div class="row req" tabindex="0" data-req="2"><span class="doc"></span>CreateOrder 1<span class="badge warnmark" title="Fails validation">⚠</span></div>
               <div class="row req" tabindex="0" data-req="3"><span class="doc"></span>ListOrders – March</div>
               <div class="sect"><span>Operations</span></div>
-              <div class="row"><span class="disc">▼</span>CustomerService</div>
+              <div class="row" id="opsRow"><span class="disc">▼</span>CustomerService</div>
               <div class="row indent1"><span class="disc">▼</span>CustomerPort <span class="chip" style="margin-left:4px">1.1</span></div>
               <div class="row indent2">GetCustomer</div>
               <div class="row indent2">CreateOrder</div>
@@ -229,30 +256,23 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
             <div class="sidefoot"><button class="btn icon" title="New request (⌘N)">+</button><button class="btn icon" title="Delete">−</button><button class="btn icon" title="Rename, Duplicate…">⋯</button></div>
           </aside>
           <div class="content">
-            <div class="reqbar"><b id="reqName">GetCustomer 1</b><span class="chip" id="reqOp">SOAP 1.1 · GetCustomer</span><span class="spacer"></span><span class="lbl" id="xmlState" style="color:var(--ok)">Well-formed</span></div>
-            <div class="editor" id="editor"></div>
-            <div class="issues" id="issues" hidden></div>
-            <div class="resp">
-              <div class="resphead">
-                <span class="status" id="respStatus">200 OK</span>
-                <span class="lbl" id="respMeta">143 ms · 1.2 KB · Staging · 14:03:12</span>
-                <div class="tabs" role="tablist">
-                  <button aria-selected="true" data-rt="body">Response</button>
-                  <button aria-selected="false" data-rt="headers">Headers</button>
-                  <button aria-selected="false" data-rt="history">History (7)</button>
-                </div>
-              </div>
-              <div class="respbody" id="respBody"></div>
+            <div class="reqcol" id="reqcol">
+              <div class="reqbar"><b id="reqName">GetCustomer 1</b><span class="chip" id="reqOp">SOAP 1.1 · GetCustomer</span><span class="spacer"></span><span class="lbl" id="xmlState" style="color:var(--ok)">Well-formed</span></div>
+              <div class="editor" id="editor"></div>
+              <div class="issues" id="issues" hidden></div>
             </div>
+            <div class="resp" id="resp"></div>
           </div>
         </div>
-        <span class="pin" style="left:84px;top:62px">1</span>
-        <span class="pin" style="left:683px;top:37px">2</span>
-        <span class="pin" style="left:815px;top:37px">3</span>
-        <span class="pin" style="left:931px;top:37px">4</span>
-        <span class="pin" style="left:972px;top:90px">5</span>
-        <span class="pin" style="left:206px;top:220px">6</span>
-        <span class="pin" style="left:972px;top:430px">7</span>
+        <span class="pin" data-for="reqList">1</span>
+        <span class="pin" data-for="serverBtn">2</span>
+        <span class="pin" data-for="sendBtn">3</span>
+        <span class="pin" data-for="logBtn">4</span>
+        <span class="pin" data-for="xmlState" data-side="before">5</span>
+        <span class="pin" data-for="opsRow">6</span>
+        <span class="pin" data-for="respTabs" data-side="before">7</span>
+        <span class="pin" data-for="grip">8</span>
+        <span class="pin" data-for="histStrip">9</span>
       </div>
     </div>
     <aside class="notes">
@@ -260,11 +280,13 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
       <ol>
         <li><span>Requests list (<code>NSOutlineView</code>, source-list style). Dot = unsaved buffer, ⚠ = last validation failed. Return renames inline; ⌘D duplicates; ⌘⌫ deletes.</span></li>
         <li><span>Server popup. Defaults to this request's last-used server; changing it is stored immediately.</span></li>
-        <li><span>Validate (⌘B) runs XSD validation; Send (⌘↩) validates first and refuses to send on errors.</span></li>
-        <li><span>Save All (⌘S) flushes every open project. Autosave runs 1 s after typing stops anyway.</span></li>
+        <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Project ▸ Validate (⌘B) skips the wait.</span></li>
+        <li><span>HTTP Log (⌥⌘L). Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
         <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
         <li><span>Operations from the WSDL, grouped service › port. Double-click creates a request named <code>&lt;Operation&gt; &lt;n&gt;</code> from the generated template.</span></li>
-        <li><span>Response pane, split below the editor. History lists past exchanges for this request, kept on disk (last 20).</span></li>
+        <li><span>Response beside the request, in one vertical split. Its status line shares a band with the request bar; tabs Response and Headers.</span></li>
+        <li><span>History drawer under the response, kept on disk (last 20). Collapsed it is one line with a dot per exchange (red: fault or failure; ringed: shown). Click it, then pick a row.</span></li>
+        <li><span>An older exchange shows its request as sent, read-only, and this strip under the toolbar replaces the toolbar items, so it cannot be sent. Show Latest (Esc) returns to the editor; Restore Request copies the sent request into it.</span></li>
       </ol>
     </aside>
   </section>
@@ -461,36 +483,55 @@ Date: Tue, 06 Oct 2026 14:03:12 GMT
       xml: `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:ListOrders>\n      <cus:customerId>100231</cus:customerId>\n      <cus:from>2026-03-01</cus:from>\n      <cus:to>2026-03-31</cus:to>\n      <!-- choice: status | statusGroup -->\n      <cus:status>SHIPPED</cus:status>\n    </cus:ListOrders>\n  </soapenv:Body>\n</soapenv:Envelope>`,
       errors: [] }
   ];
-  const RESP = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n  <soap:Body>\n    <GetCustomerResponse xmlns="urn:example:customer">\n      <customer>\n        <id>100231</id>\n        <name>Huber Logistik GmbH</name>\n        <country>AT</country>\n        <vatId>ATU12345678</vatId>\n      </customer>\n    </GetCustomerResponse>\n  </soap:Body>\n</soap:Envelope>`;
-  const HEADERS = "HTTP/1.1 200 OK\nContent-Type: text/xml; charset=utf-8\nContent-Length: 1234\nDate: Tue, 06 Oct 2026 14:03:12 GMT\nServer: Apache-Coyote/1.1";
-  const HISTORY = `<table><tr><th>Sent</th><th>Server</th><th>Status</th><th>Duration</th><th></th></tr>
-    <tr class="on"><td>Today 14:03:12</td><td>Staging</td><td class="c200">200</td><td>143 ms</td><td></td></tr>
-    <tr><td>Today 13:51:07</td><td>Staging</td><td class="c500">500 · Fault</td><td>88 ms</td><td></td></tr>
-    <tr><td>Today 11:20:44</td><td>Local mock</td><td class="c200">200</td><td>4 ms</td><td></td></tr>
-    <tr><td>Yesterday 17:02:10</td><td>Production</td><td class="c200">200</td><td>201 ms</td><td></td></tr>
-    <tr><td colspan="5" class="lbl" style="white-space:normal">Select an entry to view it here. "Restore request" copies the request as sent back into the editor.</td></tr></table>`;
+  const okBody = (name, extra) => `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n  <soap:Body>\n    <GetCustomerResponse xmlns="urn:example:customer">\n      <customer>\n        <id>100231</id>\n        <name>${name}</name>\n        <country>AT</country>${extra}\n      </customer>\n    </GetCustomerResponse>\n  </soap:Body>\n</soap:Envelope>`;
+  const FAULT = `<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">\n  <soap:Body>\n    <soap:Fault>\n      <faultcode>soap:Client</faultcode>\n      <faultstring>customerId 0 does not exist</faultstring>\n    </soap:Fault>\n  </soap:Body>\n</soap:Envelope>`;
+  const hdr = (code, len, date) => `HTTP/1.1 ${code}\nContent-Type: text/xml; charset=utf-8\nContent-Length: ${len}\nDate: ${date} GMT\nServer: Apache-Coyote/1.1`;
+  const sent = (id, orders) => `<soapenv:Envelope ${ENV}>\n  <soapenv:Header/>\n  <soapenv:Body>\n    <cus:GetCustomer>\n      <cus:customerId>${id}</cus:customerId>\n      <cus:includeOrders>${orders}</cus:includeOrders>\n    </cus:GetCustomer>\n  </soapenv:Body>\n</soapenv:Envelope>`;
+  const VAT = "\n        <vatId>ATU12345678</vatId>";
+  // The selected request's history, newest first; `req` is the request as sent.
+  const HIST = [
+    { day: "Today", t: "14:03:12", srv: "Staging", st: 200, ms: 143, kb: "1.2", req: sent("100231", "false"), body: okBody("Huber Logistik GmbH", VAT), hdr: hdr("200 OK", 1234, "Thu, 08 Oct 2026 14:03:12") },
+    { day: "Today", t: "13:51:07", srv: "Staging", st: 500, ms: 88, kb: "0.6", fault: "soap:Client: customerId 0 does not exist", req: sent("0", "false"), body: FAULT, hdr: hdr("500 Internal Server Error", 612, "Thu, 08 Oct 2026 13:51:07") },
+    { day: "Today", t: "11:20:44", srv: "Local mock", st: 200, ms: 4, kb: "0.9", req: sent("100231", "true"), body: okBody("Test Customer", ""), hdr: hdr("200 OK", 921, "Thu, 08 Oct 2026 11:20:44") },
+    { day: "Yesterday", t: "17:02:10", srv: "Production", st: 200, ms: 201, kb: "1.2", req: sent("100231", "false"), body: okBody("Huber Logistik GmbH", VAT), hdr: hdr("200 OK", 1230, "Wed, 07 Oct 2026 17:02:10") },
+    { day: "Yesterday", t: "16:58:31", srv: "Production", error: "timed out after 60 s", req: sent("100231", "false") },
+    { day: "Mon", t: "09:12:03", srv: "Staging", st: 200, ms: 156, kb: "1.1", req: sent("100231", "false"), body: okBody("Huber Logistik", ""), hdr: hdr("200 OK", 1140, "Mon, 05 Oct 2026 09:12:03") },
+    { day: "Mon", t: "09:10:47", srv: "Staging", st: 500, ms: 91, kb: "0.6", fault: "soap:Client: customerId 0 does not exist", req: sent("0", "false"), body: FAULT, hdr: hdr("500 Internal Server Error", 612, "Mon, 05 Oct 2026 09:10:47") },
+  ];
+  const failed = e => e.error || e.st >= 400;
 
   let cur = 0;
+  // Shown history entry (0 = latest), response tab, drawer state.
+  let shown = 0, tab = "body", drawerOpen = false;
   const $ = id => document.getElementById(id);
   function render() {
     const r = reqs[cur];
-    const lines = r.xml.split("\n");
+    const ro = shown !== 0;
+    const lines = (ro ? HIST[shown].req : r.xml).split("\n");
     const errLines = new Set(r.errors.map(e => e.line));
     let codeHtml = lines.map((l, i) => {
       let h = hl(l);
-      if (!r.wf && i + 1 === r.wfLine) h = `<span class="squig">${h}</span>`;
+      if (!ro && !r.wf && i + 1 === r.wfLine) h = `<span class="squig">${h}</span>`;
       return h || " ";
     }).join("\n");
-    const gutter = lines.map((_, i) => `<div class="${(!r.wf && i + 1 === r.wfLine) ? "e" : ""}">${i + 1}</div>`).join("");
-    $("editor").innerHTML = `<div class="gutter">${gutter}</div><div class="code" style="position:relative">${codeHtml}${r.complete ? completeBox() : ""}</div>`;
+    const gutter = lines.map((_, i) => `<div class="${(!ro && !r.wf && i + 1 === r.wfLine) ? "e" : ""}">${i + 1}</div>`).join("");
+    $("editor").innerHTML = `<div class="gutter">${gutter}</div><div class="code" style="position:relative">${codeHtml}${r.complete && !ro ? completeBox() : ""}</div>`;
     $("reqName").textContent = r.name;
     $("reqOp").textContent = r.op;
     const st = $("xmlState");
-    st.textContent = r.wf ? "Well-formed" : "XML error, line " + r.wfLine;
-    st.style.color = r.wf ? "var(--ok)" : "var(--err)";
+    st.className = ro ? "robadge" : "lbl";
+    st.textContent = ro ? `Sent ${HIST[shown].day} ${HIST[shown].t} · read-only` : r.wf ? "Well-formed" : "XML error, line " + r.wfLine;
+    st.style.color = ro ? "" : r.wf ? "var(--ok)" : "var(--err)";
     const iss = $("issues");
-    if (!r.wf) showIssues(r.errors, "XML error"); else iss.hidden = true;
+    if (!r.wf && !ro) showIssues(r.errors, "XML error"); else iss.hidden = true;
+    $("reqcol").classList.toggle("ro", ro);
+    // An older exchange: the strip under the toolbar replaces the toolbar's own items.
+    $("histStrip").hidden = !ro;
+    $("tbNormal").hidden = ro;
+    if (ro) { $("hsWhen").textContent = `${HIST[shown].day} ${HIST[shown].t}`; $("hsServer").textContent = HIST[shown].srv; }
     document.querySelectorAll(".row.req").forEach(el => el.classList.toggle("sel", +el.dataset.req === cur));
+    renderResp();
+    placePins();
   }
   function completeBox() {
     return `<div class="complete" style="left:72px;top:114px">
@@ -515,35 +556,88 @@ Date: Tue, 06 Oct 2026 14:03:12 GMT
     showIssues(r.errors, "validation error");
     document.querySelectorAll("#editor .gutter div").forEach((d, i) => d.classList.toggle("e", r.errors.some(e => e.line === i + 1)));
   }
-  function setResp(tab) {
-    document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.rt === tab));
-    const body = $("respBody");
-    body.classList.toggle("hist", tab === "history");
-    body.innerHTML = tab === "body" ? hl(RESP) : tab === "headers" ? esc(HEADERS) : HISTORY;
+  // Mirrors the app's status line: status · duration · size [· fault] · server · sent time.
+  function statusParts(e) {
+    if (e.error) return { s: "Failed: " + e.error, bad: true, meta: `${e.srv} · ${e.t}` };
+    const fault = e.fault ? ` · SOAP Fault: ${e.fault}` : "";
+    return { s: String(e.st), bad: e.st >= 400, meta: `${e.ms} ms · ${e.kb} KB${fault} · ${e.srv} · ${e.t}` };
+  }
+  function histTable() {
+    return `<table><tr><th>Sent</th><th>Server</th><th>Status</th><th>Duration</th></tr>` + HIST.map((e, i) => {
+      const st = e.error ? `<span class="c500">Failed</span>` : `<span class="${e.st >= 400 ? "c500" : "c200"}">${e.st}${e.fault ? " · Fault" : ""}</span>`;
+      return `<tr data-h="${i}" tabindex="0" class="${i === shown ? "on" : ""}"><td>${e.day} ${e.t}</td><td>${e.srv}</td><td>${st}</td><td>${e.ms ? e.ms + " ms" : "—"}</td></tr>`;
+    }).join("") + `</table>`;
+  }
+  function renderResp() {
+    const e = HIST[shown], p = statusParts(e);
+    const body = tab === "headers"
+      ? (e.hdr ? esc(e.hdr) : `<span class="lbl">No headers: the request ${esc(e.error)}.</span>`)
+      : (e.body ? hl(e.body) : `<span class="lbl">No response: the request ${esc(e.error)}.</span>`);
+    const dots = HIST.map((x, i) => `<i class="${failed(x) ? "bad" : ""} ${i === shown ? "cur" : ""}" title="${x.day} ${x.t}"></i>`).reverse().join("");
+    $("resp").innerHTML =
+      `<div class="resphead"><span class="status${p.bad ? " bad" : ""}" id="respStatus">${esc(p.s)}</span><span class="lbl" title="https://stg.example.com/ws/customer">${esc(p.meta)}</span></div>` +
+      `<div class="rtabs"><div class="tabs" role="tablist" id="respTabs">${[["body", "Response"], ["headers", "Headers"]].map(([k, l]) => `<button aria-selected="${tab === k}" data-rt="${k}">${l}</button>`).join("")}</div></div>` +
+      `<div class="respbody">${body}</div>` +
+      `<div class="drawer"><button class="grip" id="grip" aria-expanded="${drawerOpen}"><span class="disc">${drawerOpen ? "▼" : "▶"}</span><b>History</b><span class="lbl">${HIST.length - 1} earlier exchanges</span><span class="dots" aria-hidden="true">${dots}</span></button>${drawerOpen ? `<div class="hist">${histTable()}</div>` : ""}</div>`;
+  }
+  function showLatest() { shown = 0; render(); }
+  function placePins() {
+    const win = $("mainWin"), wr = win.getBoundingClientRect();
+    win.querySelectorAll(".pin[data-for]").forEach(pin => {
+      const t = document.getElementById(pin.dataset.for);
+      const vis = t && t.offsetParent !== null;
+      pin.hidden = !vis;
+      if (!vis) return;
+      const r = t.getBoundingClientRect();
+      if (pin.dataset.side === "before") {
+        pin.style.left = `${r.left - wr.left - 24}px`;
+        pin.style.top = `${r.top - wr.top + r.height / 2 - 9}px`;
+      } else {
+        pin.style.left = `${Math.min(r.right - wr.left - 8, wr.width - 22)}px`;
+        pin.style.top = `${r.top - wr.top - 8}px`;
+      }
+    });
   }
 
   document.querySelectorAll(".row.req").forEach(el => {
-    const go = () => { cur = +el.dataset.req; render(); };
+    // Switching requests leaves an older exchange and shows the new request's latest one.
+    const go = () => { cur = +el.dataset.req; shown = 0; render(); };
     el.addEventListener("click", go);
     el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
   });
-  $("validateBtn").addEventListener("click", validate);
   $("sendBtn").addEventListener("click", () => {
     const r = reqs[cur];
     if (!r.wf || r.errors.length) { validate(); return; }
     $("issues").hidden = true;
-    const now = new Date();
-    $("respMeta").textContent = `${120 + Math.floor(Math.random() * 60)} ms · 1.2 KB · Staging · ${now.toTimeString().slice(0, 8)}`;
-    setResp("body");
+    HIST[0].ms = 120 + Math.floor(Math.random() * 60);
+    HIST[0].t = new Date().toTimeString().slice(0, 8);
+    shown = 0; tab = "body"; render();
   });
-  document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => setResp(b.dataset.rt)));
+  $("resp").addEventListener("click", ev => {
+    const t = ev.target.closest("[data-rt], #grip, tr[data-h]");
+    if (!t) return;
+    if (t.dataset.rt) { tab = t.dataset.rt; renderResp(); placePins(); return; }
+    if (t.id === "grip") { drawerOpen = !drawerOpen; renderResp(); placePins(); return; }
+    shown = +t.dataset.h; render();
+  });
+  $("resp").addEventListener("keydown", ev => {
+    const tr = ev.target.closest("tr[data-h]");
+    if (tr && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); tr.click(); }
+  });
+  $("latestBtn").addEventListener("click", showLatest);
+  $("restoreBtn").addEventListener("click", () => { reqs[cur].xml = HIST[shown].req; reqs[cur].errors = []; reqs[cur].wf = true; showLatest(); });
+  document.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && shown !== 0) showLatest();
+    if (ev.key === "b" && (ev.metaKey || ev.ctrlKey) && shown === 0) { ev.preventDefault(); validate(); }
+  });
+  window.addEventListener("resize", placePins);
 
   document.querySelectorAll('[data-screen]').forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll('[data-screen]').forEach(x => x.setAttribute("aria-selected", x === b));
     document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.screen);
+    placePins();
   }));
 
   render();
-  setResp("body");
 })();
 </script>
