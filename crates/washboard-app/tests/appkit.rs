@@ -770,6 +770,27 @@ mod checks {
         assert!(popup.isEnabled());
         let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
         assert_eq!(titles, ["Staging", "Production"]);
+        // A long server name widens the picker only so far; the title truncates.
+        popup.addItemWithTitle(&NSString::from_str(
+            "Production cluster behind the second load balancer in Frankfurt",
+        ));
+        popup.selectItemAtIndex(2);
+        window
+            .contentView()
+            .expect("content")
+            .layoutSubtreeIfNeeded();
+        assert!(
+            popup.frame().size.width <= 220.5,
+            "the server popup is capped: {:?}",
+            popup.frame()
+        );
+        project.reload_servers();
+        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
+        assert_eq!(
+            titles,
+            ["Staging", "Production"],
+            "reload restores the list"
+        );
 
         send("newRequest:");
         assert_eq!(request_names(&project), ["Lookup 1"]);
