@@ -44,6 +44,8 @@ const MESSAGES_HEIGHT: f64 = 90.0;
 const LIST_WIDTH: f64 = 180.0;
 const TIMEOUT_WIDTH: f64 = 60.0;
 const SQUARE_BUTTON: f64 = 24.0;
+/// About three rows and the header of the suggested servers.
+const SUGGESTIONS_HEIGHT: f64 = 90.0;
 
 /// The import sheet's controls.
 #[derive(Debug)]
@@ -694,7 +696,14 @@ impl SettingsSheet {
             }
         });
         let suggested = TextTable::new(&["Port", "Address"], mtm);
-        let suggestions = column(
+        // A table has no height of its own: without one it collapsed, and the button drew over
+        // its header.
+        suggested
+            .view()
+            .heightAnchor()
+            .constraintEqualToConstant(SUGGESTIONS_HEIGHT)
+            .setActive(true);
+        let suggestions = column_stack(
             vec![
                 label("Suggested by the WSDL:", mtm),
                 view(suggested.view().retain()),
@@ -707,6 +716,8 @@ impl SettingsSheet {
             ],
             mtm,
         );
+        set_width(suggested.view(), LIST_WIDTH);
+        let suggestions = view(suggestions);
         let form = this.server_form(mtm);
         let fields = grid(
             vec![
@@ -744,13 +755,24 @@ impl SettingsSheet {
             ],
             mtm,
         );
+        // The server list takes the height the suggestions leave.
+        list.setDistribution(NSStackViewDistribution::Fill);
         // The +/− buttons sit right under the list, as in System Settings.
         list.setSpacing(0.0);
         list.setCustomSpacing_afterView(12.0, &list.arrangedSubviews().objectAtIndex(1));
         set_width(&list, LIST_WIDTH);
+        // The form keeps its rows together at the top; a spacer below it takes the spare
+        // height. Left to the grid, the spare height went to an arbitrary row and opened a
+        // gap in the middle of the form.
+        let spacer = NSView::new(mtm);
+        spacer
+            .setContentHuggingPriority_forOrientation(1.0, NSLayoutConstraintOrientation::Vertical);
+        let form_column = column_stack(vec![fields, spacer], mtm);
+        form_column.setDistribution(NSStackViewDistribution::Fill);
+        form_column.setAlignment(NSLayoutAttribute::Width);
         // List and form side by side; the form takes the remaining width.
         let servers = NSStackView::stackViewWithViews(
-            &NSArray::from_retained_slice(&[view(list.clone()), fields]),
+            &NSArray::from_retained_slice(&[view(list.clone()), view(form_column.clone())]),
             mtm,
         );
         servers.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
@@ -762,10 +784,12 @@ impl SettingsSheet {
             bottom: 12.0,
             right: 12.0,
         });
-        // The list runs the full height; the form stays at the top.
-        list.heightAnchor()
-            .constraintEqualToAnchor_constant(&servers.heightAnchor(), -24.0)
-            .setActive(true);
+        // The list and the form column run the full height.
+        for v in [&*list, &*form_column] {
+            v.heightAnchor()
+                .constraintEqualToAnchor_constant(&servers.heightAnchor(), -24.0)
+                .setActive(true);
+        }
 
         let general = label(&format!("Name: {project}"), mtm);
         let tabs = NSTabView::new(mtm);
@@ -786,7 +810,7 @@ impl SettingsSheet {
         );
         let window = sheet_window(
             &format!("{project} — Settings"),
-            NSSize::new(640.0, 420.0),
+            NSSize::new(640.0, 460.0),
             mtm,
         );
         window.setContentView(Some(&content));
@@ -1228,10 +1252,6 @@ fn value_row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NS
     stack.setDistribution(NSStackViewDistribution::Fill);
     stack.setAlignment(NSLayoutAttribute::FirstBaseline);
     view(stack)
-}
-
-fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
-    view(column_stack(views, mtm))
 }
 
 fn column_stack(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSStackView> {
