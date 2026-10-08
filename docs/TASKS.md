@@ -73,6 +73,10 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-DARK-MODE | APP-INTEGRATION (done) | `crates/washboard-app/**` | PLAN M5 "Dark Mode check". The app already uses only semantic and `system*` colours, so the work is checking, not porting: the editor's highlighting palette and error underlines for contrast on a dark background, text views' background and text colours, and anything drawn by hand (the ruler). The look is judged by the person doing the manual checks, in both appearances. |
 | WP-DRAFT-GAPS | APP-INTEGRATION (done) | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` if a value is missing | What `docs/gui-draft.html` shows and no step built. A bar above the editor: request name, a "SOAP 1.1 · Operation" chip, and the well-formedness state ("Well-formed" / "XML error, line n") from the diagnostics the model already has. In the sidebar, a "1.1" chip on ports and "1.2 · unsupported" on SOAP 1.2 ones, beside today's greyed rows and tooltips. In the HTTP log, the TLS line ("TLS 1.3 · certificate verification SKIPPED (server setting)") from the exchange's `TlsInfo`, which `LogEntry` already carries. |
 | WP-RESPONSE-LAYOUT | APP-INTEGRATION (done); after WP-DRAFT-GAPS, which builds the request bar | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | PLAN §4 "Response pane and history" and `docs/gui-draft.html`: response beside the request, History tab replaced by a drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items. The model needs: which history entry is shown (none = latest), the sent request's text, Send refused while an older one is shown, Restore Request returning text for the app to apply as one undo step, drawer state in `ui_state`. Tests: model side on Linux (send refused, request switch and send return to latest); in `tests/appkit.rs`, selecting an older row shows the accessory and hides Send, Esc returns, ⌘Z after Restore Request brings back the editor's text. |
+| WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
+| WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
+| WP-SIDEBAR-MENU | APP-INTEGRATION (done) | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs`; request order in `crates/washboard-ui-model` | Replace the +/−/⋯ buttons under the sidebar with a context menu per row: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request; the REQUESTS header gets New Request. The Project menu and its shortcuts (⌘N, ⌘D, ⌘⌫, ⌘B) stay. Requests sort by name (Finder order: case-insensitive, numbers by value), not by creation; a renamed or new request moves to its place and stays selected. The `sort_order` column stays in the database, unused. |
+| WP-SETTINGS-WINDOW | APP-INTEGRATION (done); coordinate with WP-FORMAT-XML, which adds the first app setting | new `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (replaced); the Settings… and Project Settings… items in `menu.rs` | One Settings window for the app and the open projects, replacing the Project Settings sheet. Below. |
 
 ### WP-FORMAT-XML in detail
 
@@ -91,8 +95,9 @@ error is shown as usual. Spaces only, no tabs.
 - **App:** Format XML (⌃I) in the Edit menu, enabled with a request selected. The model computes
   the new text; the app replaces the whole text through the widget so it is one undo step
   (PLAN §2.1 "Not undo/redo") and the selection stays on the same element where practical.
-  App ▸ Settings… (today disabled) opens a small window with the indent width and "Format on
-  save"; changing them reformats nothing by itself.
+  The indent width and "Format on save" go in the app section of the Settings window
+  (WP-SETTINGS-WINDOW; if that is not built yet, Washboard ▸ Settings…, today disabled, opens a
+  small window with the two); changing them reformats nothing by itself.
 - **Format on save:** applies to File ▸ Save All (⌘S) only, to the open request, as the same
   undo step as ⌃I. Not to autosave: autosave runs a second after typing stops and would rewrite
   the text under the cursor. Never on send; a request is sent as written.
@@ -106,3 +111,34 @@ error is shown as usual. Spaces only, no tabs.
   text, editor marked dirty and autosaved); format on save on Save All and not on autosave; the
   CLI's exit codes; in `tests/appkit.rs`, ⌃I then ⌘Z restores the text, and the settings round
   trip through a scratch defaults domain.
+
+### WP-SETTINGS-WINDOW in detail
+
+One window, opened by Washboard ▸ Settings… (⌘,), the standard place for settings on macOS.
+Project ▸ Project Settings… opens the same window on that project's pane. It is an ordinary
+window, not a sheet: it stays open beside the project window and changes apply as they are made,
+so there is no Done button.
+
+- **Layout, macOS 26 style:** a sidebar split view (`NSSplitViewItem` sidebar behaviour, so it
+  gets the Liquid Glass sidebar) with a unified, title-only toolbar whose title is the selected
+  pane, like System Settings. Panes are grouped forms: rounded inset sections on the window
+  background, one setting per row, label on the leading edge, control on the trailing edge, a
+  hairline between rows, an explanation in secondary text under a section where needed. No
+  `NSTabView`, no bezeled boxes. Built from AppKit views (no SwiftUI).
+- **App and project, clearly separated:** the sidebar has two sections. "Washboard" holds the
+  app settings (General: indent width and format on save from WP-FORMAT-XML; later ones join
+  here), stored in user defaults. Below it, one section per open project, titled with the
+  project's name and folder icon, with General (name, folder, WSDL files) and Servers. Project
+  settings stay in the project's database as today. Each project pane repeats in its header that
+  its settings belong to that project and are saved in its folder, so nobody mistakes them for
+  app-wide ones. A closed project's section disappears; with no project open there is only the
+  app section.
+- **Servers pane:** the server list as a grouped section with the +/− buttons inside it, the
+  selected server's form as a second section below (Name, URL, Ignore certificate errors, Auth,
+  User, Password, Timeout), and the WSDL's suggested servers as a third section with an Add
+  button per row. Same model API and Keychain handling as the sheet.
+- **State:** the selected pane is remembered (user defaults); the window's frame autosaves.
+- **Tests:** in `tests/appkit.rs`: ⌘, opens the window on the app section; Project Settings…
+  selects that project's Servers pane; closing a project removes its section; editing a server
+  in the window is saved without a Done button; the existing settings sheet checks move to the
+  window. The manual checks on a Mac judge the look against System Settings.
