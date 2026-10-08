@@ -85,8 +85,8 @@ washboard/
 | IDs / time | `uuid`, `jiff` | |
 | File watching (M5) | `notify` (FSEvents backend) | external edits to request files |
 
-No `tokio`. Threads + channels; results are posted back to the UI thread through the front
-end's `MainThread` implementation (§2.1; `dispatch2` main queue on macOS).
+No `tokio`. Threads + channels; workers queue their results in the model and wake the UI thread
+through the front end's `MainThread` implementation (§2.1; `dispatch2` main queue on macOS).
 
 ### Threading model
 - **Main thread**: all AppKit, and the `washboard-ui-model` state, which is only touched there
@@ -140,8 +140,10 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 - The model reports changes as a list of small, typed events (`SidebarChanged`,
   `TokensChanged(range)`, `DiagnosticsChanged`, `ResponseChanged`, `LogAppended`, …), which
   the front end applies to its widgets. No toolkit types cross the boundary.
-- The front end provides three traits: `MainThread` (post a closure to the UI thread;
-  `dispatch2` on macOS, `glib::idle_add` on GTK, a window message on Win32), `Timers`
+- The front end provides three traits: `MainThread` (wake the UI thread, which then calls
+  `App::pump` to apply queued worker results with `&mut App`, so the front end needs no global
+  to find the app; `dispatch2` on macOS, `glib::idle_add` on GTK, a window message on Win32),
+  `Timers`
   (one-shot timers for autosave and debounce) and `Dialogs` (open/save panels, confirmations,
   alerts), plus a `SecretStore` (Keychain on macOS).
 
