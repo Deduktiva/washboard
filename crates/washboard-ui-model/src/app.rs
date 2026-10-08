@@ -14,6 +14,7 @@ use washboard_core::soap::EnvelopeError;
 use crate::diagnostics::Check;
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::import::Imports;
 use crate::send::LogEntry;
 use crate::timers::TimerKind;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
@@ -39,6 +40,12 @@ pub enum ModelError {
     NoServer,
     #[error("a request is already being sent")]
     AlreadySending,
+    /// The import sheet was closed while the front end still referred to it.
+    #[error("the import sheet is not open")]
+    NoImport,
+    /// Create / Replace while the check is running or found problems.
+    #[error("the WSDL import is not ready")]
+    ImportNotReady,
     /// Editing needs a selected request whose text could be read.
     #[error("no request is open in the editor")]
     NoRequestSelected,
@@ -78,6 +85,7 @@ pub struct App {
     done_rx: Receiver<Completion>,
     jobs: usize,
     pub(crate) log: VecDeque<LogEntry>,
+    pub(crate) imports: Imports,
 }
 
 impl fmt::Debug for App {
@@ -107,6 +115,7 @@ impl App {
             done_rx,
             jobs: 0,
             log: VecDeque::new(),
+            imports: Imports::new(),
         }
     }
 
@@ -279,7 +288,7 @@ impl App {
         }
     }
 
-    fn add_project(&mut self, project: Project, restore: OpenProject) -> ProjectKey {
+    pub(crate) fn add_project(&mut self, project: Project, restore: OpenProject) -> ProjectKey {
         let key = ProjectKey(self.next());
         // The folder name is a fine label if the database can't say.
         let name = project.name().unwrap_or_else(|_| {
@@ -302,6 +311,8 @@ impl App {
             history: Vec::new(),
             response: None,
             sending: None,
+            suggested_servers: Vec::new(),
+            replace_outcome: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
@@ -323,7 +334,7 @@ impl App {
         key
     }
 
-    fn schema_loaded(&mut self, key: ProjectKey, loaded: Result<ProjectSchema, String>) {
+    pub(crate) fn schema_loaded(&mut self, key: ProjectKey, loaded: Result<ProjectSchema, String>) {
         // The project may have been closed while its WSDL loaded.
         let Some(window) = self.window_mut(key) else {
             return;
@@ -353,7 +364,7 @@ impl App {
             .map(|(k, _)| *k)
     }
 
-    fn note_recent(&mut self, folder: &Path) {
+    pub(crate) fn note_recent(&mut self, folder: &Path) {
         let mut state = AppState {
             open_projects: Vec::new(),
             recent_projects: std::mem::take(&mut self.recent),
@@ -376,7 +387,7 @@ impl App {
         Ok(())
     }
 
-    fn update_welcome(&mut self) {
+    pub(crate) fn update_welcome(&mut self) {
         let visible = self.welcome_visible();
         if self.welcome_visible != Some(visible) {
             self.welcome_visible = Some(visible);

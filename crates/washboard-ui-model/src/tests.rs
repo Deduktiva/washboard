@@ -12,7 +12,10 @@ use washboard_core::xml::TokenKind;
 
 use crate::fake::Fake;
 use crate::server;
-use crate::{App, DialogAnswer, Event, Issue, ModelError, OperationNode, ProjectKey, SchemaState};
+use crate::{
+    App, CheckState, DialogAnswer, Event, ImportTarget, Issue, ModelError, OperationNode,
+    ProjectKey, SchemaState,
+};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -1118,4 +1121,117 @@ fn send_needs_a_server() {
     let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
     assert!(matches!(app.send(key), Err(ModelError::NoServer)));
     assert!(!app.project(key).expect("open").sending());
+}
+
+fn customer() -> PathBuf {
+    fixtures().join("customer")
+}
+
+fn checked(app: &App, target: ImportTarget) -> bool {
+    let sheet = app.import_sheet(target).expect("sheet");
+    !matches!(sheet.check, CheckState::Checking)
+}
+
+#[test]
+fn a_missing_include_blocks_create() {
+    let setup = Setup::new();
+    let (fake, mut app) = setup.launch();
+    let target = ImportTarget::NewProject;
+    app.begin_import(target);
+    app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
+        .expect("destination");
+    // Only the entry WSDL: the imported binding WSDL and the schemas are missing.
+    app.set_import_files(target, customer().join("CustomerService.wsdl"), Vec::new())
+        .expect("files");
+    assert!(app.take_events().contains(&Event::ImportChanged { target }));
+    fake.pump_until(&mut app, |app| checked(app, target));
+    let sheet = app.import_sheet(target).expect("sheet");
+    let CheckState::Done(result) = &sheet.check else {
+        panic!("{:?}", sheet.check);
+    };
+    assert!(result.check.has_errors(), "{:?}", result.check.diagnostics);
+    assert!(!sheet.can_finish(target));
+    assert!(matches!(
+        app.create_project(),
+        Err(ModelError::ImportNotReady)
+    ));
+}
+
+#[test]
+fn create_copies_opens_and_suggests_servers() {
+    let setup = Setup::new();
+    let (fake, mut app) = setup.launch();
+    let target = ImportTarget::NewProject;
+    app.begin_import(target);
+    app.set_import_files(
+        target,
+        customer().join("CustomerService.wsdl"),
+        vec![customer()],
+    )
+    .expect("files");
+    fake.pump_until(&mut app, |app| checked(app, target));
+    let sheet = app.import_sheet(target).expect("sheet");
+    assert!(!sheet.can_finish(target), "no name and folder yet");
+    app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
+        .expect("destination");
+    assert!(app.import_sheet(target).expect("sheet").can_finish(target));
+
+    let key = app.create_project().expect("create");
+    assert!(app.import_sheet(target).is_none());
+    let folder = setup.tmp.path().join("Customers");
+    assert!(folder.join("wsdl/CustomerService.wsdl").is_file());
+    assert!(folder.join("wsdl/xsd/customer.xsd").is_file());
+    assert_eq!(app.recent_projects()[0], folder);
+    assert!(!app.welcome_visible());
+
+    let window = app.project(key).expect("open");
+    assert!(
+        window.servers().is_empty(),
+        "nothing connects before the user confirms"
+    );
+    let suggested = window.suggested_servers().to_vec();
+    assert_eq!(suggested.len(), 1, "only the SOAP 1.1 port: {suggested:?}");
+    app.confirm_suggested_server(key, 0, "http://127.0.0.1:9/customers")
+        .expect("confirm");
+    let window = app.project(key).expect("open");
+    assert!(window.suggested_servers().is_empty());
+    assert_eq!(window.servers()[0].url, "http://127.0.0.1:9/customers");
+    assert_eq!(window.servers()[0].name, suggested[0].port);
+}
+
+#[test]
+fn replace_wsdl_revalidates_every_request() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, second) = with_requests(&setup, "Legacy");
+    let target = ImportTarget::ReplaceWsdl(key);
+    app.begin_import(target);
+    app.set_import_files(
+        target,
+        customer().join("CustomerService.wsdl"),
+        vec![customer()],
+    )
+    .expect("files");
+    fake.pump_until(&mut app, |app| checked(app, target));
+    app.replace_wsdl(key).expect("replace");
+    let replaced = Event::WsdlReplaced { project: key };
+    fake.pump_until(&mut app, |app| app.events.contains(&replaced));
+    settle(&fake, &mut app);
+
+    let window = app.project(key).expect("open");
+    let outcome = window.replace_outcome().expect("outcome");
+    assert!(
+        outcome.removed.iter().any(|op| op.operation == "Lookup"),
+        "{outcome:?}"
+    );
+    assert!(!outcome.added.is_empty());
+    assert_eq!(outcome.invalid, [first, second], "Lookup is gone");
+    assert!(invalid_marker(&app, key, first) && invalid_marker(&app, key, second));
+    let services = &window.sidebar().services;
+    assert!(
+        services.iter().any(|s| s.name != "LegacyService"),
+        "{services:?}"
+    );
+    // The open editor is checked against the new schema too.
+    let issues = window.editor().expect("editor").issues();
+    assert!(issues.iter().any(Issue::is_error), "{issues:?}");
 }
