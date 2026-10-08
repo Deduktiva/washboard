@@ -1,6 +1,6 @@
 //! "Format XML" (⌃I).
 //!
-//! Re-indents element-only content with two spaces per level. Anything that might carry
+//! Re-indents element-only content with a given number of spaces per level (no tabs). Anything that might carry
 //! meaning is kept byte for byte: an element that contains character data, CDATA or
 //! references (mixed or text content, including whitespace-only leaf content such as
 //! `<a> </a>`) is copied verbatim from its start tag's `>` through its end tag. Comments, PIs,
@@ -18,8 +18,9 @@ use super::wellformed::check_well_formed;
 
 /// Pretty-prints a well-formed document; returns the well-formedness error otherwise.
 ///
-/// Uses `\r\n` line breaks if the input contains any, `\n` otherwise; ends with a line break.
-pub fn pretty_print(text: &str) -> Result<String, Diagnostic> {
+/// `indent` is the number of spaces per level. Uses `\r\n` line breaks if the input contains
+/// any, `\n` otherwise; ends with a line break.
+pub fn pretty_print(text: &str, indent: usize) -> Result<String, Diagnostic> {
     check_well_formed(text)?;
     let infos = classify(text);
     let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
@@ -32,8 +33,8 @@ pub fn pretty_print(text: &str) -> Result<String, Diagnostic> {
             // Only reached in element-only content or outside the root: whitespace.
             Construct::Text(_) => {}
             Construct::StartTag(t) => {
-                line(&mut out, nl, depth);
-                write_start_tag(&mut out, text, nl, depth, &t, &lexer.attrs);
+                line(&mut out, nl, depth * indent);
+                write_start_tag(&mut out, text, nl, depth * indent, &t, &lexer.attrs);
                 let info = infos.get(ordinal).copied().unwrap_or_default();
                 ordinal += 1;
                 if t.self_closing {
@@ -50,13 +51,13 @@ pub fn pretty_print(text: &str) -> Result<String, Diagnostic> {
             }
             Construct::EndTag(t) => {
                 depth = depth.saturating_sub(1);
-                line(&mut out, nl, depth);
+                line(&mut out, nl, depth * indent);
                 out.push_str("</");
                 out.push_str(&text[t.name.clone()]);
                 out.push('>');
             }
             other => {
-                line(&mut out, nl, depth);
+                line(&mut out, nl, depth * indent);
                 out.push_str(&text[other.span()]);
             }
         }
@@ -65,27 +66,25 @@ pub fn pretty_print(text: &str) -> Result<String, Diagnostic> {
     Ok(out)
 }
 
-fn line(out: &mut String, nl: &str, depth: usize) {
+fn line(out: &mut String, nl: &str, pad: usize) {
     if !out.is_empty() {
         out.push_str(nl);
     }
-    for _ in 0..depth {
-        out.push_str("  ");
-    }
+    out.extend(std::iter::repeat_n(' ', pad));
 }
 
 fn write_start_tag(
     out: &mut String,
     text: &str,
     nl: &str,
-    depth: usize,
+    pad: usize,
     t: &TagInfo,
     attrs: &[RawAttr],
 ) {
     let name = &text[t.name.clone()];
     out.push('<');
     out.push_str(name);
-    let align = depth * 2 + 1 + name.chars().count() + 1;
+    let align = pad + 1 + name.chars().count() + 1;
     let mut prev_end = t.name.end;
     for (i, a) in attrs.iter().enumerate() {
         let own_line = i > 0 && text[prev_end..a.name.start].contains('\n');

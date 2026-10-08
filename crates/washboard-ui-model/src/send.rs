@@ -85,7 +85,7 @@ impl ResponseView {
 /// Pretty-printed only if it decodes; a lossy fallback is shown as received.
 fn display_body(bytes: &[u8]) -> String {
     match xml::decode(bytes) {
-        Ok(decoded) => xml::pretty_print(&decoded.text).unwrap_or(decoded.text),
+        Ok(decoded) => xml::pretty_print(&decoded.text, 2).unwrap_or(decoded.text),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
