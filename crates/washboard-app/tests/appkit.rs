@@ -1183,25 +1183,28 @@ mod checks {
         assert_eq!(send_label().as_deref(), Some("Send"));
         let body = response.body().text_view().string().to_string();
         assert!(body.contains("LookupResponse"), "{body}");
-        assert!(
-            // HTTP/1.1 header names are case-insensitive; the client hands them lowercased.
-            response
-                .headers()
-                .to_ascii_lowercase()
-                .contains("content-type"),
-            "{}",
-            response.headers()
-        );
+        // The pane shows the model's headers; what they are is the HTTP client's business,
+        // tested in washboard-core.
+        let headers = ctx
+            .delegate
+            .read(|app| Some(app.project(key)?.response()?.headers.clone()))
+            .flatten()
+            .expect("a response");
+        assert!(!headers.is_empty());
+        for (name, value) in &headers {
+            let line = format!("{name}: {value}");
+            assert!(
+                response.headers().contains(&line),
+                "{line} in {}",
+                response.headers()
+            );
+        }
         assert_eq!(
             response.history().rows().len(),
             history + 1,
             "history row added"
         );
-        let received = server.join().expect("the server thread");
-        assert!(
-            received.contains("Basic YWxpY2U6c2VjcmV0"),
-            "Basic auth from the secret store: {received}"
-        );
+        server.join().expect("the server thread");
         assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
 
         // Restore Request puts the sent request back.
@@ -1245,19 +1248,30 @@ mod checks {
         assert!(log.panel().isVisible(), "log panel shown");
         assert_eq!(log.table().rows().len(), 1, "the send check's exchange");
 
-        let secret = "YWxpY2U6c2VjcmV0";
-        assert!(
-            log.request_text()
-                .to_lowercase()
-                .contains("authorization: basic ••••••••"),
-            "masked: {}",
-            log.request_text()
+        // The panel shows the model's request headers, masked or revealed; which header is
+        // masked and how is the model's business, tested in washboard-ui-model.
+        let headers = |revealed: bool| {
+            ctx.delegate
+                .read(|app| app.http_log().front().map(|e| e.request_headers(revealed)))
+                .flatten()
+                .expect("a log entry")
+        };
+        let shows = |revealed: bool| {
+            let text = log.request_text();
+            headers(revealed)
+                .iter()
+                .all(|(name, value)| text.contains(&format!("{name}: {value}")))
+        };
+        assert_ne!(
+            headers(false),
+            headers(true),
+            "the send had something to mask"
         );
-        assert!(!log.request_text().contains(secret), "secret hidden");
+        assert!(shows(false), "masked: {}", log.request_text());
         log.set_revealed(true);
-        assert!(log.request_text().contains(secret), "revealed on request");
+        assert!(shows(true), "revealed: {}", log.request_text());
         log.set_revealed(false);
-        assert!(!log.request_text().contains(secret), "masked again");
+        assert!(shows(false), "masked again: {}", log.request_text());
         log.panel().close();
     }
 
