@@ -45,7 +45,7 @@ pub use component::{
 };
 pub use query::{
     AttributeCompletions, AttributeSuggestion, ChildCompletions, ChildElement, ElementInfo,
-    EnumValue, PathStep, SuggestionSource, TypeInfo, TypeSuggestion,
+    EnumValue, PathStep, SuggestionSource, TypeInfo, TypeSuggestion, block_path,
 };
 pub use template::{Template, TemplateOptions};
 
