@@ -68,7 +68,7 @@ use libxml2_sys as ffi;
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
 use crate::model::{QName, SchemaBundle};
 use crate::wsdl::split_scheme;
-use crate::xml::{Token, TokenKind};
+use crate::xml::{Token, TokenKind, UTF8_BOM};
 
 /// Base URI given to every bundle document; see the module docs.
 const BASE: &str = "washboard-bundle://bundle/";
@@ -77,7 +77,6 @@ const INSTANCE_URL: &CStr = c"washboard-instance:/document.xml";
 /// Stop collecting after this many diagnostics; libxml2 keeps going after errors and a
 /// broken request can produce thousands of follow-up errors.
 const MAX_DIAGNOSTICS: usize = 500;
-const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// Schema validity codes for a value that does not fit its simple type: the value and
 /// datatype errors, element children in a simple type, all facets, simple content, fixed
