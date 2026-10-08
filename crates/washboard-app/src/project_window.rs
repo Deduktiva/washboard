@@ -55,18 +55,6 @@ const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
 ];
 const SERVER_ITEM: &str = "server";
 
-/// Shown in the editor until requests are loaded from the project.
-pub const SAMPLE_REQUEST: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                  xmlns:cus="urn:example:customer">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <cus:GetCustomer>
-      <cus:customerId>?</cus:customerId>
-    </cus:GetCustomer>
-  </soapenv:Body>
-</soapenv:Envelope>
-"#;
-
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     // SAFETY: AppKit's identifier constants are immutable statics.
@@ -144,6 +132,17 @@ define_class!(
                     app.close_requested(self);
                 });
             }
+        }
+
+        // SAFETY: the signature matches `windowDidResignKey:`.
+        #[unsafe(method(windowDidResignKey:))]
+        fn window_did_resign_key(&self, _notification: &NSNotification) {
+            // Leaving the window saves its edits (PLAN §4 "Save / autosave").
+            let key = self.key();
+            with_delegate(self.mtm(), |d| {
+                d.update(|app| app.window_resigned_key(key));
+                d.sync();
+            });
         }
     }
 
@@ -267,7 +266,7 @@ impl ProjectWindowController {
             sidebar: SidebarController::new(key, mtm),
             servers: server_popup(mtm),
             server_ids: RefCell::new(Vec::new()),
-            editor: EditorController::new(mtm),
+            editor: EditorController::for_project(key, mtm),
             issues: OnceCell::new(),
             response: ResponsePane::new(mtm),
             split: OnceCell::new(),
@@ -386,6 +385,15 @@ impl ProjectWindowController {
         Some(item)
     }
 
+    /// The window's edited dot follows the model (`EditedChanged`).
+    pub fn show_edited(&self) {
+        let key = self.key();
+        let edited = self
+            .read(|app| app.project(key).is_some_and(|w| w.edited()))
+            .unwrap_or(false);
+        self.project_window().setDocumentEdited(edited);
+    }
+
     /// The model's selected request.
     pub fn selected_request(&self) -> Option<RequestId> {
         let key = self.key();
@@ -483,7 +491,6 @@ impl ProjectWindowController {
 
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
-        editor.set_text(SAMPLE_REQUEST);
         let issues = IssuesBar::new(editor, mtm);
         issues.set_issues(&sample_issues());
         content_vc.setView(&content_pane(

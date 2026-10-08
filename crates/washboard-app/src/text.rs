@@ -32,6 +32,15 @@ pub(crate) fn changed_range(old: &str, new: &str) -> (Range<usize>, usize) {
     (start..old_end, new_end - start)
 }
 
+/// The edit that turns `old` into `new`: the UTF-16 range of `old` to replace and the text to
+/// put there. For when the text view changed without saying how.
+pub(crate) fn utf16_edit(old: &str, new: &str) -> (Range<usize>, String) {
+    let (bytes, new_len) = changed_range(old, new);
+    let mut cursor = washboard_core::xml::utf16::Utf16Cursor::new(old);
+    let range = cursor.utf16_range(bytes.clone());
+    (range, new[bytes.start..bytes.start + new_len].to_owned())
+}
+
 /// The request text with every `Authorization` header value replaced by bullets.
 pub(crate) fn mask_authorization(request: &str) -> String {
     request
@@ -48,7 +57,14 @@ pub(crate) fn mask_authorization(request: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{changed_range, mask_authorization};
+    use super::{changed_range, mask_authorization, utf16_edit};
+
+    #[test]
+    fn utf16_edit_counts_utf16_units() {
+        assert_eq!(utf16_edit("<a>ä</a>", "<a>äb</a>"), (4..4, "b".into()));
+        assert_eq!(utf16_edit("😀x", "😀"), (2..3, String::new()));
+        assert_eq!(utf16_edit("abc", "abc"), (3..3, String::new()));
+    }
 
     #[test]
     fn changed_range_finds_the_edit() {
