@@ -69,7 +69,7 @@ mod checks {
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRunLoop, NSString,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -499,6 +499,29 @@ mod checks {
         assert!(ctx.delegate.projects().is_empty(), "controller released");
         let welcome = ctx.delegate.welcome();
         assert!(welcome.window().isVisible(), "welcome window back");
+
+        // The left column sits centred in its pane, clear of the edges.
+        let content = welcome.window().contentView().expect("content view");
+        content.layoutSubtreeIfNeeded();
+        let pane = content.subviews().firstObject().expect("the left pane");
+        let column = pane.subviews().firstObject().expect("the column");
+        let (outer, inner) = (pane.bounds(), column.frame());
+        assert!(
+            inner.size.height > 0.0 && inner.size.width > 0.0,
+            "{inner:?}"
+        );
+        let centre = |r: NSRect| {
+            (
+                r.origin.x + r.size.width / 2.0,
+                r.origin.y + r.size.height / 2.0,
+            )
+        };
+        let ((ox, oy), (ix, iy)) = (centre(outer), centre(inner));
+        assert!(
+            (ox - ix).abs() < 1.0 && (oy - iy).abs() < 1.0,
+            "{outer:?} {inner:?}"
+        );
+        assert!(inner.origin.y > 0.0, "clear of the bottom edge: {inner:?}");
 
         let table = welcome.table();
         assert_eq!(table.numberOfRows(), 1);
