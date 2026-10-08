@@ -490,7 +490,6 @@ impl ResponsePane {
     }
 }
 
-/// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
 /// The issues summary and its colour. Errors show as soon as any check finds them; "Valid"
 /// only once the schema check of the current text found none.
 fn summary(
@@ -524,6 +523,7 @@ fn summary(
     }
 }
 
+/// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
 fn sent_formatter() -> Retained<NSDateFormatter> {
     let formatter = NSDateFormatter::new();
     formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
