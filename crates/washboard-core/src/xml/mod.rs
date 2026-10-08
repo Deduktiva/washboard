@@ -24,6 +24,7 @@ mod names;
 mod pretty;
 mod start_tags;
 mod tokens;
+mod tree;
 pub mod utf16;
 mod wellformed;
 
@@ -34,6 +35,7 @@ pub use names::NamespaceMap;
 pub use pretty::pretty_print;
 pub use start_tags::{StartTag, start_tag_at, start_tags};
 pub use tokens::{RangeTokens, Token, TokenBuffer, TokenKind, tokenize, tokenize_range};
+pub(crate) use tree::parse_wsdl_or_xsd;
 pub use wellformed::{WellFormednessError, check_well_formed, well_formedness_error};
 
 /// Namespace bound to the `xml` prefix by definition.
