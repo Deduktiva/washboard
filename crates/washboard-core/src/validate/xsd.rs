@@ -769,12 +769,9 @@ unsafe fn reported_attribute(elem: *const ffi::xmlNode, message: &str) -> Option
         .strip_prefix("Element '")?
         .split_once("', attribute '")?;
     let (name, _) = rest.split_once("': ")?;
-    let (ns, local) = match name.strip_prefix('{') {
-        Some(name) => name.split_once('}')?,
-        None => ("", name),
-    };
-    let local = CString::new(local).ok()?;
-    let ns = CString::new(ns).ok()?;
+    let name: QName = name.parse().ok()?;
+    let local = CString::new(name.local).ok()?;
+    let ns = CString::new(name.ns).ok()?;
     // SAFETY: guaranteed by the caller; the names are NUL-terminated and outlive the call.
     unsafe {
         if elem.is_null() || (*elem).type_ != ffi::XML_ELEMENT_NODE {

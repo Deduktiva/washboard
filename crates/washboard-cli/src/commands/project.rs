@@ -9,7 +9,7 @@ use washboard_core::diag::Severity;
 use washboard_core::project::{Project, format_timestamp};
 use washboard_core::wsdl::{Protocol, Wsdl};
 
-use crate::support::{self, op_ref_text, short_time};
+use crate::support::{self, short_time};
 
 pub fn new(
     dir: &Path,
@@ -61,7 +61,7 @@ pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Resu
         .filter(|r| {
             r.operation
                 .as_ref()
-                .is_some_and(|o| !after.contains(&op_ref_text(o)))
+                .is_some_and(|o| !after.contains(&o.to_string()))
         })
         .map(|r| r.name)
         .collect();

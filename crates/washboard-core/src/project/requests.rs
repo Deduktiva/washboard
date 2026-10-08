@@ -14,7 +14,7 @@ use super::{
     HISTORY_DIR, LAST_SERVER_KEY, Project, ProjectError, REQUESTS_DIR, Result, parse_time,
     parse_uuid, timefmt,
 };
-use crate::model::{OperationRef, QName, RequestId, RequestMeta, ServerId};
+use crate::model::{OperationRef, RequestId, RequestMeta, ServerId};
 use crate::xml;
 
 const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
@@ -33,35 +33,13 @@ fn to_meta((id, file_name, operation, last_server, created_at): RawRow) -> Resul
     Ok(RequestMeta {
         id: RequestId(parse_uuid(&id, "request")?),
         name: name.to_owned(),
-        operation: operation.as_deref().and_then(decode_operation),
+        // A hint: a stored value that no longer parses reads as no operation.
+        operation: operation.as_deref().and_then(|s| s.parse().ok()),
         last_server: last_server
             .as_deref()
             .map(|s| parse_uuid(s, "server").map(ServerId))
             .transpose()?,
         created_at: parse_time(&created_at)?,
-    })
-}
-
-/// `{ns}Binding#Operation`. Stored as a hint; a value that no longer parses reads as `None`.
-fn encode_operation(op: &OperationRef) -> String {
-    format!("{}#{}", op.binding, op.operation)
-}
-
-fn decode_operation(s: &str) -> Option<OperationRef> {
-    let (binding, operation) = s.rsplit_once('#')?;
-    let binding = match binding.strip_prefix('{') {
-        Some(rest) => {
-            let (ns, local) = rest.split_once('}')?;
-            QName::new(ns, local)
-        }
-        None => QName::new("", binding),
-    };
-    if binding.local.is_empty() || operation.is_empty() {
-        return None;
-    }
-    Some(OperationRef {
-        binding,
-        operation: operation.to_owned(),
     })
 }
 
@@ -197,7 +175,7 @@ impl Project {
                 params![
                     id.to_string(),
                     file_name,
-                    operation.map(encode_operation),
+                    operation.map(OperationRef::to_string),
                     last_server.map(|s| s.to_string()),
                     timefmt::format(created_at),
                     order
@@ -354,26 +332,5 @@ impl Project {
         }
         tx.commit()?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn operation_round_trip() {
-        let op = OperationRef {
-            binding: QName::new("urn:x#frag", "Binding"),
-            operation: "GetCustomer".into(),
-        };
-        assert_eq!(decode_operation(&encode_operation(&op)), Some(op));
-        let local = OperationRef {
-            binding: QName::new("", "B"),
-            operation: "Op".into(),
-        };
-        assert_eq!(decode_operation(&encode_operation(&local)), Some(local));
-        assert_eq!(decode_operation("garbage"), None);
-        assert_eq!(decode_operation("{urn:x#Op"), None);
     }
 }

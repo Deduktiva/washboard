@@ -8,11 +8,11 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use serde::Serialize;
-use washboard_core::model::ServerId;
+use washboard_core::model::{OperationRef, ServerId};
 use washboard_core::xml;
 
 use crate::commands::operation;
-use crate::support::{self, op_ref_text};
+use crate::support;
 
 #[derive(Debug, Serialize)]
 struct RequestRow {
@@ -38,7 +38,7 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
         .map(|r| RequestRow {
             id: r.id.to_string(),
             name: r.name,
-            operation: r.operation.as_ref().map(op_ref_text),
+            operation: r.operation.as_ref().map(OperationRef::to_string),
             last_server: r.last_server.and_then(|s| servers.get(&s).cloned()),
         })
         .collect();
