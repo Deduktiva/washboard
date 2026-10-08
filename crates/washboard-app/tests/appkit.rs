@@ -23,6 +23,7 @@ fn main() {
         ("welcome_window", checks::welcome_window),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
+        ("sidebar_commands", checks::sidebar_commands),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("issues_and_fake_send", checks::issues_and_fake_send),
@@ -53,7 +54,7 @@ mod checks {
 
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyObject, Sel};
     use objc2::{MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
@@ -65,7 +66,10 @@ mod checks {
         NSRange, NSRunLoop, NSString,
     };
     use tempfile::TempDir;
-    use washboard_app::{AppDelegate, EditorController, Options, ProjectWindowController};
+    use washboard_app::{
+        AppDelegate, EditorController, NodeKind, Options, ProjectWindowController, SidebarNode,
+    };
+    use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
     use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs};
@@ -112,8 +116,63 @@ mod checks {
             }],
             entry: "Legacy.wsdl".into(),
         };
-        Project::create(&folder, name, &set).expect("create project");
+        let mut project = Project::create(&folder, name, &set).expect("create project");
+        for server in ["Staging", "Production"] {
+            let server = Server {
+                id: ServerId::new(),
+                name: server.into(),
+                url: format!("https://{}.invalid/legacy", server.to_lowercase()),
+                ignore_tls_errors: false,
+                auth: Auth::None,
+                timeout: Duration::from_secs(5),
+            };
+            project.add_server(&server).expect("add server");
+        }
         folder
+    }
+
+    /// Waits until the project's WSDL has loaded into the sidebar.
+    fn wait_loaded(project: &ProjectWindowController) {
+        wait_until("the WSDL to load", || {
+            project.sidebar().roots()[1]
+                .children()
+                .first()
+                .is_some_and(|n| n.kind() == NodeKind::Service)
+        });
+    }
+
+    /// Every node under `roots`, depth first.
+    fn all_nodes(roots: &[Retained<SidebarNode>]) -> Vec<Retained<SidebarNode>> {
+        roots
+            .iter()
+            .flat_map(|n| {
+                let mut nodes = vec![n.clone()];
+                nodes.extend(all_nodes(n.children()));
+                nodes
+            })
+            .collect()
+    }
+
+    fn request_names(project: &ProjectWindowController) -> Vec<String> {
+        project.sidebar().roots()[0]
+            .children()
+            .iter()
+            .map(|n| n.title())
+            .collect()
+    }
+
+    /// The request files in the project folder, sorted.
+    fn request_files(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder.join("requests"))
+            .expect("requests dir")
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                (path.extension()? == "xml")
+                    .then(|| path.file_stem()?.to_str().map(String::from))?
+            })
+            .collect();
+        names.sort();
+        names
     }
 
     pub struct Ctx {
@@ -530,11 +589,8 @@ mod checks {
         );
 
         // Two groups, the requests, and every service, port and operation, all expanded.
-        let operations: usize = washboard_app::SAMPLE_OPERATIONS
-            .iter()
-            .map(|(_, _, ops)| 2 + ops.len())
-            .sum();
-        let rows = 2 + washboard_app::SAMPLE_REQUESTS.len() + operations;
+        wait_loaded(&project);
+        let rows = all_nodes(&project.sidebar().roots()).len();
         let outline = project.sidebar().outline().expect("outline built");
         assert_eq!(outline.numberOfRows() as usize, rows, "sidebar rows");
 
@@ -550,13 +606,31 @@ mod checks {
             "sidebar rows after reload"
         );
 
-        // The first request is selectable, group rows are not.
-        let request_row = 1;
+        // Operations are selectable, group rows are not; unsupported ones are listed.
+        let nodes = all_nodes(&project.sidebar().roots());
+        assert!(
+            nodes.iter().any(|n| n.unsupported().is_some()),
+            "the rpc/encoded operation is shown"
+        );
+        let operation_row = (0..outline.numberOfRows())
+            .find(|&row| {
+                outline.itemAtRow(row).is_some_and(|item| {
+                    item.downcast_ref::<SidebarNode>()
+                        .is_some_and(|n| n.kind() == NodeKind::Operation)
+                })
+            })
+            .expect("an operation row") as usize;
         outline.selectRowIndexes_byExtendingSelection(
-            &NSIndexSet::indexSetWithIndex(request_row),
+            &NSIndexSet::indexSetWithIndex(operation_row),
             false,
         );
-        assert_eq!(outline.selectedRow() as usize, request_row);
+        assert_eq!(outline.selectedRow() as usize, operation_row);
+        outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        assert_eq!(
+            outline.selectedRow() as usize,
+            operation_row,
+            "groups aren't selectable"
+        );
 
         autoreleasepool(|_| window.performClose(None));
         assert!(!window.isVisible(), "project window closed");
@@ -565,6 +639,130 @@ mod checks {
             ctx.delegate.welcome().window().isVisible(),
             "welcome window back"
         );
+    }
+
+    /// New, rename, duplicate and delete through the window's actions change the rows and the
+    /// folder; the server popup follows the selected request.
+    pub fn sidebar_commands(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let outline = project.sidebar().outline().expect("outline built").retain();
+        let window = project.project_window();
+        let send = |action: &str| {
+            let action = std::ffi::CString::new(action).expect("a selector name");
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(&action), Some(&project), None)
+            };
+            assert!(sent, "{action:?} reached the window controller");
+        };
+        let selected_row = || {
+            let id = project.selected_request();
+            (0..outline.numberOfRows()).find(|&row| {
+                outline.itemAtRow(row).is_some_and(|item| {
+                    item.downcast_ref::<SidebarNode>()
+                        .is_some_and(|n| n.request().is_some() && n.request() == id)
+                })
+            })
+        };
+
+        let popup = project.server_popup();
+        assert!(popup.isEnabled());
+        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
+        assert_eq!(titles, ["Staging", "Production"]);
+
+        send("newRequest:");
+        assert_eq!(request_names(&project), ["Lookup 1"]);
+        assert_eq!(request_files(&ctx.project), ["Lookup 1"]);
+        assert!(
+            project.selected_request().is_some(),
+            "the new request is selected"
+        );
+        assert_eq!(selected_row(), Some(outline.selectedRow()), "and its row");
+        // End the inline rename that New Request starts, without renaming.
+        window.makeFirstResponder(Some(&outline));
+        assert_eq!(request_names(&project), ["Lookup 1"]);
+
+        // Inline rename: what the field holds when editing ends.
+        let rename = |name: &str| {
+            let row = selected_row().expect("a selected request");
+            let view = outline
+                .viewAtColumn_row_makeIfNecessary(0, row, true)
+                .expect("row view");
+            let field = view
+                .downcast::<NSStackView>()
+                .expect("request rows are stacks")
+                .arrangedSubviews()
+                .firstObject()
+                .and_then(|v| v.downcast::<NSTextField>().ok())
+                .expect("name field");
+            field.setStringValue(&NSString::from_str(name));
+            // SAFETY: the notification's object is the text field, as AppKit sends it.
+            let notification = unsafe {
+                NSNotification::notificationWithName_object(
+                    &NSString::from_str("NSControlTextDidEndEditingNotification"),
+                    Some(&field),
+                )
+            };
+            let sidebar = project.sidebar();
+            // SAFETY: the text field delegate method takes the notification.
+            let _: () = unsafe { msg_send![sidebar, controlTextDidEndEditing: &*notification] };
+        };
+        rename("Find customer");
+        assert_eq!(request_names(&project), ["Find customer"]);
+        assert_eq!(request_files(&ctx.project), ["Find customer"]);
+        rename("");
+        assert_eq!(request_names(&project), ["Find customer"]);
+        assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
+
+        // The popup remembers the server per request.
+        popup.selectItemAtIndex(1);
+        send("chooseServer:");
+        assert_eq!(popup.indexOfSelectedItem(), 1);
+        send("duplicateRequest:");
+        assert_eq!(
+            request_names(&project),
+            ["Find customer", "Find customer copy"]
+        );
+        assert_eq!(
+            request_files(&ctx.project),
+            ["Find customer", "Find customer copy"]
+        );
+        assert_eq!(
+            selected_row(),
+            Some(outline.selectedRow()),
+            "the copy is selected"
+        );
+        popup.selectItemAtIndex(0);
+        send("chooseServer:");
+        let original = NSIndexSet::indexSetWithIndex(1);
+        outline.selectRowIndexes_byExtendingSelection(&original, false);
+        assert_eq!(
+            selected_row(),
+            Some(1),
+            "selecting a row selects its request"
+        );
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's server");
+
+        send("deleteRequest:");
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert!(confirm.title.contains("Find customer"), "{confirm:?}");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(request_names(&project), ["Find customer copy"]);
+        assert_eq!(request_files(&ctx.project), ["Find customer copy"]);
+        assert_eq!(
+            selected_row(),
+            Some(outline.selectedRow()),
+            "the next one is selected"
+        );
+        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
+        assert!(ctx.alerts().is_empty());
     }
 
     fn temporary_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {

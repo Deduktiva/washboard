@@ -50,7 +50,7 @@ pub use sheets::{
     NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
 };
 #[cfg(target_os = "macos")]
-pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
+pub use sidebar::{NodeKind, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]
 pub use table::TextTable;
 #[cfg(target_os = "macos")]
