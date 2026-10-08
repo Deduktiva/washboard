@@ -33,6 +33,7 @@ pub(crate) use encoding::declared_encoding;
 pub use encoding::{DecodeError, Decoded, Encoding, decode, encode_utf8};
 pub use escape::{escape_attr, escape_text};
 pub use names::NamespaceMap;
+pub(crate) use names::is_xml_ws_char;
 pub use pretty::pretty_print;
 pub use start_tags::{StartTag, start_tag_at, start_tags};
 pub use tokens::{RangeTokens, Token, TokenBuffer, TokenKind, tokenize, tokenize_range};

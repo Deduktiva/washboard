@@ -12,6 +12,11 @@ pub(crate) fn is_xml_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
+/// [`is_xml_ws`] for `char`s, for `str::trim_matches` and friends.
+pub(crate) fn is_xml_ws_char(c: char) -> bool {
+    u8::try_from(c).is_ok_and(is_xml_ws)
+}
+
 /// Splits `p:local` into `(Some("p"), "local")`; a name without a colon has no prefix.
 pub(crate) fn split_qname(raw: &str) -> (Option<&str>, &str) {
     match raw.split_once(':') {
@@ -116,10 +121,7 @@ impl NamespaceMap {
     /// Resolves a QName-valued attribute (e.g. `xsi:type`). As in XSD, an unprefixed value takes
     /// the default namespace. Surrounding whitespace is ignored.
     pub fn resolve_qname_value(&self, raw: &str) -> Option<QName> {
-        self.resolve(
-            raw.trim_matches(|c: char| c.is_ascii() && is_xml_ws(c as u8)),
-            true,
-        )
+        self.resolve(raw.trim_matches(is_xml_ws_char), true)
     }
 
     fn resolve(&self, raw: &str, use_default: bool) -> Option<QName> {

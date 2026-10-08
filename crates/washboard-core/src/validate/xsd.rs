@@ -67,7 +67,7 @@ use libxml2_sys as ffi;
 
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
 use crate::model::{QName, SchemaBundle};
-use crate::xml::{Token, TokenKind};
+use crate::xml::{Token, TokenKind, is_xml_ws_char};
 
 /// Base URI given to every bundle document; see the module docs.
 const BASE: &str = "washboard-bundle://bundle/";
@@ -1188,9 +1188,9 @@ impl<'t> Source<'t> {
             }
         }
         let content = &self.text[tag.bytes.end..end?];
-        let is_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
-        let start = tag.bytes.end + (content.len() - content.trim_start_matches(is_ws).len());
-        let len = content.trim_matches(is_ws).len();
+        let trimmed = content.trim_start_matches(is_xml_ws_char);
+        let start = tag.bytes.end + (content.len() - trimmed.len());
+        let len = trimmed.trim_end_matches(is_xml_ws_char).len();
         (len > 0).then_some(start..start + len)
     }
 }
