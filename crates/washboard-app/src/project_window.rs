@@ -17,9 +17,9 @@ use objc2_app_kit::{
     NSPopUpButton, NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem,
     NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
-    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
-    NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSUserInterfaceLayoutOrientation, NSView,
+    NSViewController, NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask,
+    NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -58,18 +58,14 @@ const SERVER_ITEM: &str = "server";
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     // SAFETY: AppKit's identifier constants are immutable statics.
-    let (toggle, tracking, flexible) = unsafe {
+    let (tracking, flexible) = unsafe {
         (
-            NSToolbarToggleSidebarItemIdentifier,
             NSToolbarSidebarTrackingSeparatorItemIdentifier,
             NSToolbarFlexibleSpaceItemIdentifier,
         )
     };
-    let mut ids = vec![
-        toggle.copy(),
-        tracking.copy(),
-        NSString::from_str(SERVER_ITEM),
-    ];
+    // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps.
+    let mut ids = vec![tracking.copy(), NSString::from_str(SERVER_ITEM)];
     ids.extend(
         TOOLBAR_ITEMS[..2]
             .iter()

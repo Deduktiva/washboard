@@ -317,6 +317,7 @@ mod checks {
     const C: usize = NSEventModifierFlags::Command.0;
     const S: usize = NSEventModifierFlags::Shift.0;
     const O: usize = NSEventModifierFlags::Option.0;
+    const CTRL: usize = NSEventModifierFlags::Control.0;
 
     /// (title, key equivalent, modifiers, action); `-` is a separator, an action of `>` a
     /// submenu.
@@ -364,6 +365,7 @@ mod checks {
                 ("Find", "", 0, ">"),
             ],
         ),
+        ("View", &[("Show Sidebar", "s", CTRL | C, "toggleSidebar:")]),
         (
             "Project",
             &[
