@@ -1565,6 +1565,43 @@ mod checks {
         );
     }
 
+    /// The form's rows sit together at the top of the Servers tab, and the suggestions table
+    /// has room for its rows.
+    fn assert_settings_layout(settings: &washboard_app::SettingsSheet) {
+        settings
+            .window()
+            .contentView()
+            .expect("content")
+            .layoutSubtreeIfNeeded();
+        let top = |v: &NSView| v.convertRect_toView(v.bounds(), None).origin.y;
+        let fields: [&NSView; 4] = [
+            settings.name_field(),
+            settings.url_field(),
+            settings.user_field(),
+            settings.password_field(),
+        ];
+        // Name, URL, then TLS and Auth, then User, Password: never more than three rows apart.
+        for pair in fields.windows(2) {
+            let gap = top(pair[0]) - top(pair[1]);
+            assert!(
+                gap > 0.0 && gap < 3.0 * 40.0,
+                "form rows stay together: {gap} between {:?} and {:?}",
+                pair[0].frame(),
+                pair[1].frame()
+            );
+        }
+        let table = settings.suggestions().view();
+        let frame = table.frame();
+        assert!(
+            frame.size.height >= 80.0,
+            "suggestions table height: {frame:?}"
+        );
+        assert!(
+            frame.size.width >= 170.0,
+            "suggestions table width: {frame:?}"
+        );
+    }
+
     /// Waits for the import check the last file change started.
     fn wait_checked(sheet: &ImportSheetController) {
         wait_until("the import check", || {
@@ -1715,6 +1752,7 @@ mod checks {
         assert!(settings.servers().is_empty(), "nothing before confirming");
         let suggested = settings.suggestions().rows();
         assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
+        assert_settings_layout(settings);
         settings.confirm_suggestion(0);
         assert!(settings.suggestions().rows().is_empty());
         assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
