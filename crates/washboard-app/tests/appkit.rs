@@ -65,7 +65,7 @@ mod checks {
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
         NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
-        NSView,
+        NSView, NSWindowOrderingMode, NSWindowTabbingMode,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -501,6 +501,11 @@ mod checks {
         assert!(ctx.delegate.projects().is_empty(), "controller released");
         let welcome = ctx.delegate.welcome();
         assert!(welcome.window().isVisible(), "welcome window back");
+        assert_eq!(
+            welcome.window().tabbingMode(),
+            NSWindowTabbingMode::Disallowed,
+            "never a tab of a project window"
+        );
 
         // The left column sits centred in its pane, clear of the edges.
         let content = welcome.window().contentView().expect("content view");
@@ -590,8 +595,19 @@ mod checks {
             open_recent_titles(ctx),
             ["Billing", "Customer API", "Clear Menu"]
         );
-        autoreleasepool(|_| projects[1].project_window().performClose(None));
+
+        // Project windows group into one window's tabs; closing a tab closes its project only.
+        let (first, second) = (projects[0].project_window(), projects[1].project_window());
+        for w in [&first, &second] {
+            assert_eq!(*w.tabbingIdentifier(), *washboard_app::project_tabbing_id());
+            assert_eq!(w.tabbingMode(), NSWindowTabbingMode::Automatic);
+        }
+        first.addTabbedWindow_ordered(&second, NSWindowOrderingMode::Above);
+        let tabs = first.tabbedWindows().map_or(0, |t| t.count());
+        assert_eq!(tabs, 2, "merged into one window's tabs");
+        autoreleasepool(|_| second.performClose(None));
         assert_eq!(ctx.delegate.projects().len(), 1);
+        assert!(first.isVisible(), "the other tab stays open");
         assert!(ctx.alerts().is_empty());
     }
 
@@ -1510,6 +1526,7 @@ mod checks {
             window.sheetParent().is_none(),
             "its own window, not a sheet"
         );
+        assert_eq!(window.tabbingMode(), NSWindowTabbingMode::Disallowed);
         // SAFETY: `newProject:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
         assert!(
