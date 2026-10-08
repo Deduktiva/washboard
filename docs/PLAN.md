@@ -328,9 +328,38 @@ Errors: list in the issues bar under the editor (click → jump to line), plus g
 - Basic auth: `Authorization` header built up front (preemptive, no 401 round-trip).
 - TLS: platform verification; if the server has "ignore TLS errors", certificate and hostname
   checks are disabled for that request only. The log records whether verification was skipped.
-- Response pane: status line, duration, size; tabs **Response** (pretty-printed, highlighted,
-  SOAP Faults called out), **Headers**, **History** (list for this request; select to view,
-  "Restore request" to copy the sent request into the editor).
+- The response and its history: next section.
+
+### Response pane and history
+- **Layout.** The content area is one vertical `NSSplitView`: the request on the left (request
+  bar, editor, issues bar), the response on the right. This replaces the earlier stacked layout;
+  there is no setting to get it back. The request bar and the response's status line have the
+  same height, so the two halves start on one band. Each half keeps a minimum width, and the
+  window's minimum width leaves room for the sidebar and both.
+- **Response side**, top to bottom: the status line (status · duration · size [· SOAP Fault] ·
+  server · sent time, the URL as its tooltip), tabs **Response** (pretty-printed, highlighted)
+  and **Headers**, the body, and the History drawer.
+- **History drawer.** A second split under the response body. Its header line is always shown:
+  a disclosure triangle, "History", the number of earlier exchanges, and one dot per stored
+  exchange (oldest left; red for a SOAP Fault or a transport failure; a ring around the one
+  shown). Clicking the header opens or closes the table (Sent | Server | Status | Duration,
+  newest first). Whether it is open and its height are kept per project in `ui_state`.
+- **Older exchange.** Selecting any row but the newest shows that whole exchange:
+  - The request side shows the request as sent (`history/…/<stamp>.request.xml`), read-only, in a
+    separate text view on the window background colour, with "Sent <time> · read-only" in the
+    request bar. The editor keeps its buffer, selection and undo stack; the issues bar is
+    hidden, since its results are about the editor's text.
+  - A titlebar accessory (`NSTitlebarAccessoryViewController`, layout attribute bottom) appears
+    under the toolbar: "Older exchange · <time> · <server>", **Restore Request**, and **Show
+    Latest** (default button, Esc). Its background is a yellow tint that works in light and dark.
+    While it shows, the toolbar's own items (server popup, Send, HTTP Log) are hidden. A unified
+    toolbar cannot be coloured itself; the accessory is AppKit's way to attach a bar to it.
+  - Send (⌘↩) and Project ▸ Validate (⌘B) are disabled, in the menu too, and the model refuses
+    to send in this state, so an old exchange is never sent by a shortcut.
+- **Back to the latest.** Show Latest, Esc, selecting the newest row, switching requests and a
+  finished send all return to the newest exchange and the editor. Restore Request puts the sent
+  request into the editor as one undo step (applied through the widget, like Format XML) and
+  returns to it; the editor's previous text is one ⌘Z away.
 
 ### HTTP log (Window ▸ HTTP Log, ⌥⌘L)
 One panel for the app. Shows the last exchange in full: request line, headers, body;
@@ -584,28 +613,39 @@ Interactive version: [`gui-draft.html`](gui-draft.html).
 
 ### Project window
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  [⫶]  Customer API          Server: [Staging ▾]  [✓ Validate] [▶ Send]   [💾] [Log]    │
-├──────────────────────┬───────────────────────────────────────────────────────────────────────┤
-│ REQUESTS          [+]│  GetCustomer 1                         SOAP 1.1 · GetCustomer           │
-│  ▸ GetCustomer 1     │ ┌───┬─────────────────────────────────────────────────────────────────┐ │
-│    GetCustomer 2  •  │ │  1│<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/…"  │ │
-│    CreateOrder 1  ⚠  │ │  2│                  xmlns:cus="urn:example:customer">              │ │
-│                      │ │  3│  <soapenv:Header/>                                              │ │
-│ OPERATIONS           │ │  4│  <soapenv:Body>                                                 │ │
-│  ▾ CustomerService   │ │ ⚠5│    <cus:GetCustomer>                                            │ │
-│    ▾ CustomerPort    │ │  6│      <cus:customerId>?</cus:customerId>                         │ │
-│        GetCustomer   │ │  7│    </cus:GetCustomer>                                           │ │
-│        CreateOrder   │ │  …│                                                                 │ │
-│        ListOrders    │ └───┴─────────────────────────────────────────────────────────────────┘ │
-│                      │  ⚠ 1 error  line 6: 'customerId': '?' is not a valid xs:long   [Hide] │
-│                      ├───────────────────────────────────────────────────────────────────────┤
-│                      │  200 OK · 143 ms · 1.2 KB         [Response] [Headers] [History (7)]   │
-│                      │  <soap:Envelope …>                                                    │
-│                      │    <soap:Body>                                                        │
-│ [+] [−] [⋯]          │      <GetCustomerResponse>…                                           │
-└──────────────────────┴───────────────────────────────────────────────────────────────────────┘
-   • unsaved   ⚠ fails validation
+┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ ● ● ●  Customer API                                           [Staging ▾] [▶]           [≣]        │
+├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
+│ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCustomer  ✓  │ 200 · 143 ms · 1.2 KB · Staging │
+│  ▸ GetCustomer 1     │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
+│    GetCustomer 2  •  │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
+│    CreateOrder 1  ⚠  │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
+│                      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
+│ OPERATIONS           │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
+│  ▾ CustomerService   │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
+│    ▾ CustomerPort    │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
+│        GetCustomer   │ │  …│                                   │ │                                 │
+│        CreateOrder   │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
+│        ListOrders    │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
+└──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
+   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
+```
+
+An older history entry selected (drawer open):
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ ● ● ●  Customer API                                                                                │
+│ Older exchange · Today 13:51:07 · Staging                  [Restore Request]  [[Show Latest]]      │
+├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
+│ REQUESTS             │ GetCustomer 1   Sent 13:51:07 · read-only │ 500 · 88 ms · SOAP Fault: soap… │
+│  ▸ GetCustomer 1     │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
+│    …                 │ │  1│<soapenv:Envelope …>   (read-only) │ │ <soap:Fault>…                   │
+│                      │ │  …│      <cus:customerId>0</cus:cust… │ ├─────────────────────────────────┤
+│                      │ │   │                                   │ │ ▾ History  6 earlier    ●●●●●◉● │
+│                      │ │   │                                   │ │ Today 14:03:12  Staging  200    │
+│                      │ │   │                                   │ │▸Today 13:51:07  Staging  500 F… │
+│                      │ └───┴───────────────────────────────────┘ │ Today 11:20:44  Local    200    │
+└──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
 ```
 
 ### New project sheet
