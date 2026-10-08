@@ -8,8 +8,9 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSLayoutAttribute, NSLayoutConstraintOrientation,
-    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow, NSStackView, NSStackViewDistribution,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow, NSLineBreakMode, NSStackView,
+    NSStackViewDistribution, NSTableCellView, NSTextField, NSUserInterfaceLayoutOrientation,
+    NSView,
 };
 use objc2_foundation::{NSArray, NSEdgeInsets};
 
@@ -86,4 +87,48 @@ pub fn tab_page(content: &NSView, mtm: MainThreadMarker) -> Retained<NSView> {
         a.constraintEqualToAnchor(&b).setActive(true);
     }
     page
+}
+
+/// A table or outline cell around `content`: centred vertically and spanning the column, as
+/// AppKit's own cells are. Returning a bare label instead leaves its text at the top of a
+/// taller row and lets a long value run past the column. `label` becomes the cell's text
+/// field, which AppKit recolours on selection and edits for inline rename.
+pub fn cell(
+    content: &NSView,
+    label: Option<&NSTextField>,
+    mtm: MainThreadMarker,
+) -> Retained<NSTableCellView> {
+    let cell = NSTableCellView::new(mtm);
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    cell.addSubview(content);
+    for constraint in [
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&cell.leadingAnchor(), CELL_INSET),
+        content
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&cell.trailingAnchor(), -CELL_INSET),
+        content
+            .centerYAnchor()
+            .constraintEqualToAnchor(&cell.centerYAnchor()),
+    ] {
+        constraint.setActive(true);
+    }
+    // SAFETY: the label is `content` or inside it, so the cell keeps it alive for as long as
+    // its unretained `textField` reference is used.
+    unsafe { cell.setTextField(label) };
+    cell
+}
+
+const CELL_INSET: f64 = 2.0;
+
+/// Lets a label give up width before its neighbours do, shortening its text with an ellipsis
+/// (`mode`) and showing the whole of it in a tool tip on hover.
+pub fn truncating(label: &NSTextField, mode: NSLineBreakMode) {
+    label.setLineBreakMode(mode);
+    label.setAllowsExpansionToolTips(true);
+    label.setContentCompressionResistancePriority_forOrientation(
+        NSLayoutPriorityDefaultLow,
+        NSLayoutConstraintOrientation::Horizontal,
+    );
 }

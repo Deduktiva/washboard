@@ -14,9 +14,9 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView,
-    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder,
+    NSStackView, NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate,
+    NSTextView, NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
@@ -25,6 +25,7 @@ use washboard_core::model::{OperationRef, RequestId};
 use washboard_ui_model::{App, ModelError, ProjectKey, SchemaState, Sidebar};
 
 use crate::app::with_delegate;
+use crate::layout;
 
 /// What a sidebar row stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -683,12 +684,14 @@ impl SidebarController {
         let mtm = self.mtm();
         let title = NSString::from_str(&node.title());
         let name = NSTextField::labelWithString(&title, mtm);
+        layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
+        let alone = |name: &NSTextField| Retained::into_super(layout::cell(name, Some(name), mtm));
         match node.kind() {
-            NodeKind::Group => return Retained::into_super(Retained::into_super(name)),
+            NodeKind::Group => return alone(&name),
             NodeKind::Placeholder => {
                 name.setTextColor(Some(&NSColor::secondaryLabelColor()));
                 name.setToolTip(Some(&title));
-                return Retained::into_super(Retained::into_super(name));
+                return alone(&name);
             }
             NodeKind::Request => {
                 name.setEditable(true);
@@ -705,7 +708,7 @@ impl SidebarController {
             }
             NodeKind::Service | NodeKind::Port => {}
         }
-        let mut views = vec![Retained::into_super(Retained::into_super(name))];
+        let mut views = vec![Retained::into_super(Retained::into_super(name.clone()))];
         let marker = match node.markers() {
             (_, true) => Some(("⚠", NSColor::systemOrangeColor())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
@@ -720,6 +723,7 @@ impl SidebarController {
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         stack.setAlignment(NSLayoutAttribute::FirstBaseline);
-        Retained::into_super(stack)
+        // The marker stays in view however long the name: the name gives up width first.
+        Retained::into_super(layout::cell(&stack, Some(&name), mtm))
     }
 }

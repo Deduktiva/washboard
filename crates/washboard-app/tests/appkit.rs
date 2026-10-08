@@ -64,8 +64,8 @@ mod checks {
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
-        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
-        NSView, NSWindowOrderingMode, NSWindowTabbingMode,
+        NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
+        NSToolbarDisplayMode, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -540,9 +540,12 @@ mod checks {
         let view = table
             .viewAtColumn_row_makeIfNecessary(0, 0, true)
             .expect("row 0 view");
+        assert_fits(&view, "the recent project");
         let stack = view
-            .downcast::<NSStackView>()
-            .expect("rows are stack views");
+            .subviews()
+            .firstObject()
+            .and_then(|v| v.downcast::<NSStackView>().ok())
+            .expect("rows hold a stack of labels");
         let labels: Vec<String> = stack
             .arrangedSubviews()
             .iter()
@@ -811,11 +814,10 @@ mod checks {
                 .viewAtColumn_row_makeIfNecessary(0, row, true)
                 .expect("row view");
             let field = view
-                .downcast::<NSStackView>()
-                .expect("request rows are stacks")
-                .arrangedSubviews()
-                .firstObject()
-                .and_then(|v| v.downcast::<NSTextField>().ok())
+                .downcast::<NSTableCellView>()
+                .ok()
+                // SAFETY: the sidebar's cells keep their text field alive for the row's lifetime.
+                .and_then(|cell| unsafe { cell.textField() })
                 .expect("name field");
             field.setStringValue(&NSString::from_str(name));
             // SAFETY: the notification's object is the text field, as AppKit sends it.
@@ -832,6 +834,14 @@ mod checks {
         rename("Find customer");
         assert_eq!(request_names(&project), ["Find customer"]);
         assert_eq!(request_files(&ctx.project), ["Find customer"]);
+        // A long name is shortened inside its row, not run past the sidebar.
+        rename("Find customer by every field we have ever stored about them, twice over");
+        let row = selected_row().expect("still selected");
+        let cell = outline
+            .viewAtColumn_row_makeIfNecessary(0, row, true)
+            .expect("row view");
+        assert_fits(&cell, "a long request name");
+        rename("Find customer");
         rename("");
         assert_eq!(request_names(&project), ["Find customer"]);
         assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
@@ -1501,6 +1511,27 @@ mod checks {
             .collect()
     }
 
+    /// A table cell's text sits inside the cell and is centred vertically in it.
+    fn assert_fits(cell: &NSView, what: &str) {
+        cell.layoutSubtreeIfNeeded();
+        let label = cell
+            .downcast_ref::<NSTableCellView>()
+            // SAFETY: a cell's text field is one of its subviews, so the cell keeps it alive.
+            .and_then(|c| unsafe { c.textField() })
+            .expect("cells are NSTableCellViews with a text field");
+        let outer = cell.bounds();
+        let inner = label.convertRect_toView(label.bounds(), Some(cell));
+        assert!(
+            inner.origin.x >= -0.5 && inner.origin.x + inner.size.width <= outer.size.width + 0.5,
+            "{what} within its cell: {inner:?} in {outer:?}"
+        );
+        let mid = |r: NSRect| r.origin.y + r.size.height / 2.0;
+        assert!(
+            (mid(inner) - mid(outer)).abs() < 2.0,
+            "{what} centred vertically: {inner:?} in {outer:?}"
+        );
+    }
+
     /// Waits for the import check the last file change started.
     fn wait_checked(sheet: &ImportSheetController) {
         wait_until("the import check", || {
@@ -1602,6 +1633,13 @@ mod checks {
         sheet.add_files(vec![files.clone()]);
         wait_checked(&sheet);
         let rows = sheet.references().rows();
+        let table = sheet.references().table();
+        for column in 0..table.numberOfColumns() {
+            let cell = table
+                .viewAtColumn_row_makeIfNecessary(column, 0, true)
+                .expect("a cell");
+            assert_fits(&cell, "a reference");
+        }
         let missing: Vec<&Vec<String>> = rows.iter().filter(|r| r[0] == "✗").collect();
         assert_eq!(missing.len(), 1, "{rows:?}");
         assert_eq!(missing[0][1], "xs:include party-ids.xsd");

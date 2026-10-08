@@ -7,8 +7,8 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlSize, NSFont, NSScrollView, NSStackView, NSStackViewGravity,
-    NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
+    NSButton, NSColor, NSControlSize, NSFont, NSLineBreakMode, NSScrollView, NSStackView,
+    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
 };
 use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
@@ -74,6 +74,8 @@ impl IssuesBar {
         let summary = NSTextField::labelWithString(ns_string!(""), mtm);
         summary.setFont(Some(&NSFont::systemFontOfSize(11.0)));
         summary.setTextColor(Some(&NSColor::systemOrangeColor()));
+        // A long first message keeps the Hide button in view.
+        layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
         // SAFETY: this bar owns the button through its view, so it outlives the button's weak
         // target reference.
         let hide = unsafe {
