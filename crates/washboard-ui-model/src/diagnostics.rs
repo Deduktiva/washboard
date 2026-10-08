@@ -166,10 +166,7 @@ impl App {
         };
         // A schema that changed since the check started starts another check, which replaces
         // this result, so the state now is good enough.
-        let schema = matches!(
-            &window.schema,
-            SchemaState::Ready(s) if s.compile_errors().is_empty()
-        );
+        let schema = window.schema.validating().is_ok();
         let Some(editor) = window.editor.as_mut() else {
             return;
         };

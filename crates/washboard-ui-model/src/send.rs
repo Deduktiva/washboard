@@ -14,7 +14,7 @@ use washboard_core::xml;
 use crate::app::{App, ModelError, ProjectKey};
 use crate::diagnostics::{Check, Issue};
 use crate::event::Event;
-use crate::window::{ProjectWindow, SchemaState};
+use crate::window::ProjectWindow;
 
 /// The HTTP log keeps this many exchanges, across all projects.
 pub const LOG_CAPACITY: usize = 50;
@@ -151,16 +151,7 @@ impl App {
             .editor
             .as_ref()
             .ok_or(ModelError::NoRequestSelected)?;
-        let schema = match &window.schema {
-            SchemaState::Ready(schema) if schema.compile_errors().is_empty() => schema.clone(),
-            SchemaState::Ready(_) => {
-                return Err(ModelError::SchemaFailed(
-                    "the WSDL's schemas could not be compiled".into(),
-                ));
-            }
-            SchemaState::Loading => return Err(ModelError::SchemaNotReady),
-            SchemaState::Failed(m) => return Err(ModelError::SchemaFailed(m.clone())),
-        };
+        let schema = window.schema.validating()?.clone();
         let server_id = window.selected_server().ok_or(ModelError::NoServer)?;
         let server = window
             .servers

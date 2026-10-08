@@ -12,7 +12,6 @@ use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
 use crate::front_end::{Confirm, DialogId};
 use crate::timers::TimerKind;
-use crate::window::SchemaState;
 
 /// A new server's timeout until the user changes it.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -47,11 +46,7 @@ impl App {
         operation: &OperationRef,
     ) -> Result<RequestId, ModelError> {
         let window = self.window(key)?;
-        let schema = match &window.schema {
-            SchemaState::Ready(schema) => schema.clone(),
-            SchemaState::Loading => return Err(ModelError::SchemaNotReady),
-            SchemaState::Failed(m) => return Err(ModelError::SchemaFailed(m.clone())),
-        };
+        let schema = window.schema.ready()?.clone();
         let text = soap::request_envelope(
             &schema.wsdl,
             &schema.model,
@@ -72,11 +67,7 @@ impl App {
     /// sidebar: the first supported operation, in the sidebar's order.
     pub fn default_operation(&self, key: ProjectKey) -> Result<OperationRef, ModelError> {
         let window = self.project(key).ok_or(ModelError::UnknownProject)?;
-        match &window.schema {
-            SchemaState::Ready(_) => {}
-            SchemaState::Loading => return Err(ModelError::SchemaNotReady),
-            SchemaState::Failed(m) => return Err(ModelError::SchemaFailed(m.clone())),
-        }
+        window.schema.ready()?;
         window
             .sidebar
             .services

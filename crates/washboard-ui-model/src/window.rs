@@ -11,6 +11,7 @@ use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
+use crate::app::ModelError;
 use crate::editor::Editor;
 use crate::import::{ReplaceOutcome, SuggestedServer};
 use crate::send::{ResponseView, Sending};
@@ -67,6 +68,29 @@ pub enum SchemaState {
     Ready(Arc<ProjectSchema>),
     /// The WSDL set could not be read; the message is for the sidebar's placeholder.
     Failed(String),
+}
+
+impl SchemaState {
+    /// The loaded WSDL, for commands that need it; the error says why there is none.
+    pub(crate) fn ready(&self) -> Result<&Arc<ProjectSchema>, ModelError> {
+        match self {
+            SchemaState::Ready(schema) => Ok(schema),
+            SchemaState::Loading => Err(ModelError::SchemaNotReady),
+            SchemaState::Failed(m) => Err(ModelError::SchemaFailed(m.clone())),
+        }
+    }
+
+    /// The loaded WSDL with schemas that compiled, so requests can be validated against it.
+    pub(crate) fn validating(&self) -> Result<&Arc<ProjectSchema>, ModelError> {
+        let schema = self.ready()?;
+        if schema.compile_errors().is_empty() {
+            Ok(schema)
+        } else {
+            Err(ModelError::SchemaFailed(
+                "the WSDL's schemas could not be compiled".into(),
+            ))
+        }
+    }
 }
 
 /// The sidebar's two sections (PLAN §8).
