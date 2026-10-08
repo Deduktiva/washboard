@@ -65,10 +65,12 @@ and libm are linked.
 
 | Off | On |
 |---|---|
-| HTTP (already removed upstream), catalogs, iconv, ICU, zlib, LZMA (removed upstream), legacy API, Python, readline/history, modules (dlopen), HTML, C14N, XInclude, XPointer, RELAX NG, Schematron, debug module, programs, tests, docs | schemas, pattern, regexps, push parser, reader, threads, DTD validation, XPath, output, SAX1, ISO-8859-x tables (used instead of iconv) |
+| HTTP (already removed upstream), catalogs, iconv, ICU, zlib, LZMA (removed upstream), legacy API, Python, readline/history, modules (dlopen), HTML, C14N, XInclude, XPointer, RELAX NG, Schematron, debug module, programs, tests, docs, ISO-8859-2…16 tables | schemas, pattern, regexps, push parser, reader, threads, DTD validation, XPath, output, SAX1 |
 
-Without iconv, libxml2 itself reads UTF-8, UTF-16, ISO-8859-1…16 and ASCII. That is a superset
-of what `xml::decode` accepts.
+Without iconv and the ISO-8859-x tables, libxml2 reads UTF-8, UTF-16, ISO-8859-1, ASCII and
+windows-1252 (always built in). It never needs more: washboard hands it only UTF-8 (schemas
+with a BOM, instance documents parsed as UTF-8), and `xml::decode` handles the encodings of
+the user's files.
 
 Cross-checking from Linux (`cargo clippy -p washboard-app --target aarch64-apple-darwin`) runs
 this build script for a macOS target. There is no Apple SDK there, so the C build is skipped

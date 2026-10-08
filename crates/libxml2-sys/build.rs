@@ -92,9 +92,11 @@ fn vendored() {
         .define("LIBXML2_WITH_SCHEMATRON", "OFF")
         .define("LIBXML2_WITH_PROGRAMS", "OFF")
         .define("LIBXML2_WITH_TESTS", "OFF")
+        // Off: libxml2 only ever gets UTF-8 (schemas with a BOM, instances parsed as UTF-8);
+        // decoding is `xml::decode`'s job. Built-in UTF-8/16, Latin-1, ASCII and windows-1252
+        // remain.
+        .define("LIBXML2_WITH_ISO8859X", "OFF")
         // On: what XSD validation needs, plus push/reader for future streaming validation.
-        // Without iconv, ISO-8859-x tables cover the common legacy encodings.
-        .define("LIBXML2_WITH_ISO8859X", "ON")
         .define("LIBXML2_WITH_SCHEMAS", "ON")
         .define("LIBXML2_WITH_PATTERN", "ON")
         .define("LIBXML2_WITH_REGEXPS", "ON")
