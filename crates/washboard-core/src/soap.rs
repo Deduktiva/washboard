@@ -7,6 +7,7 @@ use thiserror::Error;
 use crate::model::{OperationRef, QName};
 use crate::schema::{SchemaError, SchemaModel, TemplateOptions};
 use crate::wsdl::{Direction, PartContent, Support, UnsupportedReason, Wsdl};
+use crate::xml::escape_attr;
 
 /// SOAP 1.1 envelope namespace. SOAP 1.2 is not supported.
 pub const SOAP11_ENV_NS: &str = "http://schemas.xmlsoap.org/soap/envelope/";
@@ -161,12 +162,6 @@ fn assemble(headers: &[String], body: &[String], namespaces: &[(String, String)]
     section(&mut s, "Body", body);
     s.push_str(&format!("</{p}:Envelope>\n"));
     s
-}
-
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('"', "&quot;")
 }
 
 /// QNames of the element children of a SOAP 1.1 `Envelope`'s `Body`, in document order.
