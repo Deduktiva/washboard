@@ -331,6 +331,54 @@ fn templates_and_request_management() {
 }
 
 #[test]
+fn format_reindents_checks_and_leaves_malformed_requests_alone() {
+    let e = legacy();
+    let name = ok(wb(&e, &["operation", "template", "Lookup", "--save"]));
+    let name = name.trim();
+    let file = e.project.join(format!("requests/{name}.xml"));
+    let generated = fs::read_to_string(&file).expect("file");
+    // A generated request is already formatted at the default indent.
+    ok(wb(&e, &["request", "format", name, "--check"]));
+    fails(
+        &wb(&e, &["request", "format", name, "--check", "--indent", "4"]),
+        1,
+        "not formatted",
+    );
+    assert_eq!(
+        fs::read_to_string(&file).expect("file"),
+        generated,
+        "--check writes nothing"
+    );
+
+    fs::write(&file, "<a><b>x</b></a>").expect("write");
+    assert_eq!(
+        ok(wb(&e, &["request", "format", name, "--indent", "4"])),
+        ""
+    );
+    assert_eq!(
+        fs::read_to_string(&file).expect("file"),
+        "<a>\n    <b>x</b>\n</a>\n"
+    );
+    ok(wb(
+        &e,
+        &["request", "format", name, "--indent", "4", "--check"],
+    ));
+
+    fs::write(&file, "<a><b></a>").expect("write");
+    fails(
+        &wb(&e, &["request", "format", name]),
+        1,
+        &format!("{name}:1:"),
+    );
+    assert_eq!(fs::read_to_string(&file).expect("file"), "<a><b></a>");
+
+    for indent in ["0", "9", "tab"] {
+        let o = wb(&e, &["request", "format", name, "--indent", indent]);
+        assert_eq!(o.status.code(), Some(2), "--indent {indent}");
+    }
+}
+
+#[test]
 fn servers() {
     let e = customer();
     ok(wb(
