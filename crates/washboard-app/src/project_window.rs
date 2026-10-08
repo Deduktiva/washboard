@@ -18,7 +18,8 @@ use objc2_app_kit::{
     NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
-    NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
+    NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -623,6 +624,11 @@ impl ProjectWindowController {
     }
 }
 
+/// Shared by every project window, so they group into one window's tabs.
+pub fn project_tabbing_id() -> &'static NSString {
+    ns_string!("WashboardProject")
+}
+
 fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1100.0, 700.0));
     let style = NSWindowStyleMask::Titled
@@ -645,6 +651,10 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str(name));
     window.setContentMinSize(NSSize::new(720.0, 560.0));
+    // Project windows tab with each other (Window ▸ Merge All Windows, or always when the
+    // user prefers tabs in System Settings), never with the welcome or New Project window.
+    window.setTabbingIdentifier(project_tabbing_id());
+    window.setTabbingMode(NSWindowTabbingMode::Automatic);
     window
 }
 

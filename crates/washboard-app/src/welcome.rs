@@ -12,7 +12,7 @@ use objc2_app_kit::{
     NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
     NSScrollView, NSStackView, NSTableColumn, NSTableView, NSTableViewDataSource,
     NSTableViewDelegate, NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSWindow, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
@@ -192,6 +192,8 @@ fn window(mtm: MainThreadMarker) -> Retained<NSWindow> {
     window.setTitle(ns_string!("Welcome to Washboard"));
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
+    // Not a document window, so it never joins the project windows' tabs.
+    window.setTabbingMode(NSWindowTabbingMode::Disallowed);
     window
 }
 

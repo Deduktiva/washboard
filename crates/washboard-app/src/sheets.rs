@@ -19,7 +19,7 @@ use objc2_app_kit::{
     NSLineBreakMode, NSModalResponse, NSModalResponseOK, NSOpenPanel, NSPathControl, NSPathStyle,
     NSSecureTextField, NSStackView, NSStackViewDistribution, NSStackViewGravity, NSTabView,
     NSTabViewItem, NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -258,6 +258,7 @@ impl ImportSheetController {
                     | NSWindowStyleMask::Resizable,
             );
             window.setContentMinSize(size);
+            window.setTabbingMode(NSWindowTabbingMode::Disallowed);
             window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         }
         window.setContentView(Some(&content));
