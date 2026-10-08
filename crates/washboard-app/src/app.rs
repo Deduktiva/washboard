@@ -2,15 +2,16 @@
 
 use std::cell::{OnceCell, RefCell};
 
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
 
 use crate::http_log::{HttpLog, sample_exchanges};
 use crate::menu;
 use crate::project_window::ProjectWindowController;
+use crate::sheets::{NewProjectSheet, sample_references};
 use crate::welcome::{WelcomeController, sample_recent_projects};
 
 #[derive(Debug, Default)]
@@ -18,6 +19,7 @@ pub struct AppDelegateIvars {
     welcome: OnceCell<Retained<WelcomeController>>,
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
     http_log: OnceCell<Retained<HttpLog>>,
+    new_project: RefCell<Option<Retained<NewProjectSheet>>>,
 }
 
 define_class!(
@@ -66,7 +68,7 @@ define_class!(
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(newProject:))]
         fn new_project(&self, _sender: Option<&AnyObject>) {
-            not_implemented("New Project");
+            self.show_new_project_sheet();
         }
 
         #[unsafe(method(openProject:))]
@@ -102,6 +104,40 @@ impl AppDelegate {
         self.ivars().projects.borrow_mut().push(project.clone());
         self.welcome().window().orderOut(None);
         project
+    }
+
+    /// Shows the New Project sheet on the key window, or on the welcome window when no window
+    /// is key. A sheet already showing is brought forward rather than doubled.
+    pub fn show_new_project_sheet(&self) -> Retained<NewProjectSheet> {
+        let mtm = self.mtm();
+        if let Some(sheet) = &*self.ivars().new_project.borrow()
+            && sheet.window().sheetParent().is_some()
+        {
+            sheet.window().makeKeyAndOrderFront(None);
+            return sheet.clone();
+        }
+        let sheet = NewProjectSheet::new(sample_references(), mtm);
+        let weak = Weak::from(self);
+        sheet.on_create(move |name| {
+            if let Some(app) = weak.load() {
+                app.open_project_window(name);
+            }
+        });
+        let parent = match NSApplication::sharedApplication(mtm).keyWindow() {
+            Some(window) if window.attachedSheet().is_none() => window,
+            _ => {
+                self.welcome().show();
+                self.welcome().window().retain()
+            }
+        };
+        sheet.present(&parent);
+        *self.ivars().new_project.borrow_mut() = Some(sheet.clone());
+        sheet
+    }
+
+    /// The most recent New Project sheet, if one was shown.
+    pub fn new_project_sheet(&self) -> Option<Retained<NewProjectSheet>> {
+        self.ivars().new_project.borrow().clone()
     }
 
     /// The open project windows' controllers, in opening order.

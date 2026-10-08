@@ -22,6 +22,8 @@ fn main() {
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("issues_and_fake_send", checks::issues_and_fake_send),
         ("http_log", checks::http_log),
+        ("new_project_sheet", checks::new_project_sheet),
+        ("settings_sheet", checks::settings_sheet),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -43,11 +45,11 @@ mod checks {
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::AnyObject;
-    use objc2::{MainThreadMarker, msg_send};
+    use objc2::{MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
-        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView,
+        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView, NSWindow,
     };
     use objc2_foundation::{
         NSDate, NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint,
@@ -617,5 +619,129 @@ mod checks {
         log.set_revealed(false);
         assert!(!log.request_text().contains(secret), "masked again");
         log.panel().close();
+    }
+
+    /// Pumps the main run loop until `done` holds; sheets attach and detach asynchronously.
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+        }
+    }
+
+    /// Create stays disabled while a reference is unresolved; creating opens the project.
+    pub fn new_project_sheet(ctx: &Ctx) {
+        // SAFETY: `newProject:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
+        let welcome = ctx.delegate.welcome().window().retain();
+        wait_until("the sheet to attach", || welcome.attachedSheet().is_some());
+        let sheet = ctx
+            .delegate
+            .new_project_sheet()
+            .expect("created by newProject:");
+        assert_eq!(
+            welcome
+                .attachedSheet()
+                .as_deref()
+                .map(|w| w as *const NSWindow),
+            Some(sheet.window() as *const NSWindow),
+            "one New Project sheet, on the welcome window"
+        );
+
+        let marks: Vec<String> = sheet
+            .table()
+            .rows()
+            .into_iter()
+            .map(|r| r[0].clone())
+            .collect();
+        assert_eq!(marks, ["✓", "✓", "✗"]);
+        assert!(!sheet.create_button().isEnabled(), "disabled while ✗");
+        sheet.create();
+        assert!(
+            ctx.delegate.projects().is_empty(),
+            "disabled Create does nothing"
+        );
+
+        let all_resolved = washboard_app::sample_references()
+            .into_iter()
+            .map(|mut r| {
+                r.resolved_to.get_or_insert_with(|| "addresses.xsd".into());
+                r
+            })
+            .collect();
+        sheet.set_references(all_resolved);
+        assert!(sheet.create_button().isEnabled(), "enabled once all ✓");
+
+        sheet
+            .name_field()
+            .setStringValue(&NSString::from_str("Billing"));
+        sheet.create();
+        wait_until("the sheet to end", || welcome.attachedSheet().is_none());
+        let projects = ctx.delegate.projects();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].name(), "Billing");
+        autoreleasepool(|_| projects[0].project_window().performClose(None));
+    }
+
+    /// Project Settings opens on Servers; the form edits the selected row, auth enables the
+    /// user field, and + / − add and remove rows.
+    pub fn settings_sheet(ctx: &Ctx) {
+        let project = ctx.delegate.open_project_window("Customer API");
+        let window = project.project_window();
+        // SAFETY: `projectSettings:` takes the sender.
+        let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };
+        wait_until("the sheet to attach", || window.attachedSheet().is_some());
+        let sheet = project.settings().expect("created by projectSettings:");
+        let selected_tab = sheet
+            .tabs()
+            .selectedTabViewItem()
+            .map(|t| t.label().to_string());
+        assert_eq!(selected_tab.as_deref(), Some("Servers"));
+
+        let names = |sheet: &washboard_app::SettingsSheet| -> Vec<String> {
+            sheet
+                .table()
+                .rows()
+                .into_iter()
+                .map(|r| r[0].clone())
+                .collect()
+        };
+        assert_eq!(names(sheet), ["Production", "Staging", "Local"]);
+
+        sheet.table().click(1);
+        assert_eq!(sheet.selected(), Some(1));
+        assert_eq!(
+            sheet.url_field().stringValue().to_string(),
+            "https://stg.example.com/ws/customer"
+        );
+        sheet
+            .name_field()
+            .setStringValue(&NSString::from_str("Staging EU"));
+        sheet.commit_form();
+        assert_eq!(names(sheet), ["Production", "Staging EU", "Local"]);
+
+        assert!(
+            !sheet.user_field().isEnabled(),
+            "no user without Basic auth"
+        );
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { sheet.basic_auth_button().performClick(None) };
+        assert!(
+            sheet.user_field().isEnabled(),
+            "Basic auth enables the user field"
+        );
+        assert!(sheet.servers()[1].basic_auth);
+
+        sheet.add_server();
+        assert_eq!(sheet.servers().len(), 4);
+        assert_eq!(sheet.selected(), Some(3));
+        sheet.remove_selected();
+        assert_eq!(names(sheet), ["Production", "Staging EU", "Local"]);
+
+        // SAFETY: `done:` takes the sender.
+        let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
+        wait_until("the sheet to end", || window.attachedSheet().is_none());
+        autoreleasepool(|_| window.performClose(None));
     }
 }
