@@ -1,0 +1,18 @@
+//! What changed, for the front end to apply to its widgets. Events are small and name what to
+//! redraw; the front end reads the details from the [`App`](crate::App) when it applies them.
+
+use crate::app::ProjectKey;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// A project window should be created for `project`.
+    ProjectOpened { project: ProjectKey },
+    /// The window for `project` should close; the project is no longer in the app.
+    ProjectClosed { project: ProjectKey },
+    /// The user opened a project that is already open; bring its window forward.
+    FocusProject { project: ProjectKey },
+    /// The welcome window is shown exactly while no project is open.
+    WelcomeVisibility { visible: bool },
+    /// The welcome window's list and File ▸ Open Recent changed.
+    RecentProjectsChanged,
+}

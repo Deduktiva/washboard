@@ -1,7 +1,12 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/washboard-core", "crates/washboard-cli", "crates/libxml2-sys"]
+default-members = [
+    "crates/washboard-core",
+    "crates/washboard-ui-model",
+    "crates/washboard-cli",
+    "crates/libxml2-sys",
+]
 
 [workspace.package]
 version = "0.1.0"
