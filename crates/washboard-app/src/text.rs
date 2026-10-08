@@ -1,5 +1,4 @@
-//! Finding what an edit changed, for incremental highlighting. Platform-independent, so its
-//! tests run on Linux too.
+//! Text helpers of the app that need no AppKit, so their tests run on Linux too.
 
 use std::ops::Range;
 
@@ -33,9 +32,23 @@ pub(crate) fn changed_range(old: &str, new: &str) -> (Range<usize>, usize) {
     (start..old_end, new_end - start)
 }
 
+/// The request text with every `Authorization` header value replaced by bullets.
+pub(crate) fn mask_authorization(request: &str) -> String {
+    request
+        .split_inclusive('\n')
+        .map(|line| match line.split_once(':') {
+            Some((name, value)) if name.eq_ignore_ascii_case("authorization") => {
+                let end = if value.ends_with('\n') { "\n" } else { "" };
+                format!("{name}: ••••••••{end}")
+            }
+            _ => line.to_owned(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::changed_range;
+    use super::{changed_range, mask_authorization};
 
     #[test]
     fn changed_range_finds_the_edit() {
@@ -47,5 +60,14 @@ mod tests {
         assert_eq!(changed_range("aaa", "aaaa"), (3..3, 1));
         // Multi-byte chars stay whole: é and è share their first UTF-8 byte.
         assert_eq!(changed_range("é", "è"), (0..2, 2));
+    }
+
+    #[test]
+    fn masks_only_authorization_values() {
+        let masked = mask_authorization("POST / HTTP/1.1\nauthorization: Basic abc\nHost: x\n");
+        assert_eq!(
+            masked,
+            "POST / HTTP/1.1\nauthorization: ••••••••\nHost: x\n"
+        );
     }
 }
