@@ -586,6 +586,16 @@ mod checks {
             .collect();
         assert_eq!(ids, expected, "toolbar items");
 
+        // The sidebar's ⋯ menu offers the request commands with no button of their own.
+        let more =
+            washboard_app::sidebar_actions_menu(MainThreadMarker::new().expect("main thread"));
+        let titles: Vec<String> = more
+            .itemArray()
+            .iter()
+            .map(|i| i.title().to_string())
+            .collect();
+        assert_eq!(titles, ["Rename", "Duplicate", "Validate"]);
+
         let split = project.split_view();
         let items = split.splitViewItems();
         assert_eq!(items.len(), 2, "sidebar and content");

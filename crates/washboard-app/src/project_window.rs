@@ -4,7 +4,7 @@
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
 //! answers the Project menu while its window is key. One per project open in the model; the
 //! app delegate creates and closes it on the model's events, and forwards the events that
-//! name its project. Handlers not bound to the model yet are stubs (WP-APP-INTEGRATION).
+//! name its project.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::Path;
@@ -13,9 +13,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
-    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView, NSToolbar,
-    NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSMenu, NSMenuItem,
+    NSPopUpButton, NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem,
+    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
     NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
@@ -259,8 +259,17 @@ define_class!(
         }
 
         #[unsafe(method(moreSidebarActions:))]
-        fn more_sidebar_actions(&self, _sender: Option<&AnyObject>) {
-            self.stub("sidebar ⋯ menu");
+        fn more_sidebar_actions(&self, sender: Option<&AnyObject>) {
+            let Some(button) = sender.and_then(|s| s.downcast_ref::<NSView>()) else {
+                return;
+            };
+            // Just below the button, like a pull-down.
+            let at = NSPoint::new(0.0, button.bounds().size.height + 4.0);
+            sidebar_actions_menu(self.mtm()).popUpMenuPositioningItem_atLocation_inView(
+                None,
+                at,
+                Some(button),
+            );
         }
     }
 );
@@ -563,13 +572,6 @@ impl ProjectWindowController {
         self.window().expect("created with a window")
     }
 
-    fn stub(&self, what: &str) {
-        eprintln!(
-            "washboard-app: {what} in {:?} is not implemented yet",
-            self.name()
-        );
-    }
-
     fn split_view_controller(&self, mtm: MainThreadMarker) -> Retained<NSSplitViewController> {
         let split = NSSplitViewController::new(mtm);
 
@@ -688,6 +690,30 @@ fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NS
 }
 
 /// Editor with the issues bar under it, above the response pane.
+/// The sidebar's ⋯ menu: the request commands without a footer button of their own. The
+/// items go up the responder chain like the Project menu's, so they validate the same way.
+pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let menu = NSMenu::new(mtm);
+    for (title, action) in [
+        ("Rename", sel!(renameRequest:)),
+        ("Duplicate", sel!(duplicateRequest:)),
+        ("Validate", sel!(validateRequest:)),
+    ] {
+        // SAFETY: no target: the action goes up the responder chain to this window's
+        // controller, whose handlers take the sender as their only argument.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                Some(action),
+                ns_string!(""),
+            )
+        };
+        menu.addItem(&item);
+    }
+    menu
+}
+
 fn content_pane(
     editor: &NSScrollView,
     issues: &NSStackView,
