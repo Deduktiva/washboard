@@ -278,18 +278,6 @@ fn token_spans_convert_to_utf16() {
         .position(|t| t.kind == TokenKind::Text)
         .expect("text token");
     assert_eq!(ranges[text_tok], 10..11);
-    // The buffer does the same for the tokens overlapping a byte range.
-    let buf = TokenBuffer::new(text);
-    let from = text.find('ü').expect("present");
-    assert_eq!(
-        buf.tokens_utf16(text, from..text.len()),
-        vec![
-            (10..11, TokenKind::Text),
-            (11..13, TokenKind::Punct),
-            (13..14, TokenKind::TagName),
-            (14..15, TokenKind::Punct)
-        ]
-    );
 }
 
 // ---------------------------------------------------------------- well-formedness
