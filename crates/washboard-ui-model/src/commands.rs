@@ -11,6 +11,7 @@ use washboard_core::soap;
 use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
 use crate::front_end::{Confirm, DialogId};
+use crate::timers::TimerKind;
 use crate::window::{ProjectWindow, SchemaState};
 
 /// A new server's timeout until the user changes it.
@@ -143,9 +144,7 @@ impl App {
         {
             // Its edits go with it.
             window.editor = None;
-            if let Some(timer) = window.autosave.take() {
-                self.cancel_timer(timer);
-            }
+            self.stop_timer(key, TimerKind::Autosave);
         }
         self.requests_changed(key)?;
         if was_selected {

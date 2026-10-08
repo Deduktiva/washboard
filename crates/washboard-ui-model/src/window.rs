@@ -9,7 +9,6 @@ use washboard_core::schema::SchemaModel;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
 use crate::editor::Editor;
-use crate::front_end::TimerId;
 
 /// The project's WSDL and the schema model built from it, loaded off the main thread and then
 /// shared read-only.
@@ -91,8 +90,6 @@ pub struct ProjectWindow {
     pub(crate) sidebar: Sidebar,
     pub(crate) servers: Vec<Server>,
     pub(crate) editor: Option<Editor>,
-    /// The running autosave timer, if an edit is waiting to be saved.
-    pub(crate) autosave: Option<TimerId>,
 }
 
 impl ProjectWindow {

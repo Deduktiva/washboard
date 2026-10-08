@@ -14,6 +14,7 @@ mod commands;
 mod editor;
 mod event;
 mod front_end;
+mod timers;
 mod window;
 
 #[cfg(test)]

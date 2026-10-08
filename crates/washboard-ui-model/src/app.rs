@@ -13,6 +13,7 @@ use washboard_core::soap::EnvelopeError;
 
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::timers::TimerKind;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
 #[derive(Debug, Error)]
@@ -51,12 +52,6 @@ pub(crate) enum PendingDialog {
     },
 }
 
-/// What an outstanding timer is for.
-#[derive(Debug)]
-pub(crate) enum PendingTimer {
-    Autosave(ProjectKey),
-}
-
 /// Work finished on a worker thread, to be applied on the main thread.
 type Completion = Box<dyn FnOnce(&mut App) + Send>;
 
@@ -69,7 +64,8 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     welcome_visible: Option<bool>,
     pub(crate) dialogs: HashMap<DialogId, PendingDialog>,
-    pub(crate) timers: HashMap<TimerId, PendingTimer>,
+    /// Running timers and what they are for.
+    pub(crate) timers: HashMap<TimerId, (ProjectKey, TimerKind)>,
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
@@ -171,10 +167,8 @@ impl App {
         let Some(i) = self.projects.iter().position(|(k, _)| *k == key) else {
             return true;
         };
-        let (_, window) = self.projects.remove(i);
-        if let Some(timer) = window.autosave {
-            self.cancel_timer(timer);
-        }
+        self.projects.remove(i);
+        self.stop_timers(key);
         self.events.push(Event::ProjectClosed { project: key });
         self.update_welcome();
         true
@@ -242,21 +236,6 @@ impl App {
         }
     }
 
-    /// The front end reports a timer started through [`Timers`](crate::Timers).
-    /// Unknown ids (a timer cancelled after it already fired) are ignored.
-    pub fn timer_fired(&mut self, id: TimerId) {
-        match self.timers.remove(&id) {
-            Some(PendingTimer::Autosave(key)) => self.autosave_fired(key),
-            None => {}
-        }
-    }
-
-    pub(crate) fn cancel_timer(&mut self, id: TimerId) {
-        if self.timers.remove(&id).is_some() {
-            self.front.timers.cancel(id);
-        }
-    }
-
     /// The front end reports the answer to a dialog. Unknown ids are ignored, so a dialog that
     /// outlived its purpose does no harm.
     pub fn dialog_answered(&mut self, id: DialogId, answer: DialogAnswer) {
@@ -302,7 +281,6 @@ impl App {
             sidebar: Sidebar::default(),
             servers: Vec::new(),
             editor: None,
-            autosave: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();

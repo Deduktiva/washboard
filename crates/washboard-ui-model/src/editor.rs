@@ -10,9 +10,9 @@ use washboard_core::project::Project;
 use washboard_core::xml::utf16::{Utf16Cursor, utf16_len, utf16_to_byte};
 use washboard_core::xml::{TokenBuffer, TokenKind};
 
-use crate::app::{App, ModelError, PendingTimer, ProjectKey};
+use crate::app::{App, ModelError, ProjectKey};
 use crate::event::Event;
-use crate::front_end::TimerId;
+use crate::timers::TimerKind;
 
 /// Autosave runs this long after the last edit.
 pub(crate) const AUTOSAVE_DELAY: Duration = Duration::from_secs(1);
@@ -108,7 +108,6 @@ impl App {
         if became_dirty {
             window.mark_dirty(request, true);
         }
-        let old_timer = window.autosave.take();
         self.events.push(Event::TokensChanged {
             project: key,
             range: changed,
@@ -117,15 +116,7 @@ impl App {
             self.events.push(Event::SidebarChanged { project: key });
             self.events.push(Event::EditedChanged { project: key });
         }
-        if let Some(old) = old_timer {
-            self.cancel_timer(old);
-        }
-        let id = TimerId(self.next());
-        self.timers.insert(id, PendingTimer::Autosave(key));
-        self.front.timers.start(id, AUTOSAVE_DELAY);
-        if let Some(window) = self.window_mut(key) {
-            window.autosave = Some(id);
-        }
+        self.restart_timer(key, TimerKind::Autosave, AUTOSAVE_DELAY);
         Ok(())
     }
 
@@ -163,7 +154,6 @@ impl App {
     /// Saves the project's editor if it is dirty.
     pub(crate) fn flush(&mut self, key: ProjectKey) -> Result<(), ModelError> {
         let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
-        let timer = window.autosave.take();
         let saved = match &mut window.editor {
             Some(editor) if editor.dirty => {
                 window.project.write_request(editor.request, &editor.text)?;
@@ -177,9 +167,7 @@ impl App {
             self.events.push(Event::SidebarChanged { project: key });
             self.events.push(Event::EditedChanged { project: key });
         }
-        if let Some(timer) = timer {
-            self.cancel_timer(timer);
-        }
+        self.stop_timer(key, TimerKind::Autosave);
         Ok(())
     }
 
@@ -190,7 +178,6 @@ impl App {
         let Some(window) = self.window_mut(key) else {
             return;
         };
-        let timer = window.autosave.take();
         let loaded = window
             .selected_request()
             .map(|id| Editor::load(&window.project, id));
@@ -203,18 +190,9 @@ impl App {
             Some(Err(e)) => Some(e),
             None => None,
         };
-        if let Some(timer) = timer {
-            self.cancel_timer(timer);
-        }
+        self.stop_timer(key, TimerKind::Autosave);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);
         }
-    }
-
-    pub(crate) fn autosave_fired(&mut self, key: ProjectKey) {
-        if let Some(window) = self.window_mut(key) {
-            window.autosave = None;
-        }
-        self.flush_or_alert(key);
     }
 }
