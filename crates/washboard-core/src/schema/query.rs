@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 
 use crate::model::QName;
-use crate::soap::XSI_NS;
+use crate::soap::{SOAP11_ENV_NS, XSI_NS};
+use crate::xml;
 
 use super::builtin::ANY_TYPE;
 use super::component::{ElemId, MaxOccurs, Particle, ProcessContents, Term, TypeKind, Wildcard};
@@ -36,6 +37,29 @@ impl PathStep {
         self.xsi_type = Some(xsi_type);
         self
     }
+}
+
+/// The schema path for an editor path (outermost first), as the queries here take it: from the element inside a SOAP
+/// `Header` or `Body` down to the last one. `None` outside header and body blocks, or if a
+/// name on the way does not resolve.
+pub fn block_path(path: &[xml::PathElement]) -> Option<Vec<PathStep>> {
+    let is_block_parent = |e: &xml::PathElement| {
+        e.name
+            .as_ref()
+            .is_some_and(|n| n.ns == SOAP11_ENV_NS && matches!(n.local.as_str(), "Body" | "Header"))
+    };
+    let first = path.iter().position(is_block_parent)? + 1;
+    path.get(first..)
+        .filter(|block| !block.is_empty())?
+        .iter()
+        .map(|e| {
+            let step = PathStep::new(e.name.clone()?);
+            Some(match e.xsi_type.as_ref().and_then(|t| t.name.clone()) {
+                Some(t) => step.with_xsi_type(t),
+                None => step,
+            })
+        })
+        .collect()
 }
 
 /// Why a name is offered.
