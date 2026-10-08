@@ -40,9 +40,9 @@ pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
-pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
+pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
-pub use panes::{FakeResponse, IssuesBar, RESPONSE_TABS, ResponsePane};
+pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, toolbar_identifiers};
 #[cfg(target_os = "macos")]

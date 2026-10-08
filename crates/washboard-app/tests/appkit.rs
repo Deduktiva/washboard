@@ -27,7 +27,7 @@ fn main() {
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("diagnostics", checks::diagnostics),
-        ("fake_send", checks::fake_send),
+        ("send", checks::send),
         ("http_log", checks::http_log),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_sheet", checks::settings_sheet),
@@ -47,6 +47,8 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod checks {
     use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
     use std::rc::Rc;
@@ -1025,10 +1027,90 @@ mod checks {
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 
-    /// A fake send finishes on the main thread and fills the response pane.
-    pub fn fake_send(ctx: &Ctx) {
-        let project = ctx.open();
+    const LOOKUP_RESPONSE: &str = "<soapenv:Envelope \
+        xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"><soapenv:Body>\
+        <tns:LookupResponse xmlns:tns=\"urn:example:legacy\"><result><street>Main St 1</street>\
+        <city>Vienna</city></result></tns:LookupResponse></soapenv:Body></soapenv:Envelope>";
 
+    /// Reads one HTTP request: its head and, with a `Content-Length`, its body.
+    fn read_request(stream: &mut TcpStream) -> String {
+        let mut data = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            let n = stream.read(&mut buf).expect("read the request");
+            if n == 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n]);
+            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&data[..end]).into_owned();
+            let length = head
+                .lines()
+                .filter_map(|l| l.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if data.len() >= end + 4 + length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&data).into_owned()
+    }
+
+    /// A SOAP server on this machine that answers one request with `body` and returns what
+    /// it received.
+    fn serve_once(body: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().expect("local address").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("read timeout");
+            let request = read_request(&mut stream);
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).expect("reply");
+            request
+        });
+        (port, handle)
+    }
+
+    /// A server that accepts a connection and never answers.
+    fn serve_nothing() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().expect("local address").port();
+        std::thread::spawn(move || {
+            let connection = listener.accept();
+            std::thread::sleep(Duration::from_secs(20));
+            drop(connection);
+        });
+        port
+    }
+
+    fn local_server(id: ServerId, port: u16) -> Server {
+        Server {
+            id,
+            name: "Local".into(),
+            url: format!("http://127.0.0.1:{port}/legacy"),
+            ignore_tls_errors: false,
+            auth: Auth::Basic {
+                username: "alice".into(),
+            },
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    /// A refused send lists the issues; a send fills the response pane, the history and the
+    /// log; a history entry restores the request; Cancel returns to Send.
+    pub fn send(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
         let response = project.response();
         let tabs: Vec<String> = response
             .tabs()
@@ -1037,48 +1119,159 @@ mod checks {
             .map(|t| t.label().to_string())
             .collect();
         assert_eq!(tabs, washboard_app::RESPONSE_TABS);
+        let action = |name: &str| {
+            let name = std::ffi::CString::new(name).expect("a selector name");
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(&name), Some(&project), None)
+            };
+            assert!(sent, "{name:?} reached the window controller");
+        };
+        let send_label = || project.send_item().map(|i| i.label().to_string());
 
-        project.fake_send();
+        // A server on this machine, with Basic auth so the log has an `Authorization` header.
+        let key = project.key();
+        let (port, server) = serve_once(LOOKUP_RESPONSE);
+        let id = ctx
+            .delegate
+            .command("add a server", |app| {
+                let id = app.add_server(key)?;
+                app.update_server(key, &local_server(id, port), Some("secret"))?;
+                Ok(id)
+            })
+            .expect("server added");
+        let popup = project.server_popup();
+        let local = popup
+            .itemTitles()
+            .iter()
+            .position(|t| t.to_string() == "Local")
+            .expect("the popup lists the new server");
+        popup.selectItemAtIndex(local as isize);
+        action("chooseServer:");
+
+        // An invalid request is not sent.
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        let text = text_view.string().to_string();
+        let start = text.find("<asOf>").expect("the template has asOf") + "<asOf>".len();
+        let end = start + text[start..].find("</asOf>").expect("asOf is closed");
+        let date = text[start..end].to_owned();
+        assert!(text[..end].is_ascii());
+        let replace = |at: usize, len: usize, with: &str| {
+            // SAFETY: replacing a range inside the text, as typing over a selection does.
+            unsafe {
+                text_view
+                    .insertText_replacementRange(&NSString::from_str(with), NSRange::new(at, len))
+            };
+        };
+        let history = response.history().rows().len();
+        project.issues().table().view().setHidden(true);
+        replace(start, date.len(), "someday");
+        action("sendRequest:");
+        wait_until("the refusal", || {
+            send_label().as_deref() == Some("Send") && !project.issues().table().rows().is_empty()
+        });
+        assert!(!project.issues().table().view().isHidden(), "issues shown");
+        assert_eq!(response.history().rows().len(), history, "nothing sent");
+
+        replace(start, "someday".len(), &date);
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
         assert_eq!(response.status(), "Sending…");
-        // The result arrives through the main dispatch queue, which the run loop drains.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !response.status().starts_with("200") {
-            assert!(
-                Instant::now() < deadline,
-                "fake send did not finish: {}",
-                response.status()
-            );
-            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
-        }
-        assert_eq!(response.history().rows().len(), 1, "history row added");
+        wait_until("the response", || response.status().starts_with("200"));
+        assert_eq!(send_label().as_deref(), Some("Send"));
         let body = response.body().text_view().string().to_string();
-        assert!(body.contains("GetCustomerResponse"), "response body shown");
+        assert!(body.contains("LookupResponse"), "{body}");
+        // The pane shows the model's headers; what they are is the HTTP client's business,
+        // tested in washboard-core.
+        let headers = ctx
+            .delegate
+            .read(|app| Some(app.project(key)?.response()?.headers.clone()))
+            .flatten()
+            .expect("a response");
+        assert!(!headers.is_empty());
+        for (name, value) in &headers {
+            let line = format!("{name}: {value}");
+            assert!(
+                response.headers().contains(&line),
+                "{line} in {}",
+                response.headers()
+            );
+        }
+        assert_eq!(
+            response.history().rows().len(),
+            history + 1,
+            "history row added"
+        );
+        server.join().expect("the server thread");
+        assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
+
+        // Restore Request puts the sent request back.
+        replace(start, date.len(), "2031-12-31");
+        let history_table = response.history();
+        history_table
+            .table()
+            .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        history_table.click(0);
+        // SAFETY: `restoreRequest:` takes the sender.
+        let _: () = unsafe { msg_send![response, restoreRequest: None::<&AnyObject>] };
+        assert_eq!(text_view.string().to_string(), text, "restored");
+
+        // Cancel stops waiting for a server that never answers.
+        let port = serve_nothing();
+        ctx.delegate
+            .command("point the server elsewhere", |app| {
+                app.update_server(key, &local_server(id, port), None)
+            })
+            .expect("server updated");
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Send"), "cancelled");
+        assert!(
+            response.status().starts_with("200"),
+            "the last response stays"
+        );
+        assert_eq!(response.history().rows().len(), history + 1);
+        assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
 
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 
-    /// One log panel for the app, opened from the menu action, with `Authorization` masked
-    /// until revealed.
+    /// One log panel for the app, opened from the menu action, listing the model's exchanges
+    /// with `Authorization` masked until revealed.
     pub fn http_log(ctx: &Ctx) {
         // SAFETY: `showHttpLog:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, showHttpLog: None::<&AnyObject>] };
         let log = ctx.delegate.http_log();
         assert!(log.panel().isVisible(), "log panel shown");
-        assert_eq!(
-            log.table().rows().len(),
-            washboard_app::sample_exchanges().len()
-        );
+        assert_eq!(log.table().rows().len(), 1, "the send check's exchange");
 
-        let secret = "YWxpY2U6c2VjcmV0";
-        assert!(
-            log.request_text().contains("Authorization: ••••••••"),
-            "masked"
+        // The panel shows the model's request headers, masked or revealed; which header is
+        // masked and how is the model's business, tested in washboard-ui-model.
+        let headers = |revealed: bool| {
+            ctx.delegate
+                .read(|app| app.http_log().front().map(|e| e.request_headers(revealed)))
+                .flatten()
+                .expect("a log entry")
+        };
+        let shows = |revealed: bool| {
+            let text = log.request_text();
+            headers(revealed)
+                .iter()
+                .all(|(name, value)| text.contains(&format!("{name}: {value}")))
+        };
+        assert_ne!(
+            headers(false),
+            headers(true),
+            "the send had something to mask"
         );
-        assert!(!log.request_text().contains(secret), "secret hidden");
+        assert!(shows(false), "masked: {}", log.request_text());
         log.set_revealed(true);
-        assert!(log.request_text().contains(secret), "revealed on request");
+        assert!(shows(true), "revealed: {}", log.request_text());
         log.set_revealed(false);
-        assert!(!log.request_text().contains(secret), "masked again");
+        assert!(shows(false), "masked again: {}", log.request_text());
         log.panel().close();
     }
 
