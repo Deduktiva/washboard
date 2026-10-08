@@ -644,6 +644,7 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     // as well.
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str(name));
+    window.setContentMinSize(NSSize::new(720.0, 560.0));
     window
 }
 
@@ -686,7 +687,6 @@ fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NS
     button
 }
 
-/// Editor with the issues bar under it, above the response pane.
 /// The sidebar's ⋯ menu: the request commands without a footer button of their own. The
 /// items go up the responder chain like the Project menu's, so they validate the same way.
 pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
@@ -711,6 +711,12 @@ pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu
 }
 
+/// The editor (with its issues bar) and the response pane each keep at least this much of the
+/// content split; the window's minimum size leaves room for both.
+const MIN_EDITOR_HEIGHT: f64 = 260.0;
+const MIN_RESPONSE_HEIGHT: f64 = 200.0;
+
+/// Editor with the issues bar under it, above the response pane.
 fn content_pane(
     editor: &NSScrollView,
     issues: &NSStackView,
@@ -732,6 +738,15 @@ fn content_pane(
     split.setDividerStyle(NSSplitViewDividerStyle::Thin);
     split.addSubview(&top);
     split.addSubview(response);
+    // The split starts at zero size, so without minimums the editor keeps all the height
+    // once the window lays out and the response pane is a sliver.
+    top.heightAnchor()
+        .constraintGreaterThanOrEqualToConstant(MIN_EDITOR_HEIGHT)
+        .setActive(true);
+    response
+        .heightAnchor()
+        .constraintGreaterThanOrEqualToConstant(MIN_RESPONSE_HEIGHT)
+        .setActive(true);
     split.adjustSubviews();
     Retained::into_super(split)
 }
