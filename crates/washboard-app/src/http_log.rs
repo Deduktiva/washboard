@@ -1,8 +1,9 @@
-//! The HTTP log: one panel for the whole app listing every exchange, with the selected
+//! The HTTP log: one panel for the whole app listing the model's exchanges, with the selected
 //! request and response side by side (PLAN §8). `Authorization` values are masked until the
 //! user reveals them, so a screen share or screenshot doesn't leak credentials.
 
-use std::cell::{Cell, OnceCell};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::time::UNIX_EPOCH;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -12,39 +13,28 @@ use objc2_app_kit::{
     NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
+    NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString, ns_string,
 };
+use washboard_core::xml;
+use washboard_ui_model::LogEntry;
 
+use crate::app::with_delegate;
 use crate::table::TextTable;
-use crate::text::mask_authorization;
 
-/// One logged exchange; sample data until the log comes from `washboard-ui-model`.
+/// What the log lists for one exchange, copied out of the model so the model is not borrowed
+/// while AppKit draws.
 #[derive(Debug, Clone)]
-pub struct LoggedExchange {
-    pub time: String,
-    pub method_url: String,
-    pub status: String,
-    pub request: String,
-    pub response: String,
-}
-
-pub fn sample_exchanges() -> Vec<LoggedExchange> {
-    vec![LoggedExchange {
-        time: "14:03:12".into(),
-        method_url: "POST https://staging.example.com/customer".into(),
-        status: "200 OK".into(),
-        request: "POST /customer HTTP/1.1\nHost: staging.example.com\n\
-                  Authorization: Basic YWxpY2U6c2VjcmV0\nContent-Type: text/xml; charset=utf-8\n\
-                  SOAPAction: \"urn:example:customer/GetCustomer\"\n\n<soapenv:Envelope …/>\n"
-            .into(),
-        response: "HTTP/1.1 200 OK\nContent-Type: text/xml; charset=utf-8\n\n<soap:Envelope …/>\n"
-            .into(),
-    }]
+struct Row {
+    time: String,
+    request_line: String,
+    status: String,
+    entry: LogEntry,
 }
 
 #[derive(Debug)]
 pub struct LogIvars {
-    exchanges: Vec<LoggedExchange>,
+    rows: RefCell<Vec<Row>>,
     selected: Cell<Option<usize>>,
     revealed: Cell<bool>,
     panel: OnceCell<Retained<NSPanel>>,
@@ -76,9 +66,10 @@ define_class!(
 );
 
 impl HttpLog {
-    pub fn new(exchanges: Vec<LoggedExchange>, mtm: MainThreadMarker) -> Retained<Self> {
+    /// An empty log; [`reload`](Self::reload) fills it from the model.
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(LogIvars {
-            exchanges,
+            rows: RefCell::new(Vec::new()),
             selected: Cell::new(None),
             revealed: Cell::new(false),
             panel: OnceCell::new(),
@@ -90,13 +81,6 @@ impl HttpLog {
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
         let table = TextTable::new(&["Time", "Request", "Status"], mtm);
-        table.set_rows(
-            this.ivars()
-                .exchanges
-                .iter()
-                .map(|e| vec![e.time.clone(), e.method_url.clone(), e.status.clone()])
-                .collect(),
-        );
         let weak = objc2::rc::Weak::from(&*this);
         table.on_click(move |row| {
             if let Some(log) = weak.load() {
@@ -139,10 +123,66 @@ impl HttpLog {
         let _ = this.ivars().table.set(table);
         let _ = this.ivars().request.set(request);
         let _ = this.ivars().response.set(response);
-        if !this.ivars().exchanges.is_empty() {
-            this.select(0);
-        }
         this
+    }
+
+    /// Lists the model's log, oldest first (`LogAppended`), keeping the selected exchange
+    /// selected while it is still in the log.
+    pub fn reload(&self) {
+        let entries = with_delegate(self.mtm(), |d| {
+            d.read(|app| app.http_log().iter().cloned().collect::<Vec<_>>())
+        })
+        .flatten()
+        .unwrap_or_default();
+        let selected = self.ivars().selected.get().and_then(|row| {
+            self.ivars()
+                .rows
+                .borrow()
+                .get(row)
+                .map(|r| r.entry.exchange.started_at)
+        });
+        let formatter = NSDateFormatter::new();
+        formatter.setDateStyle(NSDateFormatterStyle::NoStyle);
+        formatter.setTimeStyle(NSDateFormatterStyle::MediumStyle);
+        let rows: Vec<Row> = entries
+            .into_iter()
+            .map(|entry| {
+                let exchange = &entry.exchange;
+                let since_epoch = exchange
+                    .started_at
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default();
+                let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
+                let status = match (&exchange.response, &exchange.error) {
+                    (Some(response), _) => status_of(&response.start_line),
+                    (None, Some(error)) => format!("Failed: {error}"),
+                    (None, None) => "—".to_owned(),
+                };
+                Row {
+                    time: formatter.stringFromDate(&date).to_string(),
+                    request_line: format!("{}: {}", entry.project, exchange.request.start_line),
+                    status,
+                    entry,
+                }
+            })
+            .collect();
+        self.table().set_rows(
+            rows.iter()
+                .map(|r| vec![r.time.clone(), r.request_line.clone(), r.status.clone()])
+                .collect(),
+        );
+        let row = selected
+            .and_then(|at| rows.iter().position(|r| r.entry.exchange.started_at == at))
+            .or_else(|| rows.len().checked_sub(1));
+        *self.ivars().rows.borrow_mut() = rows;
+        match row {
+            Some(row) => self.select(row),
+            None => {
+                self.ivars().selected.set(None);
+                set_text(self.ivars().request.get().expect("set in new()"), "");
+                set_text(self.ivars().response.get().expect("set in new()"), "");
+            }
+        }
     }
 
     pub fn panel(&self) -> &NSPanel {
@@ -169,22 +209,51 @@ impl HttpLog {
         }
     }
 
+    /// Shows exchange `row`: the request with `Authorization` masked unless revealed, and
+    /// the response (or why there is none).
     pub fn select(&self, row: usize) {
-        let Some(exchange) = self.ivars().exchanges.get(row) else {
+        let Some(entry) = self.ivars().rows.borrow().get(row).map(|r| r.entry.clone()) else {
             return;
         };
         self.ivars().selected.set(Some(row));
-        let request = if self.ivars().revealed.get() {
-            exchange.request.clone()
-        } else {
-            mask_authorization(&exchange.request)
+        let exchange = &entry.exchange;
+        let request = message_text(
+            &exchange.request.start_line,
+            &entry.request_headers(self.ivars().revealed.get()),
+            &exchange.request.body,
+        );
+        let response = match (&exchange.response, &exchange.error) {
+            (Some(r), _) => message_text(&r.start_line, &r.headers, &r.body),
+            (None, Some(error)) => format!("No response: {error}\n"),
+            (None, None) => String::new(),
         };
         set_text(self.ivars().request.get().expect("set in new()"), &request);
         set_text(
             self.ivars().response.get().expect("set in new()"),
-            &exchange.response,
+            &response,
         );
     }
+}
+
+/// `HTTP/1.1 200 OK` → `200 OK`.
+fn status_of(start_line: &str) -> String {
+    start_line
+        .split_once(' ')
+        .map_or(start_line, |(_, rest)| rest)
+        .to_owned()
+}
+
+/// A message as it went over the wire, with the body as text.
+fn message_text(start_line: &str, headers: &[(String, String)], body: &[u8]) -> String {
+    let mut text = format!("{start_line}\n");
+    for (name, value) in headers {
+        text.push_str(&format!("{name}: {value}\n"));
+    }
+    text.push('\n');
+    let body =
+        xml::decode(body).map_or_else(|_| String::from_utf8_lossy(body).into_owned(), |d| d.text);
+    text.push_str(&body);
+    text
 }
 
 fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {

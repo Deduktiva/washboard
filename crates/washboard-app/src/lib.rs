@@ -40,17 +40,17 @@ pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
-pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
+pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
-pub use panes::{FakeResponse, Issue, IssuesBar, RESPONSE_TABS, ResponsePane, sample_issues};
+pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
+pub use project_window::{ProjectWindowController, toolbar_identifiers};
 #[cfg(target_os = "macos")]
 pub use sheets::{
     NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
 };
 #[cfg(target_os = "macos")]
-pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
+pub use sidebar::{NodeKind, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]
 pub use table::TextTable;
 #[cfg(target_os = "macos")]

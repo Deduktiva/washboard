@@ -23,9 +23,11 @@ fn main() {
         ("welcome_window", checks::welcome_window),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
+        ("sidebar_commands", checks::sidebar_commands),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
-        ("issues_and_fake_send", checks::issues_and_fake_send),
+        ("diagnostics", checks::diagnostics),
+        ("send", checks::send),
         ("http_log", checks::http_log),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_sheet", checks::settings_sheet),
@@ -45,6 +47,8 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod checks {
     use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
     use std::rc::Rc;
@@ -53,7 +57,7 @@ mod checks {
 
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyObject, Sel};
     use objc2::{MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
@@ -65,7 +69,10 @@ mod checks {
         NSRange, NSRunLoop, NSString,
     };
     use tempfile::TempDir;
-    use washboard_app::{AppDelegate, EditorController, Options, ProjectWindowController};
+    use washboard_app::{
+        AppDelegate, EditorController, NodeKind, Options, ProjectWindowController, SidebarNode,
+    };
+    use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
     use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs};
@@ -112,8 +119,63 @@ mod checks {
             }],
             entry: "Legacy.wsdl".into(),
         };
-        Project::create(&folder, name, &set).expect("create project");
+        let mut project = Project::create(&folder, name, &set).expect("create project");
+        for server in ["Staging", "Production"] {
+            let server = Server {
+                id: ServerId::new(),
+                name: server.into(),
+                url: format!("https://{}.invalid/legacy", server.to_lowercase()),
+                ignore_tls_errors: false,
+                auth: Auth::None,
+                timeout: Duration::from_secs(5),
+            };
+            project.add_server(&server).expect("add server");
+        }
         folder
+    }
+
+    /// Waits until the project's WSDL has loaded into the sidebar.
+    fn wait_loaded(project: &ProjectWindowController) {
+        wait_until("the WSDL to load", || {
+            project.sidebar().roots()[1]
+                .children()
+                .first()
+                .is_some_and(|n| n.kind() == NodeKind::Service)
+        });
+    }
+
+    /// Every node under `roots`, depth first.
+    fn all_nodes(roots: &[Retained<SidebarNode>]) -> Vec<Retained<SidebarNode>> {
+        roots
+            .iter()
+            .flat_map(|n| {
+                let mut nodes = vec![n.clone()];
+                nodes.extend(all_nodes(n.children()));
+                nodes
+            })
+            .collect()
+    }
+
+    fn request_names(project: &ProjectWindowController) -> Vec<String> {
+        project.sidebar().roots()[0]
+            .children()
+            .iter()
+            .map(|n| n.title())
+            .collect()
+    }
+
+    /// The request files in the project folder, sorted.
+    fn request_files(folder: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(folder.join("requests"))
+            .expect("requests dir")
+            .filter_map(|e| {
+                let path = e.ok()?.path();
+                (path.extension()? == "xml")
+                    .then(|| path.file_stem()?.to_str().map(String::from))?
+            })
+            .collect();
+        names.sort();
+        names
     }
 
     pub struct Ctx {
@@ -530,11 +592,8 @@ mod checks {
         );
 
         // Two groups, the requests, and every service, port and operation, all expanded.
-        let operations: usize = washboard_app::SAMPLE_OPERATIONS
-            .iter()
-            .map(|(_, _, ops)| 2 + ops.len())
-            .sum();
-        let rows = 2 + washboard_app::SAMPLE_REQUESTS.len() + operations;
+        wait_loaded(&project);
+        let rows = all_nodes(&project.sidebar().roots()).len();
         let outline = project.sidebar().outline().expect("outline built");
         assert_eq!(outline.numberOfRows() as usize, rows, "sidebar rows");
 
@@ -550,13 +609,25 @@ mod checks {
             "sidebar rows after reload"
         );
 
-        // The first request is selectable, group rows are not.
-        let request_row = 1;
+        // Operations are listed, unsupported ones too, and can be selected.
+        let nodes = all_nodes(&project.sidebar().roots());
+        assert!(
+            nodes.iter().any(|n| n.unsupported().is_some()),
+            "the rpc/encoded operation is shown"
+        );
+        let operation_row = (0..outline.numberOfRows())
+            .find(|&row| {
+                outline.itemAtRow(row).is_some_and(|item| {
+                    item.downcast_ref::<SidebarNode>()
+                        .is_some_and(|n| n.kind() == NodeKind::Operation)
+                })
+            })
+            .expect("an operation row") as usize;
         outline.selectRowIndexes_byExtendingSelection(
-            &NSIndexSet::indexSetWithIndex(request_row),
+            &NSIndexSet::indexSetWithIndex(operation_row),
             false,
         );
-        assert_eq!(outline.selectedRow() as usize, request_row);
+        assert_eq!(outline.selectedRow() as usize, operation_row);
 
         autoreleasepool(|_| window.performClose(None));
         assert!(!window.isVisible(), "project window closed");
@@ -565,6 +636,130 @@ mod checks {
             ctx.delegate.welcome().window().isVisible(),
             "welcome window back"
         );
+    }
+
+    /// New, rename, duplicate and delete through the window's actions change the rows and the
+    /// folder; the server popup follows the selected request.
+    pub fn sidebar_commands(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let outline = project.sidebar().outline().expect("outline built").retain();
+        let window = project.project_window();
+        let send = |action: &str| {
+            let action = std::ffi::CString::new(action).expect("a selector name");
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(&action), Some(&project), None)
+            };
+            assert!(sent, "{action:?} reached the window controller");
+        };
+        let selected_row = || {
+            let id = project.selected_request();
+            (0..outline.numberOfRows()).find(|&row| {
+                outline.itemAtRow(row).is_some_and(|item| {
+                    item.downcast_ref::<SidebarNode>()
+                        .is_some_and(|n| n.request().is_some() && n.request() == id)
+                })
+            })
+        };
+
+        let popup = project.server_popup();
+        assert!(popup.isEnabled());
+        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
+        assert_eq!(titles, ["Staging", "Production"]);
+
+        send("newRequest:");
+        assert_eq!(request_names(&project), ["Lookup 1"]);
+        assert_eq!(request_files(&ctx.project), ["Lookup 1"]);
+        assert!(
+            project.selected_request().is_some(),
+            "the new request is selected"
+        );
+        assert_eq!(selected_row(), Some(outline.selectedRow()), "and its row");
+        // End the inline rename that New Request starts, without renaming.
+        window.makeFirstResponder(Some(&outline));
+        assert_eq!(request_names(&project), ["Lookup 1"]);
+
+        // Inline rename: what the field holds when editing ends.
+        let rename = |name: &str| {
+            let row = selected_row().expect("a selected request");
+            let view = outline
+                .viewAtColumn_row_makeIfNecessary(0, row, true)
+                .expect("row view");
+            let field = view
+                .downcast::<NSStackView>()
+                .expect("request rows are stacks")
+                .arrangedSubviews()
+                .firstObject()
+                .and_then(|v| v.downcast::<NSTextField>().ok())
+                .expect("name field");
+            field.setStringValue(&NSString::from_str(name));
+            // SAFETY: the notification's object is the text field, as AppKit sends it.
+            let notification = unsafe {
+                NSNotification::notificationWithName_object(
+                    &NSString::from_str("NSControlTextDidEndEditingNotification"),
+                    Some(&field),
+                )
+            };
+            let sidebar = project.sidebar();
+            // SAFETY: the text field delegate method takes the notification.
+            let _: () = unsafe { msg_send![sidebar, controlTextDidEndEditing: &*notification] };
+        };
+        rename("Find customer");
+        assert_eq!(request_names(&project), ["Find customer"]);
+        assert_eq!(request_files(&ctx.project), ["Find customer"]);
+        rename("");
+        assert_eq!(request_names(&project), ["Find customer"]);
+        assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
+
+        // The popup remembers the server per request.
+        popup.selectItemAtIndex(1);
+        send("chooseServer:");
+        assert_eq!(popup.indexOfSelectedItem(), 1);
+        send("duplicateRequest:");
+        assert_eq!(
+            request_names(&project),
+            ["Find customer", "Find customer copy"]
+        );
+        assert_eq!(
+            request_files(&ctx.project),
+            ["Find customer", "Find customer copy"]
+        );
+        assert_eq!(
+            selected_row(),
+            Some(outline.selectedRow()),
+            "the copy is selected"
+        );
+        popup.selectItemAtIndex(0);
+        send("chooseServer:");
+        let original = NSIndexSet::indexSetWithIndex(1);
+        outline.selectRowIndexes_byExtendingSelection(&original, false);
+        assert_eq!(
+            selected_row(),
+            Some(1),
+            "selecting a row selects its request"
+        );
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's server");
+
+        send("deleteRequest:");
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert!(confirm.title.contains("Find customer"), "{confirm:?}");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(request_names(&project), ["Find customer copy"]);
+        assert_eq!(request_files(&ctx.project), ["Find customer copy"]);
+        assert_eq!(
+            selected_row(),
+            Some(outline.selectedRow()),
+            "the next one is selected"
+        );
+        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
+        assert!(ctx.alerts().is_empty());
     }
 
     fn temporary_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {
@@ -630,10 +825,20 @@ mod checks {
             "text replacement off"
         );
 
-        let sample = washboard_app::SAMPLE_REQUEST;
-        assert_eq!(text_view.string().to_string(), sample);
-        // The sample is ASCII, so byte offsets are UTF-16 offsets.
-        let envelope = sample.find("Envelope").expect("tag name in sample");
+        // The editor shows the selected request as saved.
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            // SAFETY: `newRequest:` takes the sender.
+            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+        }
+        let window = project.project_window();
+        window.makeFirstResponder(Some(text_view));
+        let file = selected_file(ctx, &project);
+        let saved = std::fs::read_to_string(&file).expect("request file");
+        assert_eq!(text_view.string().to_string(), saved);
+        assert!(text_view.isEditable());
+        let utf16 = |byte: usize| saved[..byte].encode_utf16().count();
+        let envelope = utf16(saved.find("Envelope").expect("an envelope"));
         assert!(
             is_tag_color(temporary_color(editor, envelope)),
             "tag name coloured"
@@ -642,27 +847,22 @@ mod checks {
             !is_tag_color(stored_color(editor, envelope)),
             "highlight colour not in the text storage"
         );
-        assert_eq!(editor.ruler().error_lines(), [6], "error marker on line 6");
         assert!(
             editor.ruler().visible_lines().contains(&1),
             "ruler sees line 1"
         );
+        assert!(!window.isDocumentEdited());
 
-        // Type a new element at the start of line 4, as the keyboard would.
-        let at = sample
-            .find("  <soapenv:Body>")
-            .expect("Body line in sample");
+        // Type a new element at the start of the Body line, as the keyboard would.
+        let body = saved.find("Body").expect("a Body element");
+        let at = utf16(saved[..body].rfind('\n').map_or(0, |i| i + 1));
         // SAFETY: inserting a string at an empty range inside the text.
         unsafe {
             text_view
                 .insertText_replacementRange(&NSString::from_str("<new/>"), NSRange::new(at, 0))
         };
-        assert!(
-            text_view
-                .string()
-                .to_string()
-                .contains("<new/>  <soapenv:Body>")
-        );
+        let typed = text_view.string().to_string();
+        assert!(typed.contains("<new/>"), "{typed}");
         assert!(
             is_tag_color(temporary_color(editor, at + 1)),
             "typed tag name coloured"
@@ -671,6 +871,15 @@ mod checks {
             !is_tag_color(stored_color(editor, at + 1)),
             "typing stores no highlight colour"
         );
+        assert!(window.isDocumentEdited(), "edited dot");
+        assert!(selected_markers(&project).0, "unsaved marker");
+
+        // Autosave writes what the text view shows.
+        wait_until("autosave", || {
+            std::fs::read_to_string(&file).is_ok_and(|t| t == typed)
+        });
+        assert!(!window.isDocumentEdited(), "saved");
+        assert!(!selected_markers(&project).0, "marker cleared");
 
         let undo = text_view
             .undoManager()
@@ -682,15 +891,40 @@ mod checks {
         undo.undo();
         assert_eq!(
             text_view.string().to_string(),
-            sample,
+            saved,
             "undo restores the text"
         );
         assert!(
             is_tag_color(temporary_color(editor, envelope)),
             "colours after undo"
         );
+        assert!(window.isDocumentEdited(), "undo is an edit");
+        wait_until("autosave after undo", || {
+            std::fs::read_to_string(&file).is_ok_and(|t| t == saved)
+        });
 
         autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// The file of the request selected in `project`.
+    fn selected_file(ctx: &Ctx, project: &ProjectWindowController) -> PathBuf {
+        let id = project.selected_request().expect("a selected request");
+        let name = all_nodes(&project.sidebar().roots())
+            .into_iter()
+            .find(|n| n.request() == Some(id))
+            .expect("the selected request's row")
+            .title();
+        ctx.project.join("requests").join(format!("{name}.xml"))
+    }
+
+    /// The (unsaved, invalid) markers of the selected request's row.
+    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+        let id = project.selected_request().expect("a selected request");
+        all_nodes(&project.sidebar().roots())
+            .into_iter()
+            .find(|n| n.request() == Some(id))
+            .expect("the selected request's row")
+            .markers()
     }
 
     /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
@@ -736,24 +970,147 @@ mod checks {
         print!("(keystroke {} ms) ", started.elapsed().as_millis());
     }
 
-    /// Clicking an issue selects its line; a fake send finishes on the main thread and fills
-    /// the response pane.
-    pub fn issues_and_fake_send(ctx: &Ctx) {
+    /// An invalid value in a fixture request is listed, marked in the gutter and on the
+    /// sidebar row, and a click selects it; fixing it and validating clears all three.
+    pub fn diagnostics(ctx: &Ctx) {
         let project = ctx.open();
+        wait_loaded(&project);
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        let issues = project.issues().table();
+        let text = text_view.string().to_string();
+        let start = text.find("<asOf>").expect("the template has asOf") + "<asOf>".len();
+        let end = start + text[start..].find("</asOf>").expect("asOf is closed");
+        let date = text[start..end].to_owned();
+        // The template is ASCII up to here, so byte offsets are UTF-16 offsets.
+        assert!(text[..end].is_ascii());
+        let line = text[..start].matches('\n').count() + 1;
+        wait_until("the first check", || issues.rows().is_empty());
 
-        let issues = project.issues().table().rows();
-        assert_eq!(issues.len(), 1, "sample issue listed");
-        assert_eq!(issues[0][0], "6");
-        project.issues().table().click(0);
-        let sample = washboard_app::SAMPLE_REQUEST;
-        let line6 = sample
-            .split_inclusive('\n')
-            .take(5)
-            .map(str::len)
-            .sum::<usize>();
-        let selected = project.editor().text_view().selectedRange();
-        assert_eq!(selected.location, line6, "click selects line 6");
+        let replace = |at: usize, len: usize, with: &str| {
+            // SAFETY: replacing a range inside the text, as typing over a selection does.
+            unsafe {
+                text_view
+                    .insertText_replacementRange(&NSString::from_str(with), NSRange::new(at, len))
+            };
+        };
+        replace(start, date.len(), "someday");
+        wait_until("the invalid date to be listed", || {
+            !issues.rows().is_empty()
+        });
+        assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
+        assert!(
+            editor.ruler().error_lines().contains(&line),
+            "gutter marker"
+        );
+        wait_until("the invalid marker", || selected_markers(&project).1);
 
+        issues.click(0);
+        let selected = text_view.selectedRange();
+        let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+        assert!(
+            (line_start..start + "someday".len() + "</asOf>".len()).contains(&selected.location),
+            "click selects the issue: {selected:?}"
+        );
+
+        replace(start, "someday".len(), &date);
+        let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
+        // SAFETY: the window controller's actions take the sender.
+        let sent = unsafe {
+            ctx.app
+                .sendAction_to_from(Sel::register(&validate), Some(&project), None)
+        };
+        assert!(sent);
+        wait_until("the issues to clear", || issues.rows().is_empty());
+        assert!(editor.ruler().error_lines().is_empty(), "gutter cleared");
+        wait_until("the marker to clear", || !selected_markers(&project).1);
+        autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    const LOOKUP_RESPONSE: &str = "<soapenv:Envelope \
+        xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"><soapenv:Body>\
+        <tns:LookupResponse xmlns:tns=\"urn:example:legacy\"><result><street>Main St 1</street>\
+        <city>Vienna</city></result></tns:LookupResponse></soapenv:Body></soapenv:Envelope>";
+
+    /// Reads one HTTP request: its head and, with a `Content-Length`, its body.
+    fn read_request(stream: &mut TcpStream) -> String {
+        let mut data = Vec::new();
+        let mut buf = [0; 4096];
+        loop {
+            let n = stream.read(&mut buf).expect("read the request");
+            if n == 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n]);
+            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
+                continue;
+            };
+            let head = String::from_utf8_lossy(&data[..end]).into_owned();
+            let length = head
+                .lines()
+                .filter_map(|l| l.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if data.len() >= end + 4 + length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&data).into_owned()
+    }
+
+    /// A SOAP server on this machine that answers one request with `body` and returns what
+    /// it received.
+    fn serve_once(body: &'static str) -> (u16, std::thread::JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().expect("local address").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("read timeout");
+            let request = read_request(&mut stream);
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(reply.as_bytes()).expect("reply");
+            request
+        });
+        (port, handle)
+    }
+
+    /// A server that accepts a connection and never answers.
+    fn serve_nothing() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        let port = listener.local_addr().expect("local address").port();
+        std::thread::spawn(move || {
+            let connection = listener.accept();
+            std::thread::sleep(Duration::from_secs(20));
+            drop(connection);
+        });
+        port
+    }
+
+    fn local_server(id: ServerId, port: u16) -> Server {
+        Server {
+            id,
+            name: "Local".into(),
+            url: format!("http://127.0.0.1:{port}/legacy"),
+            ignore_tls_errors: false,
+            auth: Auth::Basic {
+                username: "alice".into(),
+            },
+            timeout: Duration::from_secs(5),
+        }
+    }
+
+    /// A refused send lists the issues; a send fills the response pane, the history and the
+    /// log; a history entry restores the request; Cancel returns to Send.
+    pub fn send(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
         let response = project.response();
         let tabs: Vec<String> = response
             .tabs()
@@ -762,48 +1119,159 @@ mod checks {
             .map(|t| t.label().to_string())
             .collect();
         assert_eq!(tabs, washboard_app::RESPONSE_TABS);
+        let action = |name: &str| {
+            let name = std::ffi::CString::new(name).expect("a selector name");
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(&name), Some(&project), None)
+            };
+            assert!(sent, "{name:?} reached the window controller");
+        };
+        let send_label = || project.send_item().map(|i| i.label().to_string());
 
-        project.fake_send();
+        // A server on this machine, with Basic auth so the log has an `Authorization` header.
+        let key = project.key();
+        let (port, server) = serve_once(LOOKUP_RESPONSE);
+        let id = ctx
+            .delegate
+            .command("add a server", |app| {
+                let id = app.add_server(key)?;
+                app.update_server(key, &local_server(id, port), Some("secret"))?;
+                Ok(id)
+            })
+            .expect("server added");
+        let popup = project.server_popup();
+        let local = popup
+            .itemTitles()
+            .iter()
+            .position(|t| t.to_string() == "Local")
+            .expect("the popup lists the new server");
+        popup.selectItemAtIndex(local as isize);
+        action("chooseServer:");
+
+        // An invalid request is not sent.
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        let text = text_view.string().to_string();
+        let start = text.find("<asOf>").expect("the template has asOf") + "<asOf>".len();
+        let end = start + text[start..].find("</asOf>").expect("asOf is closed");
+        let date = text[start..end].to_owned();
+        assert!(text[..end].is_ascii());
+        let replace = |at: usize, len: usize, with: &str| {
+            // SAFETY: replacing a range inside the text, as typing over a selection does.
+            unsafe {
+                text_view
+                    .insertText_replacementRange(&NSString::from_str(with), NSRange::new(at, len))
+            };
+        };
+        let history = response.history().rows().len();
+        project.issues().table().view().setHidden(true);
+        replace(start, date.len(), "someday");
+        action("sendRequest:");
+        wait_until("the refusal", || {
+            send_label().as_deref() == Some("Send") && !project.issues().table().rows().is_empty()
+        });
+        assert!(!project.issues().table().view().isHidden(), "issues shown");
+        assert_eq!(response.history().rows().len(), history, "nothing sent");
+
+        replace(start, "someday".len(), &date);
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
         assert_eq!(response.status(), "Sending…");
-        // The result arrives through the main dispatch queue, which the run loop drains.
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !response.status().starts_with("200") {
-            assert!(
-                Instant::now() < deadline,
-                "fake send did not finish: {}",
-                response.status()
-            );
-            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
-        }
-        assert_eq!(response.history().rows().len(), 1, "history row added");
+        wait_until("the response", || response.status().starts_with("200"));
+        assert_eq!(send_label().as_deref(), Some("Send"));
         let body = response.body().text_view().string().to_string();
-        assert!(body.contains("GetCustomerResponse"), "response body shown");
+        assert!(body.contains("LookupResponse"), "{body}");
+        // The pane shows the model's headers; what they are is the HTTP client's business,
+        // tested in washboard-core.
+        let headers = ctx
+            .delegate
+            .read(|app| Some(app.project(key)?.response()?.headers.clone()))
+            .flatten()
+            .expect("a response");
+        assert!(!headers.is_empty());
+        for (name, value) in &headers {
+            let line = format!("{name}: {value}");
+            assert!(
+                response.headers().contains(&line),
+                "{line} in {}",
+                response.headers()
+            );
+        }
+        assert_eq!(
+            response.history().rows().len(),
+            history + 1,
+            "history row added"
+        );
+        server.join().expect("the server thread");
+        assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
+
+        // Restore Request puts the sent request back.
+        replace(start, date.len(), "2031-12-31");
+        let history_table = response.history();
+        history_table
+            .table()
+            .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        history_table.click(0);
+        // SAFETY: `restoreRequest:` takes the sender.
+        let _: () = unsafe { msg_send![response, restoreRequest: None::<&AnyObject>] };
+        assert_eq!(text_view.string().to_string(), text, "restored");
+
+        // Cancel stops waiting for a server that never answers.
+        let port = serve_nothing();
+        ctx.delegate
+            .command("point the server elsewhere", |app| {
+                app.update_server(key, &local_server(id, port), None)
+            })
+            .expect("server updated");
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Send"), "cancelled");
+        assert!(
+            response.status().starts_with("200"),
+            "the last response stays"
+        );
+        assert_eq!(response.history().rows().len(), history + 1);
+        assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
 
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 
-    /// One log panel for the app, opened from the menu action, with `Authorization` masked
-    /// until revealed.
+    /// One log panel for the app, opened from the menu action, listing the model's exchanges
+    /// with `Authorization` masked until revealed.
     pub fn http_log(ctx: &Ctx) {
         // SAFETY: `showHttpLog:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, showHttpLog: None::<&AnyObject>] };
         let log = ctx.delegate.http_log();
         assert!(log.panel().isVisible(), "log panel shown");
-        assert_eq!(
-            log.table().rows().len(),
-            washboard_app::sample_exchanges().len()
-        );
+        assert_eq!(log.table().rows().len(), 1, "the send check's exchange");
 
-        let secret = "YWxpY2U6c2VjcmV0";
-        assert!(
-            log.request_text().contains("Authorization: ••••••••"),
-            "masked"
+        // The panel shows the model's request headers, masked or revealed; which header is
+        // masked and how is the model's business, tested in washboard-ui-model.
+        let headers = |revealed: bool| {
+            ctx.delegate
+                .read(|app| app.http_log().front().map(|e| e.request_headers(revealed)))
+                .flatten()
+                .expect("a log entry")
+        };
+        let shows = |revealed: bool| {
+            let text = log.request_text();
+            headers(revealed)
+                .iter()
+                .all(|(name, value)| text.contains(&format!("{name}: {value}")))
+        };
+        assert_ne!(
+            headers(false),
+            headers(true),
+            "the send had something to mask"
         );
-        assert!(!log.request_text().contains(secret), "secret hidden");
+        assert!(shows(false), "masked: {}", log.request_text());
         log.set_revealed(true);
-        assert!(log.request_text().contains(secret), "revealed on request");
+        assert!(shows(true), "revealed: {}", log.request_text());
         log.set_revealed(false);
-        assert!(!log.request_text().contains(secret), "masked again");
+        assert!(shows(false), "masked again: {}", log.request_text());
         log.panel().close();
     }
 
