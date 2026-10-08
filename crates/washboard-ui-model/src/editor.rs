@@ -11,7 +11,7 @@ use washboard_core::xml::utf16::{Utf16Cursor, utf16_len, utf16_to_byte};
 use washboard_core::xml::{TokenBuffer, TokenKind};
 
 use crate::app::{App, ModelError, ProjectKey};
-use crate::diagnostics::{Check, Issue};
+use crate::diagnostics::{Check, Issue, IssuesBasis};
 use crate::event::Event;
 use crate::timers::TimerKind;
 
@@ -27,6 +27,8 @@ pub struct Editor {
     version: u64,
     dirty: bool,
     pub(crate) issues: Vec<Issue>,
+    /// The version the last full check ran on, and whether it had the schema to check against.
+    pub(crate) checked: Option<(u64, bool)>,
 }
 
 impl Editor {
@@ -43,6 +45,7 @@ impl Editor {
             version,
             dirty: false,
             issues: Vec::new(),
+            checked: None,
         })
     }
 
@@ -63,6 +66,16 @@ impl Editor {
     /// From the latest check; may lag the text by up to a debounce interval.
     pub fn issues(&self) -> &[Issue] {
         &self.issues
+    }
+
+    /// How far `issues` cover the current text, so a front end can tell "no issues yet" from
+    /// "valid".
+    pub fn issues_basis(&self) -> IssuesBasis {
+        match self.checked {
+            Some((version, true)) if version == self.version => IssuesBasis::Validated,
+            Some((version, false)) if version == self.version => IssuesBasis::WellFormedOnly,
+            _ => IssuesBasis::Pending,
+        }
     }
 
     /// Edited since the last save.

@@ -31,7 +31,7 @@ mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
 pub use assist::{CompletionItem, CompletionKind, Completions, Hover};
-pub use diagnostics::Issue;
+pub use diagnostics::{Issue, IssuesBasis};
 pub use editor::Editor;
 pub use event::Event;
 pub use front_end::{

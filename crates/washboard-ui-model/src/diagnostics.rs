@@ -56,6 +56,18 @@ impl Issue {
     }
 }
 
+/// What the editor's issues are based on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssuesBasis {
+    /// The text changed since the last full check, or the WSDL is still loading. Only a
+    /// well-formedness result may be current.
+    Pending,
+    /// Validated against the schema; no errors means the request is valid.
+    Validated,
+    /// Checked for well-formedness only, because the WSDL or its schemas failed to load.
+    WellFormedOnly,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Check {
     /// Replaces the well-formedness issue and keeps the rest until the full check catches up.
@@ -152,11 +164,20 @@ impl App {
         let Some(window) = self.window_mut(key) else {
             return;
         };
+        // A schema that changed since the check started starts another check, which replaces
+        // this result, so the state now is good enough.
+        let schema = matches!(
+            &window.schema,
+            SchemaState::Ready(s) if s.compile_errors().is_empty()
+        );
         let Some(editor) = window.editor.as_mut() else {
             return;
         };
         if editor.request() != request || editor.version() != version {
             return;
+        }
+        if check == Check::Full {
+            editor.checked = Some((version, schema));
         }
         match check {
             Check::WellFormed => {

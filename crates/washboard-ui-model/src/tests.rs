@@ -14,7 +14,7 @@ use crate::fake::Fake;
 use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, ImportTarget, Issue,
-    ModelError, OperationNode, ProjectKey, SchemaState,
+    IssuesBasis, ModelError, OperationNode, ProjectKey, SchemaState,
 };
 
 fn fixtures() -> PathBuf {
@@ -880,8 +880,14 @@ fn schema_errors_come_from_the_full_check_after_a_second() {
 
     fake.advance(&mut app, ms(150));
     assert_eq!(next_check(&fake, &mut app, key), [], "well-formed");
+    assert_eq!(
+        basis(&app, key),
+        IssuesBasis::Pending,
+        "not valid yet, only well-formed"
+    );
     fake.advance(&mut app, ms(850));
     let issues = next_check(&fake, &mut app, key);
+    assert_eq!(basis(&app, key), IssuesBasis::Validated);
     assert!(
         issues
             .iter()
@@ -896,7 +902,23 @@ fn schema_errors_come_from_the_full_check_after_a_second() {
     app.validate(key).expect("validate");
     assert_eq!(fake.running_timers(), 1, "only autosave is left");
     assert_eq!(next_check(&fake, &mut app, key), []);
+    assert_eq!(
+        basis(&app, key),
+        IssuesBasis::Validated,
+        "no issues means valid"
+    );
     assert!(!invalid_marker(&app, key, first));
+    app.edit(key, 0..0, " ").expect("edit");
+    assert_eq!(
+        basis(&app, key),
+        IssuesBasis::Pending,
+        "an edit makes it stale"
+    );
+}
+
+fn basis(app: &App, key: ProjectKey) -> IssuesBasis {
+    let window = app.project(key).expect("open");
+    window.editor().expect("editor").issues_basis()
 }
 
 #[test]
@@ -962,6 +984,7 @@ fn without_a_schema_only_well_formedness_is_checked() {
         issues[0].message.contains("only well-formedness"),
         "{issues:?}"
     );
+    assert_eq!(basis(&app, key), IssuesBasis::WellFormedOnly);
 }
 
 const FAULT: &str = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\

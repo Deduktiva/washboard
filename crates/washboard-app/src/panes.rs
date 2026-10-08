@@ -16,7 +16,7 @@ use objc2_foundation::{
     ns_string,
 };
 use washboard_core::model::HistoryId;
-use washboard_ui_model::{App, Issue, ModelError, ProjectKey, ResponseView};
+use washboard_ui_model::{App, Issue, IssuesBasis, ModelError, ProjectKey, ResponseView};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
@@ -74,7 +74,6 @@ impl IssuesBar {
 
         let summary = NSTextField::labelWithString(ns_string!(""), mtm);
         summary.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-        summary.setTextColor(Some(&NSColor::systemOrangeColor()));
         // A long first message keeps the Hide button in view.
         layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
         // SAFETY: this bar owns the button through its view, so it outlives the button's weak
@@ -122,23 +121,26 @@ impl IssuesBar {
         &self.ivars().table
     }
 
+    /// The summary beside the list: the validation state of the editor's text.
+    pub fn summary(&self) -> String {
+        self.ivars()
+            .summary
+            .get()
+            .map(|label| label.stringValue().to_string())
+            .unwrap_or_default()
+    }
+
     /// Lists the editor's issues, marks their lines in the ruler and underlines their ranges
-    /// (`DiagnosticsChanged`).
-    pub fn set_issues(&self, issues: Vec<Issue>) {
+    /// (`DiagnosticsChanged`). The summary is the live validation indicator: it says
+    /// whether the text has been validated yet, so an empty list never reads as "valid" while a
+    /// check is still due. `basis` is `None` with no request open.
+    pub fn set_issues(&self, issues: Vec<Issue>, basis: Option<IssuesBasis>) {
         let errors = issues.iter().filter(|i| i.is_error()).count();
         let warnings = issues.len() - errors;
-        let plural = |n: usize, what: &str| match n {
-            1 => format!("1 {what}"),
-            n => format!("{n} {what}s"),
-        };
-        let summary = match (errors, warnings) {
-            (0, 0) => "No issues".to_owned(),
-            (e, 0) => format!("⚠ {}", plural(e, "error")),
-            (0, w) => plural(w, "warning"),
-            (e, w) => format!("⚠ {}, {}", plural(e, "error"), plural(w, "warning")),
-        };
+        let (summary, colour) = summary(errors, warnings, basis);
         if let Some(label) = self.ivars().summary.get() {
             label.setStringValue(&NSString::from_str(&summary));
+            label.setTextColor(Some(&colour));
         }
         self.ivars().table.set_rows(
             issues
@@ -488,6 +490,39 @@ impl ResponsePane {
 }
 
 /// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
+/// The issues summary and its colour. Errors show as soon as any check finds them; "Valid"
+/// only once the schema check of the current text found none.
+fn summary(
+    errors: usize,
+    warnings: usize,
+    basis: Option<IssuesBasis>,
+) -> (String, Retained<NSColor>) {
+    let plural = |n: usize, what: &str| match n {
+        1 => format!("1 {what}"),
+        n => format!("{n} {what}s"),
+    };
+    match (errors, warnings, basis) {
+        (_, _, None) => (String::new(), NSColor::secondaryLabelColor()),
+        (0, _, Some(IssuesBasis::Pending)) => ("Checking…".into(), NSColor::secondaryLabelColor()),
+        (0, _, Some(IssuesBasis::WellFormedOnly)) => (
+            "Well-formed · schema not checked".into(),
+            NSColor::systemOrangeColor(),
+        ),
+        (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), NSColor::systemGreenColor()),
+        (0, w, Some(IssuesBasis::Validated)) => {
+            (plural(w, "warning"), NSColor::systemOrangeColor())
+        }
+        (e, 0, _) => (
+            format!("⚠ {}", plural(e, "error")),
+            NSColor::systemRedColor(),
+        ),
+        (e, w, _) => (
+            format!("⚠ {}, {}", plural(e, "error"), plural(w, "warning")),
+            NSColor::systemRedColor(),
+        ),
+    }
+}
+
 fn sent_formatter() -> Retained<NSDateFormatter> {
     let formatter = NSDateFormatter::new();
     formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
