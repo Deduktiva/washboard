@@ -10,16 +10,22 @@
 //! Owned by WP-UI-MODEL (`docs/TASKS.md`).
 
 mod app;
+mod commands;
 mod event;
 mod front_end;
+mod window;
 
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
 mod tests;
 
-pub use app::{App, ModelError, ProjectKey, ProjectWindow};
+pub use app::{App, ModelError, ProjectKey};
 pub use event::Event;
 pub use front_end::{
-    Alert, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
+    Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
+};
+pub use window::{
+    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, SchemaState, ServiceNode,
+    Sidebar,
 };
