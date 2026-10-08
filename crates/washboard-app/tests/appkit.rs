@@ -1511,7 +1511,8 @@ mod checks {
             .collect()
     }
 
-    /// A table cell's text sits inside the cell and is centred vertically in it.
+    /// A table cell's text sits inside the cell, and its content (the text, or the stack holding
+    /// it) is centred vertically in the cell.
     fn assert_fits(cell: &NSView, what: &str) {
         cell.layoutSubtreeIfNeeded();
         let label = cell
@@ -1525,10 +1526,12 @@ mod checks {
             inner.origin.x >= -0.5 && inner.origin.x + inner.size.width <= outer.size.width + 0.5,
             "{what} within its cell: {inner:?} in {outer:?}"
         );
+        let content = cell.subviews().firstObject().expect("the cell has content");
+        let content = content.frame();
         let mid = |r: NSRect| r.origin.y + r.size.height / 2.0;
         assert!(
-            (mid(inner) - mid(outer)).abs() < 2.0,
-            "{what} centred vertically: {inner:?} in {outer:?}"
+            (mid(content) - mid(outer)).abs() < 2.0,
+            "{what} centred vertically: {content:?} in {outer:?}"
         );
     }
 
