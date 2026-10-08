@@ -4,7 +4,9 @@ use std::ops::Range;
 
 use washboard_core::diag::{Diagnostic, Severity};
 use washboard_core::wsdl::{Reference, Resolution, Unresolved};
-use washboard_ui_model::{CheckState, CheckedImport, ImportSheet, ReplaceOutcome};
+use washboard_ui_model::{
+    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ReplaceOutcome,
+};
 
 /// The byte range of `old` that was replaced, and the length of its replacement in `new`.
 /// Any consistent description works for `TokenBuffer::edit`; this one is the smallest.
@@ -124,14 +126,75 @@ fn count(n: usize, noun: &str) -> String {
     }
 }
 
+/// Which completions typing `inserted` after `before` (the character in front of it) opens
+/// the list for: elements after `<`, attributes after a space, values after `="`. The
+/// model decides whether there are any; a space outside a tag offers no attributes.
+pub(crate) fn completion_kinds(before: Option<char>, inserted: &str) -> &'static [CompletionKind] {
+    match (before, inserted) {
+        (_, "<") => &[CompletionKind::Element],
+        (_, " ") => &[CompletionKind::Attribute],
+        (Some('='), "\"") => &[CompletionKind::Value, CompletionKind::Type],
+        _ => &[],
+    }
+}
+
+/// The hover tool tip: the element's name, one line per fact, then its documentation.
+pub(crate) fn hover_text(hover: &Hover) -> String {
+    let mut text = hover.name.clone();
+    for line in &hover.lines {
+        text.push('\n');
+        text.push_str(line);
+    }
+    if let Some(doc) = &hover.documentation {
+        text.push_str("\n\n");
+        text.push_str(doc);
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use washboard_core::diag::TextPos;
     use washboard_core::model::RequestId;
     use washboard_core::wsdl::{MatchedBy, RefKind, Reference, Resolution, Unresolved};
-    use washboard_ui_model::ReplaceOutcome;
+    use washboard_ui_model::{CompletionKind, Hover, ReplaceOutcome};
 
-    use super::{changed_range, reference_row, replace_summary, utf16_edit};
+    use super::{
+        changed_range, completion_kinds, hover_text, reference_row, replace_summary, utf16_edit,
+    };
+
+    #[test]
+    fn completion_opens_after_lt_space_and_eq_quote() {
+        assert_eq!(completion_kinds(Some('>'), "<"), [CompletionKind::Element]);
+        assert_eq!(
+            completion_kinds(Some('a'), " "),
+            [CompletionKind::Attribute]
+        );
+        assert_eq!(
+            completion_kinds(Some('='), "\""),
+            [CompletionKind::Value, CompletionKind::Type]
+        );
+        assert!(completion_kinds(Some(' '), "\"").is_empty());
+        assert!(completion_kinds(Some('a'), "b").is_empty());
+        assert!(
+            completion_kinds(None, "<a").is_empty(),
+            "a paste is not typing"
+        );
+    }
+
+    #[test]
+    fn hover_text_puts_documentation_last() {
+        let hover = Hover {
+            range: 0..4,
+            name: "asOf".into(),
+            lines: vec!["type xs:date".into(), "exactly 1".into()],
+            documentation: Some("The day to look at.".into()),
+        };
+        assert_eq!(
+            hover_text(&hover),
+            "asOf\ntype xs:date\nexactly 1\n\nThe day to look at."
+        );
+    }
 
     fn reference(
         kind: RefKind,
