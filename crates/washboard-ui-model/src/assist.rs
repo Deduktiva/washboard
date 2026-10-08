@@ -7,7 +7,7 @@ use std::ops::Range;
 use washboard_core::model::QName;
 use washboard_core::schema::{EnumValue, MaxOccurs, SchemaModel, SuggestionSource, block_path};
 use washboard_core::soap::XSI_NS;
-use washboard_core::xml::utf16::{byte_to_utf16, utf16_to_byte};
+use washboard_core::xml::utf16::{Utf16Cursor, utf16_to_byte};
 use washboard_core::xml::{CursorContext, CursorLocation, NamespaceMap, cursor_context};
 
 use crate::app::{App, ProjectKey};
@@ -57,7 +57,7 @@ impl App {
         let (text, model) = self.assist_input(key)?;
         let byte = utf16_to_byte(text, at);
         let ctx = cursor_context(text, byte);
-        let span = |r: Range<usize>| byte_to_utf16(text, r.start)..byte_to_utf16(text, r.end);
+        let span = |r: Range<usize>| Utf16Cursor::new(text).utf16_range(r);
         let scope = ctx.path.last().map(|e| &e.namespaces)?;
         let (replace, items) = match &ctx.location {
             CursorLocation::ElementName {
@@ -177,7 +177,7 @@ impl App {
             lines.push("nillable".into());
         }
         Some(Hover {
-            range: byte_to_utf16(text, name.start)..byte_to_utf16(text, name.end),
+            range: Utf16Cursor::new(text).utf16_range(name.clone()),
             name: element.raw_name.clone(),
             lines,
             documentation: info.documentation,
