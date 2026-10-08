@@ -137,22 +137,9 @@ pub fn error_count(diags: &[Diagnostic]) -> usize {
 /// Converts a byte offset into `text` to a [`TextPos`].
 ///
 /// Offsets past the end clamp to the end. Offsets inside a multi-byte char point at that char.
+/// For many positions in one text, build a [`LineIndex`] once instead.
 pub fn pos_at_byte(text: &str, byte: usize) -> TextPos {
-    let byte = byte.min(text.len());
-    let mut line = 1u32;
-    let mut column = 1u32;
-    for (i, ch) in text.char_indices() {
-        if i >= byte {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            column = 1;
-        } else {
-            column += 1;
-        }
-    }
-    TextPos { line, column }
+    LineIndex::new(text).pos(byte)
 }
 
 /// Precomputed line starts, so many positions in one large text stay cheap.
@@ -171,10 +158,10 @@ impl<'a> LineIndex<'a> {
 
     /// Same semantics as [`pos_at_byte`].
     pub fn pos(&self, byte: usize) -> TextPos {
-        let byte = byte.min(self.text.len());
+        let byte = self.text.floor_char_boundary(byte);
         let line = self.starts.partition_point(|&s| s <= byte).max(1);
         let start = self.starts[line - 1];
-        let column = self.text.get(start..byte).map_or(0, |s| s.chars().count());
+        let column = self.text[start..byte].chars().count();
         TextPos {
             line: u32::try_from(line).unwrap_or(u32::MAX),
             column: u32::try_from(column + 1).unwrap_or(u32::MAX),
@@ -194,18 +181,39 @@ impl<'a> LineIndex<'a> {
     pub fn byte(&self, pos: TextPos) -> Option<usize> {
         let line = usize::try_from(pos.line).ok()?.checked_sub(1)?;
         let column = usize::try_from(pos.column).ok()?.checked_sub(1)?;
-        let start = *self.starts.get(line)?;
-        let end = self
-            .starts
-            .get(line + 1)
-            .map_or(self.text.len(), |&s| s - 1);
-        let content = self.text.get(start..end)?;
+        let (start, end) = self.line_bounds(line)?;
+        let content = &self.text[start..end];
         let offset = content
             .char_indices()
             .map(|(i, _)| i)
             .chain(std::iter::once(content.len()))
             .nth(column)?;
         Some(start + offset)
+    }
+
+    /// Like [`Self::byte`], but clamped instead of failing, for positions reported by tools
+    /// that may point past the text: line or column 0 counts as 1, a column past the end of
+    /// its line is that line's end, a line past the last is the end of the text.
+    pub fn byte_clamped(&self, pos: TextPos) -> usize {
+        let line = usize::try_from(pos.line).unwrap_or(usize::MAX).max(1) - 1;
+        let Some((start, end)) = self.line_bounds(line) else {
+            return self.text.len();
+        };
+        let column = usize::try_from(pos.column).unwrap_or(usize::MAX).max(1) - 1;
+        self.text[start..end]
+            .char_indices()
+            .nth(column)
+            .map_or(end, |(i, _)| start + i)
+    }
+
+    /// Byte range of line `line` (0-based) without its line feed.
+    fn line_bounds(&self, line: usize) -> Option<(usize, usize)> {
+        let start = *self.starts.get(line)?;
+        let end = self
+            .starts
+            .get(line + 1)
+            .map_or(self.text.len(), |&s| s - 1);
+        Some((start, end))
     }
 }
 
@@ -214,14 +222,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_index_matches_pos_at_byte() {
-        let t = "ab\nüx<\n\nz";
+    fn offsets_inside_a_char_point_at_it() {
+        let t = "ab\nüx";
+        // Bytes 3 and 4 are the two bytes of 'ü'.
+        assert_eq!(pos_at_byte(t, 4), TextPos { line: 2, column: 1 });
+        assert_eq!(LineIndex::new(t).pos(4), pos_at_byte(t, 3));
+    }
+
+    #[test]
+    fn byte_clamped_stays_in_the_text() {
+        let t = "ab\nüx<\n";
         let li = LineIndex::new(t);
-        for b in 0..=t.len() + 2 {
-            if t.is_char_boundary(b.min(t.len())) {
-                assert_eq!(li.pos(b), pos_at_byte(t, b), "byte {b}");
-            }
-        }
+        let at = |line, column| li.byte_clamped(TextPos { line, column });
+        assert_eq!(at(1, 1), 0);
+        assert_eq!(at(2, 2), 5); // 'x' after the two-byte 'ü'
+        assert_eq!(at(2, 99), 7); // clamped to the end of line 2
+        assert_eq!(at(9, 1), t.len());
+        assert_eq!(at(0, 0), 0);
     }
 
     #[test]
