@@ -11,8 +11,10 @@ use washboard_core::model::RequestId;
 use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
 use washboard_core::soap::EnvelopeError;
 
+use crate::diagnostics::Check;
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::timers::TimerKind;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
 #[derive(Debug, Error)]
@@ -51,12 +53,6 @@ pub(crate) enum PendingDialog {
     },
 }
 
-/// What an outstanding timer is for.
-#[derive(Debug)]
-pub(crate) enum PendingTimer {
-    Autosave(ProjectKey),
-}
-
 /// Work finished on a worker thread, to be applied on the main thread.
 type Completion = Box<dyn FnOnce(&mut App) + Send>;
 
@@ -69,10 +65,12 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     welcome_visible: Option<bool>,
     pub(crate) dialogs: HashMap<DialogId, PendingDialog>,
-    pub(crate) timers: HashMap<TimerId, PendingTimer>,
+    /// Running timers and what they are for.
+    pub(crate) timers: HashMap<TimerId, (ProjectKey, TimerKind)>,
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
+    jobs: usize,
 }
 
 impl fmt::Debug for App {
@@ -100,6 +98,7 @@ impl App {
             next_id: 0,
             done_tx,
             done_rx,
+            jobs: 0,
         }
     }
 
@@ -171,10 +170,8 @@ impl App {
         let Some(i) = self.projects.iter().position(|(k, _)| *k == key) else {
             return true;
         };
-        let (_, window) = self.projects.remove(i);
-        if let Some(timer) = window.autosave {
-            self.cancel_timer(timer);
-        }
+        self.projects.remove(i);
+        self.stop_timers(key);
         self.events.push(Event::ProjectClosed { project: key });
         self.update_welcome();
         true
@@ -218,10 +215,11 @@ impl App {
     /// Runs `work` on a new thread and `then` with its result on the main thread, during the
     /// [`pump`](Self::pump) that follows the worker's wake.
     pub fn spawn<T: Send + 'static>(
-        &self,
+        &mut self,
         work: impl FnOnce() -> T + Send + 'static,
         then: impl FnOnce(&mut App, T) + Send + 'static,
     ) {
+        self.jobs += 1;
         let done = self.done_tx.clone();
         let main = self.front.main_thread.clone();
         std::thread::spawn(move || {
@@ -238,23 +236,14 @@ impl App {
     /// [`MainThread::wake`](crate::MainThread::wake).
     pub fn pump(&mut self) {
         while let Ok(completion) = self.done_rx.try_recv() {
+            self.jobs -= 1;
             completion(self);
         }
     }
 
-    /// The front end reports a timer started through [`Timers`](crate::Timers).
-    /// Unknown ids (a timer cancelled after it already fired) are ignored.
-    pub fn timer_fired(&mut self, id: TimerId) {
-        match self.timers.remove(&id) {
-            Some(PendingTimer::Autosave(key)) => self.autosave_fired(key),
-            None => {}
-        }
-    }
-
-    pub(crate) fn cancel_timer(&mut self, id: TimerId) {
-        if self.timers.remove(&id).is_some() {
-            self.front.timers.cancel(id);
-        }
+    /// Workers whose results have not been applied yet, e.g. for a progress indicator.
+    pub fn jobs_running(&self) -> usize {
+        self.jobs
     }
 
     /// The front end reports the answer to a dialog. Unknown ids are ignored, so a dialog that
@@ -302,7 +291,6 @@ impl App {
             sidebar: Sidebar::default(),
             servers: Vec::new(),
             editor: None,
-            autosave: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
@@ -337,6 +325,7 @@ impl App {
             Err(message) => window.schema = SchemaState::Failed(message),
         }
         self.events.push(Event::SidebarChanged { project: key });
+        self.start_check(key, Check::Full);
     }
 
     pub(crate) fn window_mut(&mut self, key: ProjectKey) -> Option<&mut ProjectWindow> {

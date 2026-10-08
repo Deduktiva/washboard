@@ -11,9 +11,11 @@
 
 mod app;
 mod commands;
+mod diagnostics;
 mod editor;
 mod event;
 mod front_end;
+mod timers;
 mod window;
 
 #[cfg(test)]
@@ -22,6 +24,7 @@ mod fake;
 mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
+pub use diagnostics::Issue;
 pub use editor::Editor;
 pub use event::Event;
 pub use front_end::{
