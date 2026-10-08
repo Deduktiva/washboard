@@ -159,6 +159,26 @@ fn quit_and_launch_restore_the_open_projects() {
 }
 
 #[test]
+fn clearing_recent_projects_survives_a_relaunch() {
+    let setup = Setup::new();
+    let a = make_project(&setup.tmp, "Alpha");
+    {
+        let (_fake, mut app) = setup.launch();
+        let key = app.open_project(&a).expect("open a");
+        assert!(app.close_project(key));
+        app.take_events();
+        app.clear_recent_projects();
+        assert_eq!(app.take_events(), [Event::RecentProjectsChanged]);
+        assert!(app.recent_projects().is_empty());
+        app.clear_recent_projects();
+        assert!(app.take_events().is_empty(), "already empty");
+        assert!(app.quit().expect("quit"));
+    }
+    let (_fake, app) = setup.launch();
+    assert!(app.recent_projects().is_empty());
+}
+
+#[test]
 fn a_missing_project_is_reported_once_and_dropped() {
     let setup = Setup::new();
     let a = make_project(&setup.tmp, "Alpha");
@@ -344,6 +364,22 @@ fn new_request_creates_selects_and_starts_rename() {
     assert_eq!(names(&app, key), ["Lookup 1"]);
     let text = window.project().read_request(id).expect("read");
     assert!(text.contains("Lookup"), "{text}");
+}
+
+#[test]
+fn the_default_operation_is_the_first_supported_one() {
+    let setup = Setup::new();
+    let folder = make_project(&setup.tmp, "Legacy");
+    let (fake, mut app) = setup.launch();
+    app.open_project(&folder).expect("open");
+    let key = app.projects().next().expect("open").0;
+    assert!(matches!(
+        app.default_operation(key),
+        Err(ModelError::SchemaNotReady)
+    ));
+    fake.pump_after_wakes(&mut app, 1);
+    let op = app.default_operation(key).expect("an operation");
+    assert_eq!(op, lookup(&app, key, "LegacyPort").operation);
 }
 
 #[test]

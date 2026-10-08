@@ -1,255 +1,504 @@
-//! The two sheets of the shell (PLAN §8): New Project with its import check, and Project
-//! Settings › Servers. Sample data until WP-APP-INTEGRATION runs the real import check and
-//! stores servers through `washboard-ui-model`.
+//! The sheets of PLAN §8: the import sheet (New Project and Replace WSDL) bound to the
+//! model's `ImportSheet`, and Project Settings › Servers bound to the project's servers.
+//! The model runs the import check and stores everything; the sheets show its state and
+//! forward input.
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::fmt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSControlStateValue, NSControlStateValueOff,
     NSControlStateValueOn, NSControlTextEditingDelegate, NSGridView, NSLayoutAttribute,
-    NSSecureTextField, NSSplitView, NSStackView, NSTabView, NSTabViewItem, NSTextField,
-    NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSecureTextField, NSSplitView, NSStackView,
+    NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation,
+    NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
     NSString, ns_string,
 };
+use washboard_core::model::{Auth, Server, ServerId};
+use washboard_ui_model::{
+    App, CheckState, ImportSheet, ImportTarget, ModelError, ProjectKey, SuggestedServer,
+};
 
+use crate::app::with_delegate;
 use crate::table::TextTable;
+use crate::text::{import_messages, import_status, reference_row};
 
-/// One `wsdl:import`/`xs:import`/`xs:include` found by the import check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reference {
-    /// As written, e.g. `xs:import urn:example:common`.
-    pub reference: String,
-    /// The supplied file it resolved to, or `None` if no supplied file matches.
-    pub resolved_to: Option<String>,
+/// The import sheet's controls.
+#[derive(Debug)]
+struct ImportViews {
+    window: Retained<NSWindow>,
+    name: Retained<NSTextField>,
+    location: Retained<NSTextField>,
+    wsdl: Retained<NSTextField>,
+    files: Retained<NSTextField>,
+    add: Retained<NSButton>,
+    clear: Retained<NSButton>,
+    references: Retained<TextTable>,
+    messages: Retained<TextTable>,
+    status: Retained<NSTextField>,
+    finish: Retained<NSButton>,
 }
 
-/// The New Project sheet in PLAN §8: two resolved references and one missing file.
-pub fn sample_references() -> Vec<Reference> {
-    let r = |reference: &str, to: Option<&str>| Reference {
-        reference: reference.into(),
-        resolved_to: to.map(Into::into),
-    };
-    vec![
-        r("xs:import urn:example:common", Some("common/types.xsd")),
-        r("xs:import urn:example:faults", Some("faults.xsd")),
-        r("xs:include addresses.xsd", None),
-    ]
-}
-
-type OnCreate = Box<dyn Fn(&str)>;
-
-pub struct NewProjectIvars {
-    references: RefCell<Vec<Reference>>,
-    on_create: RefCell<Option<OnCreate>>,
-    window: OnceCell<Retained<NSWindow>>,
-    name: OnceCell<Retained<NSTextField>>,
-    table: OnceCell<Retained<TextTable>>,
-    create: OnceCell<Retained<NSButton>>,
-}
-
-impl fmt::Debug for NewProjectIvars {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NewProjectIvars")
-            .field("references", &self.references)
-            .finish_non_exhaustive()
-    }
+#[derive(Debug)]
+pub struct ImportIvars {
+    target: ImportTarget,
+    views: OnceCell<ImportViews>,
 }
 
 define_class!(
     // SAFETY:
     // - NSObject has no subclassing requirements.
-    // - `NewProjectSheet` does not implement `Drop`.
+    // - `ImportSheetController` does not implement `Drop`.
     #[unsafe(super = NSObject)]
     #[thread_kind = MainThreadOnly]
-    #[ivars = NewProjectIvars]
+    #[ivars = ImportIvars]
     #[derive(Debug)]
-    pub struct NewProjectSheet;
+    pub struct ImportSheetController;
 
     // SAFETY: `NSObjectProtocol` has no safety requirements.
-    unsafe impl NSObjectProtocol for NewProjectSheet {}
+    unsafe impl NSObjectProtocol for ImportSheetController {}
 
-    impl NewProjectSheet {
+    // SAFETY: `NSTextFieldDelegate` has no safety requirements.
+    unsafe impl NSTextFieldDelegate for ImportSheetController {}
+
+    // SAFETY: `NSControlTextEditingDelegate` has no safety requirements.
+    unsafe impl NSControlTextEditingDelegate for ImportSheetController {
+        // SAFETY: the signature matches `controlTextDidChange:`.
+        #[unsafe(method(controlTextDidChange:))]
+        fn text_did_change(&self, _notification: &NSNotification) {
+            self.name_changed();
+        }
+    }
+
+    impl ImportSheetController {
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(cancel:))]
         fn cancel_action(&self, _sender: Option<&AnyObject>) {
-            end_sheet(self.window());
+            self.cancel();
         }
 
-        #[unsafe(method(create:))]
-        fn create_action(&self, _sender: Option<&AnyObject>) {
-            self.create();
+        #[unsafe(method(finish:))]
+        fn finish_action(&self, _sender: Option<&AnyObject>) {
+            self.finish();
         }
 
-        #[unsafe(method(chooseFile:))]
-        fn choose_file(&self, _sender: Option<&AnyObject>) {
-            eprintln!("washboard-app: choosing files is not implemented yet");
+        #[unsafe(method(chooseLocation:))]
+        fn choose_location_action(&self, _sender: Option<&AnyObject>) {
+            self.open_panel(false, true, false, |sheet, mut paths| {
+                sheet.choose_location(paths.remove(0));
+            });
+        }
+
+        #[unsafe(method(chooseWsdl:))]
+        fn choose_wsdl_action(&self, _sender: Option<&AnyObject>) {
+            self.open_panel(true, false, false, |sheet, mut paths| {
+                sheet.choose_wsdl(paths.remove(0));
+            });
+        }
+
+        #[unsafe(method(addFiles:))]
+        fn add_files_action(&self, _sender: Option<&AnyObject>) {
+            self.open_panel(true, true, true, |sheet, paths| sheet.add_files(paths));
+        }
+
+        #[unsafe(method(clearFiles:))]
+        fn clear_files_action(&self, _sender: Option<&AnyObject>) {
+            self.clear_files();
         }
     }
 );
 
-impl NewProjectSheet {
-    pub fn new(references: Vec<Reference>, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(NewProjectIvars {
-            references: RefCell::new(Vec::new()),
-            on_create: RefCell::new(None),
-            window: OnceCell::new(),
-            name: OnceCell::new(),
-            table: OnceCell::new(),
-            create: OnceCell::new(),
+impl ImportSheetController {
+    /// The model's sheet for `target` must exist (`App::begin_import`); the controller shows it
+    /// on every [`reload`](Self::reload) and ends itself once the model drops it.
+    pub fn new(target: ImportTarget, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(ImportIvars {
+            target,
+            views: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
-        let name = NSTextField::textFieldWithString(ns_string!("Customer API"), mtm);
-        let choose = |title: &str| this.button(title, sel!(chooseFile:));
-        let form = grid(
-            vec![
-                vec![label("Name:", mtm), view(name.clone())],
-                vec![
-                    label("Location:", mtm),
-                    row(vec![label("~/Projects/soap", mtm), choose("Choose…")], mtm),
-                ],
-                vec![
-                    label("WSDL:", mtm),
-                    row(
-                        vec![label("CustomerService.wsdl", mtm), choose("Choose…")],
-                        mtm,
-                    ),
-                ],
-                vec![
-                    label("XSD files:", mtm),
-                    row(
-                        vec![
-                            label("common/types.xsd, faults.xsd", mtm),
-                            choose("Add…"),
-                            choose("−"),
-                        ],
-                        mtm,
-                    ),
-                ],
-            ],
-            mtm,
-        );
+        let new_project = target == ImportTarget::NewProject;
+        let name = NSTextField::textFieldWithString(ns_string!(""), mtm);
+        name.setPlaceholderString(Some(ns_string!("Project name")));
+        // SAFETY: this object owns the field through its window, so it outlives the field's
+        // weak delegate reference.
+        unsafe { name.setDelegate(Some(ProtocolObject::from_ref(&*this))) };
+        let value = || NSTextField::labelWithString(ns_string!(""), mtm);
+        let (location, wsdl, files) = (value(), value(), value());
+        let button = |title: &str, action: Sel| target_button(title, &this, action, mtm);
+        let add = button("Add…", sel!(addFiles:));
+        let clear = button("Clear", sel!(clearFiles:));
 
-        let table = TextTable::new(&["", "Reference", "Resolved to"], mtm);
-        let cancel = target_button("Cancel", &this, sel!(cancel:), mtm);
+        let mut rows = Vec::new();
+        if new_project {
+            rows.push(vec![label("Name:", mtm), view(name.clone())]);
+            rows.push(vec![
+                label("Location:", mtm),
+                row(
+                    vec![
+                        view(location.clone()),
+                        view(button("Choose…", sel!(chooseLocation:))),
+                    ],
+                    mtm,
+                ),
+            ]);
+        }
+        rows.push(vec![
+            label("WSDL:", mtm),
+            row(
+                vec![
+                    view(wsdl.clone()),
+                    view(button("Choose…", sel!(chooseWsdl:))),
+                ],
+                mtm,
+            ),
+        ]);
+        rows.push(vec![
+            label("XSD files:", mtm),
+            row(
+                vec![view(files.clone()), view(add.clone()), view(clear.clone())],
+                mtm,
+            ),
+        ]);
+        let form = grid(rows, mtm);
+
+        let references = TextTable::new(&["", "Reference", "Resolved to"], mtm);
+        let messages = TextTable::new(&["", "Message"], mtm);
+        let status = NSTextField::labelWithString(ns_string!(""), mtm);
+        let cancel = button("Cancel", sel!(cancel:));
         cancel.setKeyEquivalent(ns_string!("\u{1b}"));
-        let create = target_button("Create", &this, sel!(create:), mtm);
-        create.setKeyEquivalent(ns_string!("\r"));
-        let buttons = row(vec![view(cancel), view(create.clone())], mtm);
+        let finish = button(
+            if new_project { "Create" } else { "Replace" },
+            sel!(finish:),
+        );
+        finish.setKeyEquivalent(ns_string!("\r"));
+        let buttons = row(vec![view(cancel), view(finish.clone())], mtm);
 
         let content = column(
             vec![
                 form,
                 label("References", mtm),
-                view(table.view().retain()),
+                view(references.view().retain()),
+                view(messages.view().retain()),
+                view(status.clone()),
                 buttons,
             ],
             mtm,
         );
-        let window = sheet_window("New Project", NSSize::new(560.0, 420.0), mtm);
+        let title = if new_project {
+            "New Project"
+        } else {
+            "Replace WSDL"
+        };
+        let window = sheet_window(title, NSSize::new(600.0, 480.0), mtm);
         window.setContentView(Some(&content));
 
-        let _ = this.ivars().window.set(window);
-        let _ = this.ivars().name.set(name);
-        let _ = this.ivars().table.set(table);
-        let _ = this.ivars().create.set(create);
-        this.set_references(references);
+        let _ = this.ivars().views.set(ImportViews {
+            window,
+            name,
+            location,
+            wsdl,
+            files,
+            add,
+            clear,
+            references,
+            messages,
+            status,
+            finish,
+        });
         this
     }
 
+    pub fn target(&self) -> ImportTarget {
+        self.ivars().target
+    }
+
     pub fn window(&self) -> &NSWindow {
-        self.ivars().window.get().expect("set in new()")
+        &self.views().window
     }
 
     pub fn name_field(&self) -> &NSTextField {
-        self.ivars().name.get().expect("set in new()")
+        &self.views().name
     }
 
-    pub fn table(&self) -> &TextTable {
-        self.ivars().table.get().expect("set in new()")
+    /// One row per reference: mark, reference as written, resolved file.
+    pub fn references(&self) -> &TextTable {
+        &self.views().references
     }
 
-    pub fn create_button(&self) -> &NSButton {
-        self.ivars().create.get().expect("set in new()")
+    /// The import check's and schema compile's findings.
+    pub fn messages(&self) -> &TextTable {
+        &self.views().messages
     }
 
-    /// Called with the project name when the user creates the project.
-    pub fn on_create(&self, f: impl Fn(&str) + 'static) {
-        *self.ivars().on_create.borrow_mut() = Some(Box::new(f));
+    pub fn status(&self) -> String {
+        self.views().status.stringValue().to_string()
     }
 
-    /// Shows the import check's result. Create stays disabled while any reference is
-    /// unresolved (PLAN §4 "Create project").
-    pub fn set_references(&self, references: Vec<Reference>) {
-        let rows = references
-            .iter()
-            .map(|r| match &r.resolved_to {
-                Some(to) => vec!["✓".into(), r.reference.clone(), to.clone()],
-                None => vec!["✗".into(), r.reference.clone(), "not supplied".into()],
-            })
-            .collect();
-        self.table().set_rows(rows);
-        let resolved = references.iter().all(|r| r.resolved_to.is_some());
-        self.create_button().setEnabled(resolved);
-        *self.ivars().references.borrow_mut() = references;
+    /// Create or Replace.
+    pub fn finish_button(&self) -> &NSButton {
+        &self.views().finish
     }
 
-    /// Shows the sheet on `parent`.
     pub fn present(&self, parent: &NSWindow) {
         parent.beginSheet_completionHandler(self.window(), None);
     }
 
-    /// What the Create button does; also called by tests. Does nothing while disabled.
-    pub fn create(&self) {
-        if !self.create_button().isEnabled() {
+    /// Shows the model's sheet, or ends this one once the model has dropped it (Cancel,
+    /// Create, Replace).
+    pub fn reload(&self) {
+        let target = self.target();
+        let shown = self
+            .read(|app| {
+                app.import_sheet(target)
+                    .map(|sheet| Shown::new(sheet, target))
+            })
+            .flatten();
+        let Some(shown) = shown else {
+            end_sheet(self.window());
+            return;
+        };
+        let views = self.views();
+        if views.name.stringValue().to_string() != shown.name {
+            views.name.setStringValue(&NSString::from_str(&shown.name));
+        }
+        let set = |field: &NSTextField, text: &str| field.setStringValue(&NSString::from_str(text));
+        set(&views.location, &shown.location);
+        set(&views.wsdl, &shown.wsdl);
+        set(&views.files, &shown.files);
+        set(&views.status, &shown.status);
+        views.add.setEnabled(shown.has_entry);
+        views.clear.setEnabled(shown.has_extra);
+        views.references.set_rows(shown.references);
+        views.messages.set_rows(shown.messages);
+        views.finish.setEnabled(shown.can_finish);
+    }
+
+    /// Types `name` into the Name field.
+    pub fn set_name(&self, name: &str) {
+        self.name_field().setStringValue(&NSString::from_str(name));
+        self.name_changed();
+    }
+
+    /// The folder the new project is created in.
+    pub fn choose_location(&self, parent: PathBuf) {
+        let name = self.name_field().stringValue().to_string();
+        self.command("Could not set the location", move |app| {
+            app.set_import_destination(&name, Some(parent))
+        });
+    }
+
+    /// The entry WSDL; restarts the check.
+    pub fn choose_wsdl(&self, entry: PathBuf) {
+        let extra = self.files().1;
+        self.set_files(entry, extra);
+    }
+
+    /// More XSD/WSDL files or folders; restarts the check. Needs a WSDL first.
+    pub fn add_files(&self, paths: Vec<PathBuf>) {
+        let (entry, mut extra) = self.files();
+        let Some(entry) = entry else {
+            return;
+        };
+        for path in paths {
+            if !extra.contains(&path) {
+                extra.push(path);
+            }
+        }
+        self.set_files(entry, extra);
+    }
+
+    pub fn clear_files(&self) {
+        if let Some(entry) = self.files().0 {
+            self.set_files(entry, Vec::new());
+        }
+    }
+
+    pub fn cancel(&self) {
+        let target = self.target();
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.cancel_import(target));
+            d.sync();
+        });
+        // Also when the model had no sheet left to cancel.
+        end_sheet(self.window());
+    }
+
+    /// Create or Replace; also called by tests. Does nothing while disabled. A new project
+    /// whose WSDL names server addresses opens with its settings, to confirm them.
+    pub fn finish(&self) {
+        if !self.finish_button().isEnabled() {
             return;
         }
-        end_sheet(self.window());
-        let name = self.name_field().stringValue().to_string();
-        if let Some(f) = &*self.ivars().on_create.borrow() {
-            f(&name);
+        match self.target() {
+            ImportTarget::NewProject => {
+                let Some(key) = self.command("Could not create the project", App::create_project)
+                else {
+                    return;
+                };
+                with_delegate(self.mtm(), |d| {
+                    let suggested = d
+                        .read(|app| app.project(key).map(|w| !w.suggested_servers().is_empty()))
+                        .flatten()
+                        .unwrap_or(false);
+                    if let Some(project) = d.project(key)
+                        && suggested
+                    {
+                        project.show_settings();
+                    }
+                });
+            }
+            ImportTarget::ReplaceWsdl(key) => {
+                self.command("Could not replace the WSDL", |app| app.replace_wsdl(key));
+            }
         }
     }
 
-    fn button(&self, title: &str, action: Sel) -> Retained<NSView> {
-        view(target_button(title, self, action, self.mtm()))
+    fn views(&self) -> &ImportViews {
+        self.ivars().views.get().expect("set in new()")
+    }
+
+    fn name_changed(&self) {
+        let name = self.name_field().stringValue().to_string();
+        let parent = self
+            .read(|app| app.import_sheet(ImportTarget::NewProject)?.parent.clone())
+            .flatten();
+        self.command("Could not set the name", move |app| {
+            app.set_import_destination(&name, parent)
+        });
+    }
+
+    /// The model's entry WSDL and extra files.
+    fn files(&self) -> (Option<PathBuf>, Vec<PathBuf>) {
+        let target = self.target();
+        self.read(|app| {
+            app.import_sheet(target)
+                .map(|s| (s.entry.clone(), s.extra.clone()))
+        })
+        .flatten()
+        .unwrap_or_default()
+    }
+
+    fn set_files(&self, entry: PathBuf, extra: Vec<PathBuf>) {
+        let target = self.target();
+        self.command("Could not check the files", move |app| {
+            app.set_import_files(target, entry, extra)
+        });
+    }
+
+    /// An open panel as a sheet on this sheet; `then` gets the chosen paths, never none.
+    fn open_panel(
+        &self,
+        files: bool,
+        directories: bool,
+        multiple: bool,
+        then: impl Fn(&Self, Vec<PathBuf>) + 'static,
+    ) {
+        let panel = NSOpenPanel::openPanel(self.mtm());
+        panel.setCanChooseFiles(files);
+        panel.setCanChooseDirectories(directories);
+        panel.setCanCreateDirectories(directories && !files);
+        panel.setAllowsMultipleSelection(multiple);
+        let chosen = panel.clone();
+        let this = self.retain();
+        let handler = RcBlock::new(move |response: NSModalResponse| {
+            if response != NSModalResponseOK {
+                return;
+            }
+            let paths: Vec<PathBuf> = chosen
+                .URLs()
+                .iter()
+                .filter_map(|url| url.to_file_path())
+                .collect();
+            if !paths.is_empty() {
+                then(&this, paths);
+            }
+        });
+        panel.beginSheetModalForWindow_completionHandler(self.window(), &handler);
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.read(f)).flatten()
+    }
+
+    fn command<R>(
+        &self,
+        title: &str,
+        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
     }
 }
 
-/// One server as the settings sheet edits it. The password never appears here: it lives in
-/// the Keychain (PLAN §6), and the shell has none to show.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Server {
-    pub name: String,
-    pub url: String,
-    pub ignore_tls_errors: bool,
-    pub basic_auth: bool,
-    pub user: String,
-    pub timeout_secs: u32,
+/// What the import sheet shows, read from the model in one borrow.
+struct Shown {
+    name: String,
+    location: String,
+    wsdl: String,
+    files: String,
+    has_entry: bool,
+    has_extra: bool,
+    references: Vec<Vec<String>>,
+    messages: Vec<Vec<String>>,
+    status: String,
+    can_finish: bool,
 }
 
-pub fn sample_servers() -> Vec<Server> {
-    let s = |name: &str, url: &str, ignore_tls_errors: bool| Server {
-        name: name.into(),
-        url: url.into(),
-        ignore_tls_errors,
-        basic_auth: false,
-        user: String::new(),
-        timeout_secs: 60,
-    };
-    vec![
-        s("Production", "https://api.example.com/ws/customer", false),
-        s("Staging", "https://stg.example.com/ws/customer", true),
-        s("Local", "http://localhost:8080/ws/customer", false),
-    ]
+impl Shown {
+    fn new(sheet: &ImportSheet, target: ImportTarget) -> Self {
+        let (references, messages) = match &sheet.check {
+            CheckState::Done(checked) => (
+                checked.check.references.iter().map(reference_row).collect(),
+                import_messages(checked),
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
+        let files = sheet
+            .extra
+            .iter()
+            .map(|p| file_name(p))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self {
+            name: sheet.name.clone(),
+            location: sheet
+                .parent
+                .as_ref()
+                .map_or_else(|| "Not chosen".to_owned(), |p| p.display().to_string()),
+            wsdl: sheet
+                .entry
+                .as_deref()
+                .map_or_else(|| "Not chosen".to_owned(), file_name),
+            files: if files.is_empty() {
+                "None".to_owned()
+            } else {
+                files
+            },
+            has_entry: sheet.entry.is_some(),
+            has_extra: !sheet.extra.is_empty(),
+            references,
+            messages,
+            status: import_status(sheet),
+            can_finish: sheet.can_finish(target),
+        }
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The form controls of the Servers tab.
@@ -267,11 +516,15 @@ struct ServerForm {
 
 #[derive(Debug)]
 pub struct SettingsIvars {
+    key: ProjectKey,
+    /// The model's servers as last shown.
     servers: RefCell<Vec<Server>>,
-    selected: Cell<Option<usize>>,
+    suggested: RefCell<Vec<SuggestedServer>>,
+    selected: Cell<Option<ServerId>>,
     window: OnceCell<Retained<NSWindow>>,
     tabs: OnceCell<Retained<NSTabView>>,
     table: OnceCell<Retained<TextTable>>,
+    suggestions: OnceCell<(Retained<NSView>, Retained<TextTable>)>,
     form: OnceCell<ServerForm>,
 }
 
@@ -293,9 +546,11 @@ define_class!(
 
     // SAFETY: `NSControlTextEditingDelegate` has no safety requirements.
     unsafe impl NSControlTextEditingDelegate for SettingsSheet {
-        // SAFETY: the signature matches `controlTextDidChange:`.
-        #[unsafe(method(controlTextDidChange:))]
-        fn text_did_change(&self, _notification: &NSNotification) {
+        // A field is saved when editing ends, not on every keystroke: each save writes the
+        // project and, for a password, the Keychain.
+        // SAFETY: the signature matches `controlTextDidEndEditing:`.
+        #[unsafe(method(controlTextDidEndEditing:))]
+        fn text_did_end_editing(&self, _notification: &NSNotification) {
             self.commit_form();
         }
     }
@@ -317,21 +572,33 @@ define_class!(
             self.remove_selected();
         }
 
+        #[unsafe(method(confirmSuggestion:))]
+        fn confirm_suggestion_action(&self, _sender: Option<&AnyObject>) {
+            let row = self.suggestions().table().selectedRow();
+            self.confirm_suggestion(usize::try_from(row).unwrap_or(0));
+        }
+
         #[unsafe(method(done:))]
         fn done(&self, _sender: Option<&AnyObject>) {
+            // Ending the field editor saves the field being edited.
+            self.window().makeFirstResponder(None);
+            self.commit_form();
             end_sheet(self.window());
         }
     }
 );
 
 impl SettingsSheet {
-    pub fn new(project: &str, servers: Vec<Server>, mtm: MainThreadMarker) -> Retained<Self> {
+    pub fn new(key: ProjectKey, project: &str, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(SettingsIvars {
-            servers: RefCell::new(servers),
+            key,
+            servers: RefCell::new(Vec::new()),
+            suggested: RefCell::new(Vec::new()),
             selected: Cell::new(None),
             window: OnceCell::new(),
             tabs: OnceCell::new(),
             table: OnceCell::new(),
+            suggestions: OnceCell::new(),
             form: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -344,6 +611,20 @@ impl SettingsSheet {
                 sheet.select(row);
             }
         });
+        let suggested = TextTable::new(&["Port", "Address"], mtm);
+        let suggestions = column(
+            vec![
+                label("Suggested by the WSDL:", mtm),
+                view(suggested.view().retain()),
+                view(target_button(
+                    "Add Server",
+                    &this,
+                    sel!(confirmSuggestion:),
+                    mtm,
+                )),
+            ],
+            mtm,
+        );
         let form = this.server_form(mtm);
         let fields = grid(
             vec![
@@ -376,6 +657,7 @@ impl SettingsSheet {
                     ],
                     mtm,
                 ),
+                suggestions.clone(),
             ],
             mtm,
         );
@@ -399,7 +681,7 @@ impl SettingsSheet {
         let content = column(vec![view(tabs.clone()), view(done)], mtm);
         let window = sheet_window(
             &format!("{project} — Settings"),
-            NSSize::new(640.0, 400.0),
+            NSSize::new(640.0, 420.0),
             mtm,
         );
         window.setContentView(Some(&content));
@@ -407,11 +689,9 @@ impl SettingsSheet {
         let _ = this.ivars().window.set(window);
         let _ = this.ivars().tabs.set(tabs);
         let _ = this.ivars().table.set(table);
+        let _ = this.ivars().suggestions.set((suggestions, suggested));
         let _ = this.ivars().form.set(form);
-        this.reload_table();
-        if !this.ivars().servers.borrow().is_empty() {
-            this.select(0);
-        }
+        this.reload();
         this
     }
 
@@ -427,12 +707,22 @@ impl SettingsSheet {
         self.ivars().table.get().expect("set in new()")
     }
 
+    /// The servers suggested by the WSDL's `soap:address`es, not yet confirmed.
+    pub fn suggestions(&self) -> &TextTable {
+        &self.ivars().suggestions.get().expect("set in new()").1
+    }
+
     pub fn servers(&self) -> Vec<Server> {
         self.ivars().servers.borrow().clone()
     }
 
     pub fn selected(&self) -> Option<usize> {
-        self.ivars().selected.get()
+        let id = self.ivars().selected.get()?;
+        self.ivars()
+            .servers
+            .borrow()
+            .iter()
+            .position(|s| s.id == id)
     }
 
     pub fn name_field(&self) -> &NSTextField {
@@ -447,6 +737,10 @@ impl SettingsSheet {
         &self.form().user
     }
 
+    pub fn password_field(&self) -> &NSSecureTextField {
+        &self.form().password
+    }
+
     pub fn basic_auth_button(&self) -> &NSButton {
         &self.form().auth_basic
     }
@@ -455,85 +749,169 @@ impl SettingsSheet {
         parent.beginSheet_completionHandler(self.window(), None);
     }
 
+    /// Shows the model's servers and suggestions. The form keeps what it shows unless the
+    /// selected server is gone, so a save does not disturb the field being edited.
+    pub fn reload(&self) {
+        let key = self.ivars().key;
+        let (servers, suggested) = self
+            .read(|app| {
+                app.project(key)
+                    .map(|w| (w.servers().to_vec(), w.suggested_servers().to_vec()))
+            })
+            .flatten()
+            .unwrap_or_default();
+        let (suggestions, suggested_table) = self.ivars().suggestions.get().expect("set in new()");
+        suggestions.setHidden(suggested.is_empty());
+        suggested_table.set_rows(
+            suggested
+                .iter()
+                .map(|s| vec![s.port.clone(), s.url.clone()])
+                .collect(),
+        );
+        *self.ivars().suggested.borrow_mut() = suggested;
+        *self.ivars().servers.borrow_mut() = servers;
+        self.reload_table();
+        match self.selected() {
+            Some(_) => {}
+            None if self.ivars().servers.borrow().is_empty() => {
+                self.ivars().selected.set(None);
+                self.enable_form(false);
+            }
+            None => self.select(0),
+        }
+    }
+
     /// Loads server `row` into the form.
     pub fn select(&self, row: usize) {
         let Some(server) = self.ivars().servers.borrow().get(row).cloned() else {
             return;
         };
-        self.ivars().selected.set(Some(row));
+        self.ivars().selected.set(Some(server.id));
         let table = self.table().table();
         table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
         let form = self.form();
+        let (basic_auth, user) = match &server.auth {
+            Auth::None => (false, ""),
+            Auth::Basic { username } => (true, username.as_str()),
+        };
         form.name.setStringValue(&NSString::from_str(&server.name));
         form.url.setStringValue(&NSString::from_str(&server.url));
         form.ignore_tls.setState(state(server.ignore_tls_errors));
-        form.auth_none.setState(state(!server.basic_auth));
-        form.auth_basic.setState(state(server.basic_auth));
-        form.user.setStringValue(&NSString::from_str(&server.user));
+        form.auth_none.setState(state(!basic_auth));
+        form.auth_basic.setState(state(basic_auth));
+        form.user.setStringValue(&NSString::from_str(user));
+        form.password.setStringValue(ns_string!(""));
         form.timeout
-            .setStringValue(&NSString::from_str(&server.timeout_secs.to_string()));
-        self.enable_auth_fields(server.basic_auth);
+            .setStringValue(&NSString::from_str(&server.timeout.as_secs().to_string()));
+        self.enable_form(true);
+        self.enable_auth_fields(basic_auth);
     }
 
-    /// Writes the form back into the selected server. Runs on every keystroke and control
-    /// change, so the list always shows what the form says.
+    /// Saves the form into the selected server through the model; a typed password goes to
+    /// the secret store and the field is emptied. Nothing is written if nothing changed.
     pub fn commit_form(&self) {
-        let Some(row) = self.selected() else {
+        let Some(current) = self
+            .selected()
+            .map(|row| self.ivars().servers.borrow()[row].clone())
+        else {
             return;
         };
         let form = self.form();
         let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
-        {
-            let mut servers = self.ivars().servers.borrow_mut();
-            let Some(server) = servers.get_mut(row) else {
-                return;
-            };
-            server.name = form.name.stringValue().to_string();
-            server.url = form.url.stringValue().to_string();
-            server.ignore_tls_errors = form.ignore_tls.state() == NSControlStateValueOn;
-            server.basic_auth = basic_auth;
-            server.user = form.user.stringValue().to_string();
-            // An unparsable timeout keeps the last good value; the model will validate it.
-            if let Ok(secs) = form.timeout.stringValue().to_string().trim().parse() {
-                server.timeout_secs = secs;
-            }
-        }
         self.enable_auth_fields(basic_auth);
-        self.reload_table();
+        let mut server = current.clone();
+        server.name = form.name.stringValue().to_string();
+        server.url = form.url.stringValue().to_string();
+        server.ignore_tls_errors = form.ignore_tls.state() == NSControlStateValueOn;
+        server.auth = if basic_auth {
+            Auth::Basic {
+                username: form.user.stringValue().to_string(),
+            }
+        } else {
+            Auth::None
+        };
+        // An unparsable or zero timeout keeps the stored one.
+        if let Ok(secs) = form.timeout.stringValue().to_string().trim().parse::<u64>()
+            && secs > 0
+        {
+            server.timeout = Duration::from_secs(secs);
+        }
+        let password = form.password.stringValue().to_string();
+        let password = (basic_auth && !password.is_empty()).then_some(password);
+        if server == current && password.is_none() {
+            return;
+        }
+        let key = self.ivars().key;
+        let saved = self
+            .command("Could not save the server", |app| {
+                app.update_server(key, &server, password.as_deref())
+            })
+            .is_some();
+        if saved && password.is_some() {
+            form.password.setStringValue(ns_string!(""));
+        }
     }
 
     pub fn add_server(&self) {
-        let row = {
-            let mut servers = self.ivars().servers.borrow_mut();
-            servers.push(Server {
-                name: "New Server".into(),
-                url: "https://".into(),
-                ignore_tls_errors: false,
-                basic_auth: false,
-                user: String::new(),
-                timeout_secs: 60,
-            });
-            servers.len() - 1
-        };
-        self.reload_table();
-        self.select(row);
+        let key = self.ivars().key;
+        if let Some(id) = self.command("Could not add a server", |app| app.add_server(key)) {
+            self.select_id(id);
+        }
     }
 
     pub fn remove_selected(&self) {
-        let Some(row) = self.selected() else {
+        let (Some(row), Some(id)) = (self.selected(), self.ivars().selected.get()) else {
             return;
         };
-        let remaining = {
-            let mut servers = self.ivars().servers.borrow_mut();
-            if row < servers.len() {
-                servers.remove(row);
-            }
-            servers.len()
-        };
+        let key = self.ivars().key;
         self.ivars().selected.set(None);
-        self.reload_table();
+        self.command("Could not delete the server", |app| {
+            app.delete_server(key, id)
+        });
+        let remaining = self.ivars().servers.borrow().len();
         if remaining > 0 {
             self.select(row.min(remaining - 1));
+        }
+    }
+
+    /// Adds suggestion `row` as a server with its address as suggested, and selects it for
+    /// editing.
+    pub fn confirm_suggestion(&self, row: usize) {
+        let Some(url) = self
+            .ivars()
+            .suggested
+            .borrow()
+            .get(row)
+            .map(|s| s.url.clone())
+        else {
+            return;
+        };
+        let key = self.ivars().key;
+        let before: Vec<ServerId> = self.ivars().servers.borrow().iter().map(|s| s.id).collect();
+        self.command("Could not add the server", |app| {
+            app.confirm_suggested_server(key, row, &url)
+        });
+        let added = self
+            .ivars()
+            .servers
+            .borrow()
+            .iter()
+            .map(|s| s.id)
+            .find(|id| !before.contains(id));
+        if let Some(id) = added {
+            self.select_id(id);
+        }
+    }
+
+    fn select_id(&self, id: ServerId) {
+        let row = self
+            .ivars()
+            .servers
+            .borrow()
+            .iter()
+            .position(|s| s.id == id);
+        if let Some(row) = row {
+            self.select(row);
         }
     }
 
@@ -557,10 +935,35 @@ impl SettingsSheet {
         }
     }
 
+    fn enable_form(&self, enabled: bool) {
+        let form = self.form();
+        for field in [&form.name, &form.url, &form.timeout] {
+            field.setEnabled(enabled);
+        }
+        for button in [&form.ignore_tls, &form.auth_none, &form.auth_basic] {
+            button.setEnabled(enabled);
+        }
+        if !enabled {
+            self.enable_auth_fields(false);
+        }
+    }
+
     fn enable_auth_fields(&self, basic_auth: bool) {
         let form = self.form();
         form.user.setEnabled(basic_auth);
         form.password.setEnabled(basic_auth);
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.read(f)).flatten()
+    }
+
+    fn command<R>(
+        &self,
+        title: &str,
+        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
     }
 
     fn server_form(&self, mtm: MainThreadMarker) -> ServerForm {
@@ -597,7 +1000,9 @@ impl SettingsSheet {
             )
         };
         let password = NSSecureTextField::new(mtm);
-        password.setPlaceholderString(Some(ns_string!("Stored in the Keychain")));
+        password.setPlaceholderString(Some(ns_string!("Saved to the Keychain")));
+        // SAFETY: as for the text fields above.
+        unsafe { password.setDelegate(Some(ProtocolObject::from_ref(self))) };
         ServerForm {
             name: text("Name"),
             url: text("https://"),

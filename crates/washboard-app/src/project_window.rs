@@ -2,16 +2,18 @@
 //! editor, issues bar and response pane.
 //!
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
-//! answers the Project menu while its window is key. Handlers are stubs until
-//! WP-APP-INTEGRATION binds them to `washboard-ui-model`.
+//! answers the Project menu while its window is key. One per project open in the model; the
+//! app delegate creates and closes it on the model's events, and forwards the events that
+//! name its project. Handlers not bound to the model yet are stubs (WP-APP-INTEGRATION).
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell, RefCell};
+use std::path::Path;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
+    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
     NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView, NSToolbar,
     NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
@@ -19,16 +21,19 @@ use objc2_app_kit::{
     NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
-    NSArray, NSCopying, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSString, ns_string,
+    NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSString, ns_string,
 };
 
-use dispatch2::{DispatchQueue, MainThreadBound};
+use washboard_core::model::{RequestId, ServerId};
+use washboard_ui_model::{App, ImportTarget, ModelError, ProjectKey};
 
+use crate::app::with_delegate;
 use crate::editor::EditorController;
-use crate::panes::{FakeResponse, IssuesBar, ResponsePane, sample_issues};
-use crate::sheets::{SettingsSheet, sample_servers};
+use crate::panes::{IssuesBar, ResponsePane};
+use crate::sheets::{ImportSheetController, SettingsSheet};
 use crate::sidebar::SidebarController;
+use crate::text::replace_summary;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
 const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
@@ -48,21 +53,6 @@ const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 const SERVER_ITEM: &str = "server";
-
-/// Shown in the editor until requests are loaded from the project.
-pub const SAMPLE_REQUEST: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
-                  xmlns:cus="urn:example:customer">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <cus:GetCustomer>
-      <cus:customerId>?</cus:customerId>
-    </cus:GetCustomer>
-  </soapenv:Body>
-</soapenv:Envelope>
-"#;
-
-/// Placeholder until the server list comes from the project.
-const SAMPLE_SERVERS: &[&str] = &["Staging", "Production"];
 
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
@@ -95,13 +85,22 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
 
 #[derive(Debug)]
 pub struct ProjectIvars {
+    key: ProjectKey,
     name: String,
+    /// The model has closed the project (or is closing it); the window follows.
+    closing: Cell<bool>,
     sidebar: Retained<SidebarController>,
+    /// The toolbar's server popup; its items are `server_ids`, in order.
+    servers: Retained<NSPopUpButton>,
+    server_ids: RefCell<Vec<ServerId>>,
     editor: Retained<EditorController>,
     issues: OnceCell<Retained<IssuesBar>>,
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
     settings: OnceCell<Retained<SettingsSheet>>,
+    replace: RefCell<Option<Retained<ImportSheetController>>>,
+    /// What the last Replace WSDL changed, as shown in its alert.
+    replace_summary: RefCell<Option<String>>,
 }
 
 define_class!(
@@ -120,10 +119,32 @@ define_class!(
 
     // SAFETY: `NSWindowDelegate` has no safety requirements.
     unsafe impl NSWindowDelegate for ProjectWindowController {
+        // SAFETY: the signature matches `windowShouldClose:`.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            crate::app::with_delegate(self.mtm(), |app| app.close_requested(self)).unwrap_or(true)
+        }
+
         // SAFETY: the signature matches `windowWillClose:`.
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
-            crate::app::with_delegate(self.mtm(), |app| app.project_closed(self));
+            // `close` skips `windowShouldClose:`; the model must still let the project go.
+            if !self.is_closing() {
+                crate::app::with_delegate(self.mtm(), |app| {
+                    app.close_requested(self);
+                });
+            }
+        }
+
+        // SAFETY: the signature matches `windowDidResignKey:`.
+        #[unsafe(method(windowDidResignKey:))]
+        fn window_did_resign_key(&self, _notification: &NSNotification) {
+            // Leaving the window saves its edits (PLAN §4 "Save / autosave").
+            let key = self.key();
+            with_delegate(self.mtm(), |d| {
+                d.update(|app| app.window_resigned_key(key));
+                d.sync();
+            });
         }
     }
 
@@ -150,7 +171,7 @@ define_class!(
             identifier: &NSString,
             _will_insert: bool,
         ) -> Option<Retained<NSToolbarItem>> {
-            toolbar_item(identifier, self.mtm())
+            self.toolbar_item(identifier)
         }
     }
 
@@ -159,12 +180,17 @@ define_class!(
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(newRequest:))]
         fn new_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("New Request");
+            self.sidebar().new_request(None);
         }
 
         #[unsafe(method(duplicateRequest:))]
         fn duplicate_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("Duplicate");
+            let key = self.key();
+            if let Some(request) = self.selected_request() {
+                self.command("Could not duplicate the request", |app| {
+                    app.duplicate_request(key, request)
+                });
+            }
         }
 
         #[unsafe(method(renameRequest:))]
@@ -177,22 +203,54 @@ define_class!(
 
         #[unsafe(method(deleteRequest:))]
         fn delete_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("Delete");
+            let key = self.key();
+            if let Some(request) = self.selected_request() {
+                self.command("Could not delete the request", |app| {
+                    app.delete_request(key, request)
+                });
+            }
+        }
+
+        #[unsafe(method(chooseServer:))]
+        fn choose_server(&self, _sender: Option<&AnyObject>) {
+            let index = usize::try_from(self.ivars().servers.indexOfSelectedItem()).ok();
+            let server = index.and_then(|i| self.ivars().server_ids.borrow().get(i).copied());
+            let key = self.key();
+            if let Some(server) = server {
+                self.command("Could not choose the server", |app| {
+                    app.choose_server(key, server)
+                });
+            }
+            // The popup shows what the model chose, also when it refused.
+            self.show_server_selection();
         }
 
         #[unsafe(method(validateRequest:))]
         fn validate_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("Validate");
+            let key = self.key();
+            self.command("Could not validate the request", |app| app.validate(key));
         }
 
         #[unsafe(method(sendRequest:))]
         fn send_request(&self, _sender: Option<&AnyObject>) {
-            self.fake_send();
+            // The toolbar's Send is Cancel while a send is in flight.
+            let key = self.key();
+            let sending = self
+                .read(|app| app.project(key).is_some_and(|w| w.sending()))
+                .unwrap_or(false);
+            if sending {
+                with_delegate(self.mtm(), |d| {
+                    d.update(|app| app.cancel_send(key));
+                    d.sync();
+                });
+            } else {
+                self.command("Could not send the request", |app| app.send(key));
+            }
         }
 
         #[unsafe(method(replaceWsdl:))]
         fn replace_wsdl(&self, _sender: Option<&AnyObject>) {
-            self.stub("Replace WSDL");
+            self.show_replace_sheet();
         }
 
         #[unsafe(method(projectSettings:))]
@@ -208,19 +266,38 @@ define_class!(
 );
 
 impl ProjectWindowController {
-    pub fn new(name: &str, mtm: MainThreadMarker) -> Retained<Self> {
+    pub fn new(
+        key: ProjectKey,
+        name: &str,
+        folder: &Path,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
         let window = window(name, mtm);
+        window.setRepresentedFilename(&NSString::from_str(&folder.display().to_string()));
         let this = Self::alloc(mtm).set_ivars(ProjectIvars {
+            key,
             name: name.to_owned(),
-            sidebar: SidebarController::new(mtm),
-            editor: EditorController::new(mtm),
+            closing: Cell::new(false),
+            sidebar: SidebarController::new(key, mtm),
+            servers: server_popup(mtm),
+            server_ids: RefCell::new(Vec::new()),
+            editor: EditorController::for_project(key, mtm),
             issues: OnceCell::new(),
-            response: ResponsePane::new(mtm),
+            response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
             settings: OnceCell::new(),
+            replace: RefCell::new(None),
+            replace_summary: RefCell::new(None),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithWindow: &*window] };
+        let popup = &this.ivars().servers;
+        // SAFETY: this controller owns the popup, so it outlives the popup's weak target;
+        // `chooseServer:` takes the sender.
+        unsafe {
+            popup.setTarget(Some(&this));
+            popup.setAction(Some(sel!(chooseServer:)));
+        }
 
         let toolbar =
             NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("ProjectWindow"));
@@ -239,12 +316,132 @@ impl ProjectWindowController {
         this
     }
 
+    /// The model's project this window shows.
+    pub fn key(&self) -> ProjectKey {
+        self.ivars().key
+    }
+
     pub fn name(&self) -> &str {
         &self.ivars().name
     }
 
+    pub(crate) fn is_closing(&self) -> bool {
+        self.ivars().closing.get()
+    }
+
+    pub(crate) fn set_closing(&self, closing: bool) {
+        self.ivars().closing.set(closing);
+    }
+
     pub fn sidebar(&self) -> &SidebarController {
         &self.ivars().sidebar
+    }
+
+    /// The toolbar's server popup.
+    pub fn server_popup(&self) -> &NSPopUpButton {
+        &self.ivars().servers
+    }
+
+    /// Fills the server popup, and the settings sheet if shown, from the model
+    /// (`ServersChanged`).
+    pub fn reload_servers(&self) {
+        if let Some(settings) = self.settings() {
+            settings.reload();
+        }
+        let key = self.key();
+        let servers = self
+            .read(|app| {
+                app.project(key).map(|w| {
+                    w.servers()
+                        .iter()
+                        .map(|s| (s.id, s.name.clone()))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .flatten()
+            .unwrap_or_default();
+        let popup = &self.ivars().servers;
+        popup.removeAllItems();
+        for (_, name) in &servers {
+            // Not `addItemWithTitle`: it drops an item whose title is already in the menu.
+            popup.addItemWithTitle(ns_string!(""));
+            if let Some(item) = popup.lastItem() {
+                item.setTitle(&NSString::from_str(name));
+            }
+        }
+        if servers.is_empty() {
+            popup.addItemWithTitle(ns_string!("No Servers"));
+        }
+        popup.setEnabled(!servers.is_empty());
+        *self.ivars().server_ids.borrow_mut() = servers.into_iter().map(|(id, _)| id).collect();
+        self.show_server_selection();
+    }
+
+    /// Selects the model's server in the popup (`ServerSelectionChanged`).
+    pub fn show_server_selection(&self) {
+        let key = self.key();
+        let selected = self
+            .read(|app| app.project(key).and_then(|w| w.selected_server()))
+            .flatten();
+        let index = selected.and_then(|id| {
+            self.ivars()
+                .server_ids
+                .borrow()
+                .iter()
+                .position(|s| *s == id)
+        });
+        if let Some(index) = index.and_then(|i| NSInteger::try_from(i).ok()) {
+            self.ivars().servers.selectItemAtIndex(index);
+        }
+    }
+
+    fn toolbar_item(&self, identifier: &NSString) -> Option<Retained<NSToolbarItem>> {
+        let mtm = self.mtm();
+        if identifier.to_string() != SERVER_ITEM {
+            return toolbar_item(identifier, mtm);
+        }
+        let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), identifier);
+        item.setLabel(ns_string!("Server"));
+        item.setView(Some(&self.ivars().servers));
+        Some(item)
+    }
+
+    /// The window's edited dot follows the model (`EditedChanged`).
+    pub fn show_edited(&self) {
+        let key = self.key();
+        let edited = self
+            .read(|app| app.project(key).is_some_and(|w| w.edited()))
+            .unwrap_or(false);
+        self.project_window().setDocumentEdited(edited);
+    }
+
+    /// The issues bar, ruler and underlines show the editor's issues (`DiagnosticsChanged`).
+    pub fn show_issues(&self) {
+        let key = self.key();
+        let issues = self
+            .read(|app| {
+                app.project(key)
+                    .and_then(|w| w.editor())
+                    .map(|e| e.issues().to_vec())
+            })
+            .flatten()
+            .unwrap_or_default();
+        self.issues().set_issues(issues);
+    }
+
+    /// The model's selected request.
+    pub fn selected_request(&self) -> Option<RequestId> {
+        let key = self.key();
+        self.read(|app| app.project(key).and_then(|w| w.selected_request()))
+            .flatten()
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.read(f)).flatten()
+    }
+
+    fn command<R>(&self, title: &str, f: impl FnOnce(&mut App) -> Result<R, ModelError>) {
+        with_delegate(self.mtm(), |d| d.command(title, f));
     }
 
     pub fn editor(&self) -> &EditorController {
@@ -259,40 +456,50 @@ impl ProjectWindowController {
         &self.ivars().response
     }
 
-    /// Sends nothing: waits on a worker thread, then shows a canned response on the main
-    /// thread. This is the pattern every background job follows: the work gets owned data,
-    /// and the result comes back through the main dispatch queue to a `MainThreadBound`
-    /// reference, so no AppKit object is touched off the main thread.
-    pub fn fake_send(&self) {
-        self.response().set_status("Sending…");
-        let this = MainThreadBound::new(self.retain(), self.mtm());
-        std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            std::thread::sleep(std::time::Duration::from_millis(150));
-            let response = FakeResponse {
-                sent: "now".into(),
-                status: 200,
-                reason: "OK".into(),
-                millis: started.elapsed().as_millis() as u64,
-                headers: "Content-Type: text/xml; charset=utf-8\n".into(),
-                body: FAKE_RESPONSE_BODY.into(),
+    /// Send ↔ Cancel in the toolbar, and the response pane's status (`SendStateChanged`).
+    pub fn show_send_state(&self) {
+        let key = self.key();
+        let sending = self
+            .read(|app| app.project(key).is_some_and(|w| w.sending()))
+            .unwrap_or(false);
+        if let Some(item) = self.send_item() {
+            let (label, symbol) = if sending {
+                ("Cancel", "xmark.circle")
+            } else {
+                ("Send", "paperplane")
             };
-            DispatchQueue::main().exec_async(move || {
-                let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
-                this.get(mtm).response().show(&response);
-            });
-        });
+            let label = NSString::from_str(label);
+            item.setLabel(&label);
+            item.setToolTip(Some(&label));
+            item.setImage(
+                NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                    &NSString::from_str(symbol),
+                    Some(&label),
+                )
+                .as_deref(),
+            );
+        }
+        self.response().show_response();
     }
 
-    /// Shows the project's settings sheet on its window, on the Servers tab. One sheet per
-    /// project, kept so edits survive closing and reopening it until the model stores them.
+    /// The toolbar's Send (or Cancel) item.
+    pub fn send_item(&self) -> Option<Retained<NSToolbarItem>> {
+        let toolbar = self.project_window().toolbar()?;
+        toolbar
+            .items()
+            .iter()
+            .find(|i| i.itemIdentifier().to_string() == "send")
+    }
+
+    /// Shows the project's settings sheet on its window, on the Servers tab.
     pub fn show_settings(&self) -> &SettingsSheet {
         let sheet = self
             .ivars()
             .settings
-            .get_or_init(|| SettingsSheet::new(self.name(), sample_servers(), self.mtm()));
+            .get_or_init(|| SettingsSheet::new(self.key(), self.name(), self.mtm()));
         let window = self.project_window();
         if window.attachedSheet().is_none() {
+            sheet.reload();
             sheet.present(&window);
         }
         sheet
@@ -301,6 +508,51 @@ impl ProjectWindowController {
     /// The settings sheet, once shown.
     pub fn settings(&self) -> Option<&SettingsSheet> {
         self.ivars().settings.get().map(|s| &**s)
+    }
+
+    /// Shows the Replace WSDL sheet, unless the window already has a sheet.
+    pub fn show_replace_sheet(&self) -> Option<Retained<ImportSheetController>> {
+        let window = self.project_window();
+        if window.attachedSheet().is_some() {
+            return None;
+        }
+        let target = ImportTarget::ReplaceWsdl(self.key());
+        let sheet = ImportSheetController::new(target, self.mtm());
+        *self.ivars().replace.borrow_mut() = Some(sheet.clone());
+        sheet.present(&window);
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.begin_import(target));
+            // Shows the model's sheet through `ImportChanged`.
+            d.sync();
+        });
+        Some(sheet)
+    }
+
+    /// The most recent Replace WSDL sheet, if one was shown.
+    pub fn replace_sheet(&self) -> Option<Retained<ImportSheetController>> {
+        self.ivars().replace.borrow().clone()
+    }
+
+    /// After Replace WSDL (`WsdlReplaced`): says what changed. The full report is
+    /// WP-REPLACE-REPORT's.
+    pub fn show_replace_outcome(&self) {
+        let key = self.key();
+        let Some(summary) = self
+            .read(|app| app.project(key)?.replace_outcome().map(replace_summary))
+            .flatten()
+        else {
+            return;
+        };
+        *self.ivars().replace_summary.borrow_mut() = Some(summary.clone());
+        let alert = NSAlert::new(self.mtm());
+        alert.setMessageText(ns_string!("The WSDL was replaced"));
+        alert.setInformativeText(&NSString::from_str(&summary));
+        alert.beginSheetModalForWindow_completionHandler(&self.project_window(), None);
+    }
+
+    /// The text of the last Replace WSDL alert.
+    pub fn replace_summary(&self) -> Option<String> {
+        self.ivars().replace_summary.borrow().clone()
     }
 
     pub fn split_view(&self) -> &NSSplitViewController {
@@ -329,9 +581,7 @@ impl ProjectWindowController {
 
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
-        editor.set_text(SAMPLE_REQUEST);
         let issues = IssuesBar::new(editor, mtm);
-        issues.set_issues(&sample_issues());
         content_vc.setView(&content_pane(
             editor.view(),
             issues.view(),
@@ -401,19 +651,6 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
 fn toolbar_item(identifier: &NSString, mtm: MainThreadMarker) -> Option<Retained<NSToolbarItem>> {
     let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), identifier);
     let id = identifier.to_string();
-    if id == SERVER_ITEM {
-        let popup = NSPopUpButton::initWithFrame_pullsDown(
-            NSPopUpButton::alloc(mtm),
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(140.0, 24.0)),
-            false,
-        );
-        for server in SAMPLE_SERVERS {
-            popup.addItemWithTitle(&NSString::from_str(server));
-        }
-        item.setLabel(ns_string!("Server"));
-        item.setView(Some(&popup));
-        return Some(item);
-    }
     let (_, label, symbol, action) = TOOLBAR_ITEMS.iter().find(|(i, ..)| *i == id)?;
     let label = NSString::from_str(label);
     item.setLabel(&label);
@@ -430,6 +667,14 @@ fn toolbar_item(identifier: &NSString, mtm: MainThreadMarker) -> Option<Retained
     // the sender as its only argument.
     unsafe { item.setAction(Some(Sel::register(&std::ffi::CString::new(*action).ok()?))) };
     Some(item)
+}
+
+fn server_popup(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
+    NSPopUpButton::initWithFrame_pullsDown(
+        NSPopUpButton::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(140.0, 24.0)),
+        false,
+    )
 }
 
 fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NSButton> {
@@ -466,12 +711,3 @@ fn content_pane(
     split.adjustSubviews();
     Retained::into_super(split)
 }
-
-const FAKE_RESPONSE_BODY: &str = r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <GetCustomerResponse xmlns="urn:example:customer">
-      <customer><id>42</id><name>Example Ltd</name></customer>
-    </GetCustomerResponse>
-  </soap:Body>
-</soap:Envelope>
-"#;

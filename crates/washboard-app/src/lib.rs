@@ -1,4 +1,5 @@
-//! Washboard macOS app (AppKit via objc2), WP-APP-SHELL in `docs/TASKS.md`.
+//! Washboard macOS app (AppKit via objc2): WP-APP-SHELL and WP-APP-INTEGRATION in
+//! `docs/TASKS.md`.
 //!
 //! A library rather than code in `main.rs` so that `tests/appkit.rs` can build the real
 //! delegates, windows and views headless on the macOS CI runner. Behaviour belongs in
@@ -12,6 +13,8 @@
 mod app;
 #[cfg(target_os = "macos")]
 mod editor;
+#[cfg(target_os = "macos")]
+mod front_end;
 #[cfg(target_os = "macos")]
 mod http_log;
 #[cfg(target_os = "macos")]
@@ -33,22 +36,20 @@ mod welcome;
 mod text;
 
 #[cfg(target_os = "macos")]
-pub use app::{AppDelegate, install, run};
+pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
-pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
+pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
-pub use panes::{FakeResponse, Issue, IssuesBar, RESPONSE_TABS, ResponsePane, sample_issues};
+pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
+pub use project_window::{ProjectWindowController, toolbar_identifiers};
 #[cfg(target_os = "macos")]
-pub use sheets::{
-    NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
-};
+pub use sheets::{ImportSheetController, SettingsSheet};
 #[cfg(target_os = "macos")]
-pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
+pub use sidebar::{NodeKind, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]
 pub use table::TextTable;
 #[cfg(target_os = "macos")]
-pub use welcome::{RecentProject, WelcomeController, sample_recent_projects};
+pub use welcome::{RecentProject, WelcomeController};
