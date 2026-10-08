@@ -12,11 +12,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSControlStateValue, NSControlStateValueOff,
-    NSControlStateValueOn, NSControlTextEditingDelegate, NSGridView, NSLayoutAttribute,
-    NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSecureTextField, NSSplitView, NSStackView,
-    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
+    NSBackingStoreType, NSBezelStyle, NSButton, NSControlStateValue, NSControlStateValueOff,
+    NSControlStateValueOn, NSControlTextEditingDelegate, NSGridCellPlacement, NSGridRowAlignment,
+    NSGridView, NSLayoutAttribute, NSModalResponse, NSModalResponseOK, NSOpenPanel,
+    NSSecureTextField, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField,
+    NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -33,6 +34,10 @@ use crate::text::{import_messages, import_status, reference_row};
 
 /// The ✓/✗ columns: wide enough for the mark, so the reference text gets the room.
 const MARK_WIDTH: f64 = 22.0;
+/// The Servers tab's list column.
+const LIST_WIDTH: f64 = 180.0;
+const TIMEOUT_WIDTH: f64 = 60.0;
+const SQUARE_BUTTON: f64 = 24.0;
 
 /// The import sheet's controls.
 #[derive(Debug)]
@@ -690,24 +695,43 @@ impl SettingsSheet {
             ],
             mtm,
         );
-        let list = column(
+        set_width(&form.timeout, TIMEOUT_WIDTH);
+        let buttons = [
+            square_button("+", &this, sel!(addServer:), mtm),
+            square_button("−", &this, sel!(removeServer:), mtm),
+        ];
+        let buttons = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&buttons), mtm);
+        buttons.setSpacing(0.0);
+        let list = column_stack(
             vec![
                 view(table.view().retain()),
-                row(
-                    vec![
-                        view(target_button("+", &this, sel!(addServer:), mtm)),
-                        view(target_button("−", &this, sel!(removeServer:), mtm)),
-                    ],
-                    mtm,
-                ),
+                view(buttons),
                 suggestions.clone(),
             ],
             mtm,
         );
-        let servers = NSSplitView::new(mtm);
-        servers.setVertical(true);
-        servers.addSubview(&list);
-        servers.addSubview(&fields);
+        // The +/− buttons sit right under the list, as in System Settings.
+        list.setSpacing(0.0);
+        list.setCustomSpacing_afterView(12.0, &list.arrangedSubviews().objectAtIndex(1));
+        set_width(&list, LIST_WIDTH);
+        // List and form side by side; the form takes the remaining width.
+        let servers = NSStackView::stackViewWithViews(
+            &NSArray::from_retained_slice(&[view(list.clone()), fields]),
+            mtm,
+        );
+        servers.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        servers.setAlignment(NSLayoutAttribute::Top);
+        servers.setSpacing(20.0);
+        servers.setEdgeInsets(NSEdgeInsets {
+            top: 12.0,
+            left: 12.0,
+            bottom: 12.0,
+            right: 12.0,
+        });
+        // The list runs the full height; the form stays at the top.
+        list.heightAnchor()
+            .constraintEqualToAnchor_constant(&servers.heightAnchor(), -24.0)
+            .setActive(true);
 
         let general = label(&format!("Name: {project}"), mtm);
         let tabs = NSTabView::new(mtm);
@@ -1181,13 +1205,44 @@ fn window_content(
     view(stack)
 }
 
+/// A form: labels right-aligned on the controls' baselines, controls filling the rest, as
+/// in macOS settings panes.
 fn grid(rows: Vec<Vec<Retained<NSView>>>, mtm: MainThreadMarker) -> Retained<NSView> {
     let rows: Vec<Retained<NSArray<NSView>>> = rows
         .iter()
         .map(|r| NSArray::from_retained_slice(r))
         .collect();
-    view(NSGridView::gridViewWithViews(
-        &NSArray::from_retained_slice(&rows),
-        mtm,
-    ))
+    let grid = NSGridView::gridViewWithViews(&NSArray::from_retained_slice(&rows), mtm);
+    grid.setRowAlignment(NSGridRowAlignment::FirstBaseline);
+    grid.setColumnSpacing(8.0);
+    grid.setRowSpacing(10.0);
+    grid.columnAtIndex(0)
+        .setXPlacement(NSGridCellPlacement::Trailing);
+    grid.columnAtIndex(1)
+        .setXPlacement(NSGridCellPlacement::Fill);
+    view(grid)
+}
+
+/// Pins `v`'s width, which a stack view respects where frames are ignored.
+fn set_width(v: &NSView, width: f64) {
+    v.widthAnchor()
+        .constraintEqualToConstant(width)
+        .setActive(true);
+}
+
+/// The small square +/− buttons under a list.
+fn square_button(
+    title: &str,
+    target: &NSObject,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let button = target_button(title, target, action, mtm);
+    button.setBezelStyle(NSBezelStyle::SmallSquare);
+    set_width(&button, SQUARE_BUTTON);
+    button
+        .heightAnchor()
+        .constraintEqualToConstant(SQUARE_BUTTON)
+        .setActive(true);
+    view(button)
 }

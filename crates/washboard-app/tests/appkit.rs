@@ -1616,6 +1616,18 @@ mod checks {
             .selectedTabViewItem()
             .map(|t| t.label().to_string());
         assert_eq!(selected_tab.as_deref(), Some("Servers"));
+        sheet.window().layoutIfNeeded();
+        let content = sheet.window().contentLayoutRect().size;
+        let tabs = sheet.tabs().frame().size;
+        assert!(
+            (tabs.width - (content.width - 40.0)).abs() < 1.0,
+            "the tabs fill the sheet inside its margins: {tabs:?} in {content:?}"
+        );
+        let list = sheet.table().view().frame().size;
+        assert!(
+            (list.width - 180.0).abs() < 1.0 && list.height > 100.0,
+            "the server list keeps its column: {list:?}"
+        );
 
         let names = table_column(sheet.table(), 0);
         assert_eq!(names, server_names(ctx, key));
