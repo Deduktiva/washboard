@@ -187,8 +187,9 @@ impl App {
     }
 
     /// Replaces the editor with the selected request's text, or none. Unsaved edits must have
-    /// been flushed (or deliberately dropped) before. The caller announces the change, if the
-    /// window already exists.
+    /// been flushed (or deliberately dropped) before. The response pane and history follow.
+    /// The caller announces the change ([`Event::EditorReplaced`]), if the window already
+    /// exists.
     pub(crate) fn load_editor(&mut self, key: ProjectKey) {
         let version = self.next();
         let Some(window) = self.window_mut(key) else {
@@ -206,6 +207,7 @@ impl App {
             Some(Err(e)) => Some(e),
             None => None,
         };
+        App::load_history(window);
         self.stop_timers(key);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);

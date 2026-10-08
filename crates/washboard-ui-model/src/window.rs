@@ -4,13 +4,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use washboard_core::diag::Diagnostic;
-use washboard_core::model::{OperationRef, RequestId, Server, ServerId};
+use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
 use crate::editor::Editor;
+use crate::send::{ResponseView, Sending};
 
 /// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
 /// off the main thread and then shared read-only with the main thread and workers.
@@ -119,6 +120,9 @@ pub struct ProjectWindow {
     pub(crate) sidebar: Sidebar,
     pub(crate) servers: Vec<Server>,
     pub(crate) editor: Option<Editor>,
+    pub(crate) history: Vec<HistoryEntry>,
+    pub(crate) response: Option<ResponseView>,
+    pub(crate) sending: Option<Sending>,
 }
 
 impl ProjectWindow {

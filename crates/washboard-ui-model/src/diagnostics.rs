@@ -35,7 +35,7 @@ pub struct Issue {
 }
 
 impl Issue {
-    fn new(text: &str, lines: &LineIndex<'_>, d: Diagnostic) -> Issue {
+    pub(crate) fn new(text: &str, lines: &LineIndex<'_>, d: Diagnostic) -> Issue {
         let utf16 = |pos| lines.byte(pos).map(|b| byte_to_utf16(text, b));
         let range = match (d.span, d.pos) {
             (Some(span), _) => utf16(span.start).zip(utf16(span.end)).map(|(s, e)| s..e),
@@ -141,7 +141,7 @@ impl App {
         }
     }
 
-    fn check_done(
+    pub(crate) fn check_done(
         &mut self,
         key: ProjectKey,
         request: RequestId,

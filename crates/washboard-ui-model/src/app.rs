@@ -1,7 +1,7 @@
 //! App-level state: open projects, recent projects, restore on launch, and the plumbing that
 //! brings worker results back to the main thread.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -14,6 +14,7 @@ use washboard_core::soap::EnvelopeError;
 use crate::diagnostics::Check;
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
+use crate::send::LogEntry;
 use crate::timers::TimerKind;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
@@ -33,6 +34,11 @@ pub enum ModelError {
     SchemaFailed(String),
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
+    /// Send needs a server; the project has none.
+    #[error("no server is configured")]
+    NoServer,
+    #[error("a request is already being sent")]
+    AlreadySending,
     /// Editing needs a selected request whose text could be read.
     #[error("no request is open in the editor")]
     NoRequestSelected,
@@ -71,6 +77,7 @@ pub struct App {
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
     jobs: usize,
+    pub(crate) log: VecDeque<LogEntry>,
 }
 
 impl fmt::Debug for App {
@@ -99,6 +106,7 @@ impl App {
             done_tx,
             done_rx,
             jobs: 0,
+            log: VecDeque::new(),
         }
     }
 
@@ -291,6 +299,9 @@ impl App {
             sidebar: Sidebar::default(),
             servers: Vec::new(),
             editor: None,
+            history: Vec::new(),
+            response: None,
+            sending: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
