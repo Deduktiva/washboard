@@ -17,8 +17,6 @@ use super::{
 use crate::model::{OperationRef, RequestId, RequestMeta, ServerId};
 use crate::xml;
 
-const UTF8_BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
-
 const COLUMNS: &str = "id, file_name, operation, last_server_id, created_at";
 
 type RawRow = (String, String, Option<String>, Option<String>, String);
@@ -264,7 +262,7 @@ impl Project {
             Ok(f) => {
                 let mut head = Vec::with_capacity(3);
                 f.take(3).read_to_end(&mut head).at(&path)?;
-                head == UTF8_BOM
+                head == xml::UTF8_BOM
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
             Err(e) => return Err(e).at(&path),
