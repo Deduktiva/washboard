@@ -114,6 +114,26 @@ impl Fake {
         app.pump();
     }
 
+    /// Pumps worker results as they arrive until `done` holds.
+    pub fn pump_until(&self, app: &mut App, done: impl Fn(&App) -> bool) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let seen = *self.main_thread.wakes.lock().expect("wake counter");
+            app.pump();
+            if done(app) {
+                return;
+            }
+            let guard = self.main_thread.wakes.lock().expect("wake counter");
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            let (_guard, timeout) = self
+                .main_thread
+                .woken
+                .wait_timeout_while(guard, left, |w| *w == seen)
+                .expect("wake counter");
+            assert!(!timeout.timed_out(), "gave up waiting for a worker");
+        }
+    }
+
     /// Moves the manual clock forward by `by`, firing due timers in order on the way.
     pub fn advance(&self, app: &mut App, by: Duration) {
         let target = self.clock.borrow().now + by;

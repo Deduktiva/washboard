@@ -4,12 +4,17 @@
 use std::time::Duration;
 
 use crate::app::{App, ProjectKey};
+use crate::diagnostics::Check;
 use crate::front_end::TimerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TimerKind {
     /// Saves the editor (PLAN §4 "Save / autosave").
     Autosave,
+    /// Well-formedness check after the last edit.
+    WellFormed,
+    /// Full validation after the last edit.
+    Validate,
 }
 
 impl App {
@@ -53,6 +58,8 @@ impl App {
             TimerKind::Autosave => {
                 self.flush_or_alert(key);
             }
+            TimerKind::WellFormed => self.start_check(key, Check::WellFormed),
+            TimerKind::Validate => self.start_check(key, Check::Full),
         }
     }
 }

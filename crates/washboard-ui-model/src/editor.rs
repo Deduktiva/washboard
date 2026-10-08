@@ -1,6 +1,6 @@
 //! The request editor's buffer and autosave (PLAN §4 "Save / autosave"). The text widget owns
 //! the visible text and undo; it reports each edit here, and the buffer is what gets saved,
-//! highlighted and (later) validated.
+//! highlighted and validated.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -11,6 +11,7 @@ use washboard_core::xml::utf16::{Utf16Cursor, utf16_len, utf16_to_byte};
 use washboard_core::xml::{TokenBuffer, TokenKind};
 
 use crate::app::{App, ModelError, ProjectKey};
+use crate::diagnostics::{Check, Issue};
 use crate::event::Event;
 use crate::timers::TimerKind;
 
@@ -25,17 +26,23 @@ pub struct Editor {
     tokens: TokenBuffer,
     version: u64,
     dirty: bool,
+    pub(crate) issues: Vec<Issue>,
 }
 
 impl Editor {
-    pub(crate) fn load(project: &Project, request: RequestId) -> Result<Editor, ModelError> {
+    pub(crate) fn load(
+        project: &Project,
+        request: RequestId,
+        version: u64,
+    ) -> Result<Editor, ModelError> {
         let text = project.read_request(request)?;
         Ok(Editor {
             request,
             tokens: TokenBuffer::new(&text),
             text,
-            version: 0,
+            version,
             dirty: false,
+            issues: Vec::new(),
         })
     }
 
@@ -47,9 +54,15 @@ impl Editor {
         &self.text
     }
 
-    /// Bumped by every edit, so results computed from an older text can be recognized.
+    /// Changed by every edit, and unique across editors, so results computed from an older
+    /// text (or another request) can be recognized.
     pub fn version(&self) -> u64 {
         self.version
+    }
+
+    /// From the latest check; may lag the text by up to a debounce interval.
+    pub fn issues(&self) -> &[Issue] {
+        &self.issues
     }
 
     /// Edited since the last save.
@@ -77,31 +90,32 @@ impl Editor {
 
     /// Replaces the UTF-16 range `range` with `new`; returns the UTF-16 range of the new text
     /// whose tokens changed. Out-of-range input is clamped.
-    fn replace(&mut self, range: Range<usize>, new: &str) -> Range<usize> {
+    fn replace(&mut self, range: Range<usize>, new: &str, version: u64) -> Range<usize> {
         let start = utf16_to_byte(&self.text, range.start);
         let end = utf16_to_byte(&self.text, range.end).max(start);
         self.text.replace_range(start..end, new);
         let changed = self.tokens.edit(&self.text, start..end, new.len());
-        self.version += 1;
+        self.version = version;
         Utf16Cursor::new(&self.text).utf16_range(changed)
     }
 }
 
 impl App {
     /// The text widget changed `range` (UTF-16, in the text before the change) to `text`.
-    /// Starts or restarts the autosave timer.
+    /// Starts or restarts the autosave and checking timers.
     pub fn edit(
         &mut self,
         key: ProjectKey,
         range: Range<usize>,
         text: &str,
     ) -> Result<(), ModelError> {
+        let version = self.next();
         let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
         let editor = window
             .editor
             .as_mut()
             .ok_or(ModelError::NoRequestSelected)?;
-        let changed = editor.replace(range, text);
+        let changed = editor.replace(range, text, version);
         let became_dirty = !editor.dirty;
         editor.dirty = true;
         let request = editor.request;
@@ -117,6 +131,7 @@ impl App {
             self.events.push(Event::EditedChanged { project: key });
         }
         self.restart_timer(key, TimerKind::Autosave, AUTOSAVE_DELAY);
+        self.schedule_checks(key);
         Ok(())
     }
 
@@ -175,12 +190,13 @@ impl App {
     /// been flushed (or deliberately dropped) before. The caller announces the change, if the
     /// window already exists.
     pub(crate) fn load_editor(&mut self, key: ProjectKey) {
+        let version = self.next();
         let Some(window) = self.window_mut(key) else {
             return;
         };
         let loaded = window
             .selected_request()
-            .map(|id| Editor::load(&window.project, id));
+            .map(|id| Editor::load(&window.project, id, version));
         window.editor = None;
         let error = match loaded {
             Some(Ok(editor)) => {
@@ -190,9 +206,10 @@ impl App {
             Some(Err(e)) => Some(e),
             None => None,
         };
-        self.stop_timer(key, TimerKind::Autosave);
+        self.stop_timers(key);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);
         }
+        self.start_check(key, Check::Full);
     }
 }

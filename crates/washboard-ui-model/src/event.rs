@@ -42,4 +42,6 @@ pub enum Event {
     /// The window's edited state ([`ProjectWindow::edited`](crate::ProjectWindow::edited))
     /// changed.
     EditedChanged { project: ProjectKey },
+    /// The editor's issues (list, underlines) changed.
+    DiagnosticsChanged { project: ProjectKey },
 }

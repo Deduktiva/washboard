@@ -11,6 +11,7 @@ use washboard_core::model::RequestId;
 use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
 use washboard_core::soap::EnvelopeError;
 
+use crate::diagnostics::Check;
 use crate::event::Event;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
 use crate::timers::TimerKind;
@@ -69,6 +70,7 @@ pub struct App {
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
+    jobs: usize,
 }
 
 impl fmt::Debug for App {
@@ -96,6 +98,7 @@ impl App {
             next_id: 0,
             done_tx,
             done_rx,
+            jobs: 0,
         }
     }
 
@@ -212,10 +215,11 @@ impl App {
     /// Runs `work` on a new thread and `then` with its result on the main thread, during the
     /// [`pump`](Self::pump) that follows the worker's wake.
     pub fn spawn<T: Send + 'static>(
-        &self,
+        &mut self,
         work: impl FnOnce() -> T + Send + 'static,
         then: impl FnOnce(&mut App, T) + Send + 'static,
     ) {
+        self.jobs += 1;
         let done = self.done_tx.clone();
         let main = self.front.main_thread.clone();
         std::thread::spawn(move || {
@@ -232,8 +236,14 @@ impl App {
     /// [`MainThread::wake`](crate::MainThread::wake).
     pub fn pump(&mut self) {
         while let Ok(completion) = self.done_rx.try_recv() {
+            self.jobs -= 1;
             completion(self);
         }
+    }
+
+    /// Workers whose results have not been applied yet, e.g. for a progress indicator.
+    pub fn jobs_running(&self) -> usize {
+        self.jobs
     }
 
     /// The front end reports the answer to a dialog. Unknown ids are ignored, so a dialog that
@@ -315,6 +325,7 @@ impl App {
             Err(message) => window.schema = SchemaState::Failed(message),
         }
         self.events.push(Event::SidebarChanged { project: key });
+        self.start_check(key, Check::Full);
     }
 
     pub(crate) fn window_mut(&mut self, key: ProjectKey) -> Option<&mut ProjectWindow> {

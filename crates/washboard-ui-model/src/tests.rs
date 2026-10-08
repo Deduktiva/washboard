@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tempfile::TempDir;
+use washboard_core::diag::DiagSource;
 use washboard_core::model::{Auth, RequestId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
 use washboard_core::xml::TokenKind;
 
 use crate::fake::Fake;
-use crate::{App, DialogAnswer, Event, ModelError, OperationNode, ProjectKey, SchemaState};
+use crate::{App, DialogAnswer, Event, Issue, ModelError, OperationNode, ProjectKey, SchemaState};
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
@@ -239,11 +240,15 @@ fn worker_results_are_applied_on_pump() {
 fn open_loaded(setup: &Setup, name: &str) -> (Fake, App, ProjectKey) {
     let folder = make_project(&setup.tmp, name);
     let (fake, mut app) = setup.launch();
-    app.open_project(&folder).expect("open");
-    fake.pump_after_wakes(&mut app, 1);
-    let key = app.projects().next().expect("open").0;
+    let key = app.open_project(&folder).expect("open");
+    fake.pump_until(&mut app, |app| loaded(app, key));
     app.take_events();
     (fake, app, key)
+}
+
+fn loaded(app: &App, key: ProjectKey) -> bool {
+    let window = app.project(key).expect("open");
+    !matches!(window.schema(), SchemaState::Loading)
 }
 
 fn names(app: &App, key: ProjectKey) -> Vec<String> {
@@ -514,7 +519,7 @@ fn with_requests(setup: &Setup, name: &str) -> (Fake, App, ProjectKey, RequestId
     let first = app.new_request(key, &op).expect("new");
     let second = app.new_request(key, &op).expect("new");
     app.select_request(key, Some(first)).expect("select");
-    app.take_events();
+    settle(&fake, &mut app);
     (fake, app, key, first, second)
 }
 
@@ -556,12 +561,8 @@ fn selecting_a_request_opens_it_in_the_editor() {
 fn an_edit_marks_dirty_and_retokenizes_in_utf16() {
     let setup = Setup::new();
     let (_fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
-    let len = app
-        .project(key)
-        .expect("open")
-        .editor()
-        .expect("editor")
-        .utf16_len();
+    let editor = app.project(key).expect("open").editor().expect("editor");
+    let (len, loaded_version) = (editor.utf16_len(), editor.version());
     app.edit(key, len..len, "<!--😀-->").expect("edit");
     let events = app.take_events();
     let Event::TokensChanged { range, .. } = &events[0] else {
@@ -583,7 +584,7 @@ fn an_edit_marks_dirty_and_retokenizes_in_utf16() {
         [(len..len + 9, TokenKind::Comment)]
     );
     assert!(editor.dirty());
-    assert_eq!(editor.version(), 1);
+    assert_ne!(editor.version(), loaded_version);
     assert!(window.edited());
     assert!(
         window
@@ -610,7 +611,11 @@ fn autosave_runs_a_second_after_the_last_edit() {
     app.edit(key, 0..0, "<!--a-->").expect("edit");
     fake.advance(&mut app, ms(600));
     app.edit(key, 0..0, "<!--b-->").expect("edit");
-    assert_eq!(fake.running_timers(), 1, "the first timer was cancelled");
+    assert_eq!(
+        fake.running_timers(),
+        3,
+        "one each for autosave, well-formedness and validation: the first ones were cancelled"
+    );
     fake.advance(&mut app, ms(900));
     assert_eq!(
         on_disk(&app, key, first),
@@ -673,7 +678,7 @@ fn save_all_and_quit_cover_every_project() {
     let (fake, mut app, ka, a, _) = with_requests(&setup, "A");
     let folder = make_project(&setup.tmp, "B");
     let kb = app.open_project(&folder).expect("open");
-    fake.pump_after_wakes(&mut app, 2);
+    fake.pump_until(&mut app, |app| loaded(app, kb));
     let op = lookup(&app, kb, "LegacyPort").operation;
     let b = app.new_request(kb, &op).expect("new");
 
@@ -682,7 +687,11 @@ fn save_all_and_quit_cover_every_project() {
     assert!(app.save_all());
     assert!(on_disk(&app, ka, a).starts_with("<!--a-->"));
     assert!(on_disk(&app, kb, b).starts_with("<!--b-->"));
-    assert_eq!(fake.running_timers(), 0);
+    assert_eq!(
+        fake.running_timers(),
+        4,
+        "only the two checks per project are left"
+    );
 
     app.edit(ka, 0..0, "<!--q-->").expect("edit");
     assert!(app.quit().expect("quit"));
@@ -759,4 +768,158 @@ fn the_restored_selection_opens_in_the_editor() {
     let (_, window) = app.projects().next().expect("open");
     let editor = window.editor().expect("editor");
     assert_eq!((editor.request(), editor.text()), (second, text.as_str()));
+}
+
+/// Waits until every worker's result is applied, and drops the events.
+fn settle(fake: &Fake, app: &mut App) {
+    fake.pump_until(app, |app| app.jobs_running() == 0);
+    app.take_events();
+}
+
+/// Waits for the next check result for the open editor.
+fn next_check(fake: &Fake, app: &mut App, key: ProjectKey) -> Vec<Issue> {
+    let changed = Event::DiagnosticsChanged { project: key };
+    fake.pump_until(app, |app| app.events.contains(&changed));
+    app.take_events();
+    let window = app.project(key).expect("open");
+    window.editor().expect("editor").issues().to_vec()
+}
+
+/// Replaces the editor's whole text.
+fn set_text(app: &mut App, key: ProjectKey, text: &str) {
+    let window = app.project(key).expect("open");
+    let len = window.editor().expect("editor").utf16_len();
+    app.edit(key, 0..len, text).expect("edit");
+}
+
+fn invalid_marker(app: &App, key: ProjectKey, request: RequestId) -> bool {
+    let window = app.project(key).expect("open");
+    let row = window.sidebar().requests.iter().find(|r| r.id == request);
+    row.expect("row").invalid
+}
+
+#[test]
+fn an_opened_request_is_validated() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    app.new_request(key, &op).expect("new");
+    assert_eq!(next_check(&fake, &mut app, key), []);
+}
+
+#[test]
+fn well_formedness_is_checked_150_ms_after_the_last_edit() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+
+    // 😀 is two UTF-16 units: the error's range must count it that way.
+    set_text(&mut app, key, "<!--😀-->\n<a>");
+    fake.advance(&mut app, ms(149));
+    assert_eq!(
+        fake.running_timers(),
+        3,
+        "autosave, well-formedness, validation"
+    );
+    fake.advance(&mut app, ms(1));
+    let issues = next_check(&fake, &mut app, key);
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert_eq!(issues[0].source, DiagSource::WellFormedness);
+    assert!(issues[0].is_error());
+    assert_eq!(issues[0].line, Some(2));
+    let at = issues[0].range.clone().expect("range").start;
+    assert!(at >= 10, "{at} is past `<!--😀-->\\n` (10 units)");
+    assert!(invalid_marker(&app, key, first));
+}
+
+#[test]
+fn schema_errors_come_from_the_full_check_after_a_second() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    let text = editor_text(&app, key).replace("2026-01-01", "yesterday");
+    set_text(&mut app, key, &text);
+
+    fake.advance(&mut app, ms(150));
+    assert_eq!(next_check(&fake, &mut app, key), [], "well-formed");
+    fake.advance(&mut app, ms(850));
+    let issues = next_check(&fake, &mut app, key);
+    assert!(
+        issues
+            .iter()
+            .any(|i| i.is_error() && i.source == DiagSource::Schema && i.line == Some(6)),
+        "{issues:?}"
+    );
+    assert!(invalid_marker(&app, key, first));
+    assert!(app.take_events().is_empty());
+
+    let fixed = text.replace("yesterday", "2026-01-02");
+    set_text(&mut app, key, &fixed);
+    app.validate(key).expect("validate");
+    assert_eq!(fake.running_timers(), 1, "only autosave is left");
+    assert_eq!(next_check(&fake, &mut app, key), []);
+    assert!(!invalid_marker(&app, key, first));
+}
+
+#[test]
+fn results_for_an_older_text_are_dropped() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+
+    set_text(&mut app, key, "<a>");
+    app.validate(key).expect("validate");
+    app.edit(key, 3..3, "</a>").expect("edit");
+    fake.pump_until(&mut app, |app| app.jobs_running() == 0);
+    assert!(
+        !app.take_events()
+            .contains(&Event::DiagnosticsChanged { project: key }),
+        "the result for `<a>` must not be shown for `<a></a>`"
+    );
+    assert_eq!(
+        app.project(key)
+            .expect("open")
+            .editor()
+            .expect("editor")
+            .issues(),
+        []
+    );
+}
+
+#[test]
+fn results_for_another_request_are_dropped() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _, second) = with_requests(&setup, "Legacy");
+    set_text(&mut app, key, "<a>");
+    app.validate(key).expect("validate");
+    app.select_request(key, Some(second)).expect("select");
+    fake.pump_until(&mut app, |app| app.jobs_running() == 0);
+    let window = app.project(key).expect("open");
+    assert_eq!(window.editor().expect("editor").issues(), []);
+}
+
+#[test]
+fn without_a_schema_only_well_formedness_is_checked() {
+    let setup = Setup::new();
+    let folder = make_project(&setup.tmp, "Legacy");
+    {
+        let (fake, mut app) = setup.launch();
+        let key = app.open_project(&folder).expect("open");
+        fake.pump_until(&mut app, |app| loaded(app, key));
+        let op = lookup(&app, key, "LegacyPort").operation;
+        app.new_request(key, &op).expect("new");
+        assert!(app.quit().expect("quit"));
+    }
+    fs::remove_file(folder.join("wsdl/Legacy.wsdl")).expect("remove");
+
+    let (fake, mut app) = setup.launch();
+    let key = app.projects().next().expect("open").0;
+    let issues = next_check(&fake, &mut app, key);
+    assert!(matches!(
+        app.project(key).expect("open").schema(),
+        SchemaState::Failed(_)
+    ));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+    assert!(!issues[0].is_error());
+    assert!(
+        issues[0].message.contains("only well-formedness"),
+        "{issues:?}"
+    );
 }
