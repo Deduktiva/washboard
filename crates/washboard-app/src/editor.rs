@@ -46,7 +46,29 @@ use crate::text::{changed_range, completion_kinds, hover_text, utf16_edit};
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
 
-/// Colour of a token kind; `None` keeps the text colour.
+/// Every token kind with a colour of its own, for checking the palette's contrast in both
+/// appearances.
+pub fn highlight_palette() -> Vec<(TokenKind, Retained<NSColor>)> {
+    [
+        TokenKind::TagName,
+        TokenKind::TagPrefix,
+        TokenKind::AttrName,
+        TokenKind::AttrValue,
+        TokenKind::Punct,
+        TokenKind::Comment,
+        TokenKind::Doctype,
+        TokenKind::EntityRef,
+        TokenKind::CharRef,
+        TokenKind::Error,
+    ]
+    .into_iter()
+    .filter_map(|kind| Some((kind, color(kind)?)))
+    .collect()
+}
+
+/// Colour of a token kind; `None` keeps the text colour. Only dynamic system colours, which
+/// AppKit resolves for the current appearance at draw time, so a switch to or from Dark Mode
+/// needs no re-highlighting.
 fn color(kind: TokenKind) -> Option<Retained<NSColor>> {
     Some(match kind {
         TokenKind::TagName => NSColor::systemBlueColor(),
@@ -832,6 +854,10 @@ fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
         FONT_SIZE, weight,
     )));
     text_view.setRichText(false);
+    // Set rather than left to the defaults: these are the colours the highlighting palette is
+    // checked against, in both appearances.
+    text_view.setTextColor(Some(&NSColor::textColor()));
+    text_view.setBackgroundColor(&NSColor::textBackgroundColor());
     text_view.setAllowsUndo(true);
     text_view.setUsesFindBar(true);
     code_text(&text_view);
