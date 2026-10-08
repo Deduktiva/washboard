@@ -46,9 +46,7 @@ pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, toolbar_identifiers};
 #[cfg(target_os = "macos")]
-pub use sheets::{
-    NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
-};
+pub use sheets::{ImportSheetController, SettingsSheet};
 #[cfg(target_os = "macos")]
 pub use sidebar::{NodeKind, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]
