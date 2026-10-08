@@ -15,12 +15,12 @@ use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSControlStateValue, NSControlStateValueOff,
     NSControlStateValueOn, NSControlTextEditingDelegate, NSGridView, NSLayoutAttribute,
     NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSecureTextField, NSSplitView, NSStackView,
-    NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation,
-    NSView, NSWindow, NSWindowStyleMask,
+    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSString, ns_string,
+    NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSString, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{
@@ -30,6 +30,9 @@ use washboard_ui_model::{
 use crate::app::with_delegate;
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
+
+/// The ✓/✗ columns: wide enough for the mark, so the reference text gets the room.
+const MARK_WIDTH: f64 = 22.0;
 
 /// The import sheet's controls.
 #[derive(Debug)]
@@ -182,17 +185,19 @@ impl ImportSheetController {
             sel!(finish:),
         );
         finish.setKeyEquivalent(ns_string!("\r"));
-        let buttons = row(vec![view(cancel), view(finish.clone())], mtm);
+        let buttons = trailing_row(vec![view(cancel), view(finish.clone())], mtm);
+        references.fix_column_width(0, MARK_WIDTH);
+        messages.fix_column_width(0, MARK_WIDTH);
 
-        let content = column(
+        let content = window_content(
             vec![
                 form,
                 label("References", mtm),
                 view(references.view().retain()),
                 view(messages.view().retain()),
                 view(status.clone()),
-                buttons,
             ],
+            buttons,
             mtm,
         );
         let title = if new_project {
@@ -678,7 +683,11 @@ impl SettingsSheet {
 
         let done = target_button("Done", &this, sel!(done:), mtm);
         done.setKeyEquivalent(ns_string!("\r"));
-        let content = column(vec![view(tabs.clone()), view(done)], mtm);
+        let content = window_content(
+            vec![view(tabs.clone())],
+            trailing_row(vec![view(done)], mtm),
+            mtm,
+        );
         let window = sheet_window(
             &format!("{project} — Settings"),
             NSSize::new(640.0, 420.0),
@@ -1078,6 +1087,16 @@ fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
     v.retain()
 }
 
+/// Dialog buttons, pushed to the trailing edge.
+fn trailing_row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    let stack = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    for v in &views {
+        stack.addView_inGravity(v, NSStackViewGravity::Trailing);
+    }
+    view(stack)
+}
+
 fn row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
@@ -1085,9 +1104,33 @@ fn row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> 
 }
 
 fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    view(column_stack(views, mtm))
+}
+
+fn column_stack(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSStackView> {
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::Leading);
+    stack
+}
+
+/// A window's content: a column with the standard 20 pt margin, its buttons at the trailing
+/// edge.
+fn window_content(
+    views: Vec<Retained<NSView>>,
+    buttons: Retained<NSView>,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let stack = column_stack(views, mtm);
+    stack.addView_inGravity(&buttons, NSStackViewGravity::Bottom);
+    stack.setEdgeInsets(NSEdgeInsets {
+        top: 20.0,
+        left: 20.0,
+        bottom: 20.0,
+        right: 20.0,
+    });
+    stack.setSpacing(12.0);
+    stack.setAlignment(NSLayoutAttribute::Width);
     view(stack)
 }
 
