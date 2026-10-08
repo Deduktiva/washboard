@@ -255,11 +255,13 @@ define_class!(
         }
     }
 
-    // SAFETY: `NSControlTextEditingDelegate` has no safety requirements.
-    unsafe impl NSControlTextEditingDelegate for SidebarController {}
-
     // SAFETY: `NSTextFieldDelegate` has no safety requirements.
-    unsafe impl NSTextFieldDelegate for SidebarController {
+    unsafe impl NSTextFieldDelegate for SidebarController {}
+
+    // SAFETY: `NSControlTextEditingDelegate` has no safety requirements.
+    // `controlTextDidEndEditing:` is declared here, not on `NSTextFieldDelegate`; objc2 checks
+    // that at class registration.
+    unsafe impl NSControlTextEditingDelegate for SidebarController {
         // SAFETY: the signature matches `controlTextDidEndEditing:`.
         #[unsafe(method(controlTextDidEndEditing:))]
         fn did_end_editing(&self, notification: &NSNotification) {
