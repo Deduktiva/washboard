@@ -44,7 +44,7 @@ pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
 pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, toolbar_identifiers};
+pub use project_window::{ProjectWindowController, sidebar_actions_menu, toolbar_identifiers};
 #[cfg(target_os = "macos")]
 pub use sheets::{ImportSheetController, SettingsSheet};
 #[cfg(target_os = "macos")]
