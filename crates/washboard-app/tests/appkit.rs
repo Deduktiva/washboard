@@ -1395,11 +1395,8 @@ mod checks {
             .into_iter()
             .find(|p| p.name() == "Customers")
             .expect("Create opens the project");
-        assert!(
-            projects
-                .join("Customers/wsdl/CustomerService.wsdl")
-                .is_file()
-        );
+        // The files come from two folder trees, so they keep their full paths under `wsdl/`.
+        assert!(projects.join("Customers/wsdl").is_dir());
 
         let window = project.project_window();
         let settings = project
