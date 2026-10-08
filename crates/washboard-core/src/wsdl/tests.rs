@@ -191,6 +191,10 @@ fn customer_operations_headers_and_soap_actions() {
         Support::Unsupported(UnsupportedReason::Soap12)
     );
     assert_eq!(
+        b12.operations[0].support.reason(),
+        Some(&UnsupportedReason::Soap12)
+    );
+    assert_eq!(
         b12.operations[0].soap_action.as_deref(),
         Some("urn:example:customer:service/GetCustomer")
     );
