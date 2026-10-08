@@ -24,9 +24,9 @@ use crate::soap::XSD_NS;
 use super::defs::{Definitions, Direction, Operation, PartContent, Protocol, Style};
 use super::graph::{FileKind, Owner, RefKind, Walk, parse};
 use super::source::percent_encode_path;
-use super::text::{Edit, splice, xml_decl_encoding};
+use super::text::{Edit, splice};
 use crate::diag::LineIndex;
-use crate::xml::{escape_attr, start_tag_at};
+use crate::xml::{declared_encoding, escape_attr, start_tag_at};
 
 /// URI prefix of supplied files inside the bundle; the rest is the percent-encoded
 /// project-relative path.
@@ -264,7 +264,7 @@ pub(crate) fn build(
                 let Some(src) = w.files[f].text.as_deref() else {
                     continue;
                 };
-                if let Some(r) = xml_decl_encoding(src)
+                if let Some(r) = declared_encoding(src.as_bytes())
                     && !src[r.clone()].eq_ignore_ascii_case("utf-8")
                 {
                     // The text is UTF-8 now; a stale declaration would make libxml2

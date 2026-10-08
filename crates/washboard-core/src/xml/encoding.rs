@@ -1,6 +1,10 @@
 //! Byte-level decoding of XML input and encoding of request files.
 
+use std::ops::Range;
+
 use thiserror::Error;
+
+use super::names::is_xml_ws;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
@@ -44,7 +48,8 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, DecodeError> {
     if bytes.starts_with(&[0x00, 0x3C, 0x00, 0x3F]) {
         return utf16(bytes, Encoding::Utf16Be, false);
     }
-    match declared_encoding(bytes).map(|e| e.to_ascii_lowercase()) {
+    let declared = declared_encoding(bytes).and_then(|r| std::str::from_utf8(&bytes[r]).ok());
+    match declared.map(str::to_ascii_lowercase) {
         None => utf8(bytes, false),
         Some(e) if e == "utf-8" || e == "utf8" || e == "us-ascii" || e == "ascii" => {
             utf8(bytes, false)
@@ -55,7 +60,7 @@ pub fn decode(bytes: &[u8]) -> Result<Decoded, DecodeError> {
             had_bom: false,
         }),
         Some(_) => Err(DecodeError::UnsupportedEncoding(
-            declared_encoding(bytes).unwrap_or_default(),
+            declared.unwrap_or_default().to_owned(),
         )),
     }
 }
@@ -115,21 +120,32 @@ fn utf16(bytes: &[u8], encoding: Encoding, had_bom: bool) -> Result<Decoded, Dec
     })
 }
 
-/// Reads `encoding="…"` from an ASCII-compatible XML declaration, if present.
-fn declared_encoding(bytes: &[u8]) -> Option<String> {
+/// The byte range of the value of `encoding="…"` in a leading XML declaration, if present.
+///
+/// Takes the raw bytes of an ASCII-compatible document or decoded text (`text.as_bytes()`):
+/// the declaration is ASCII, so the range is valid for slicing either.
+pub(crate) fn declared_encoding(bytes: &[u8]) -> Option<Range<usize>> {
     if !bytes.starts_with(b"<?xml") {
         return None;
     }
-    let end = bytes.iter().position(|&b| b == b'>')?;
-    let decl = std::str::from_utf8(&bytes[..end]).ok()?;
-    let at = decl.find("encoding")?;
-    let rest = decl[at + "encoding".len()..]
-        .trim_start()
-        .strip_prefix('=')?
-        .trim_start();
-    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
-    let rest = &rest[1..];
-    Some(rest[..rest.find(quote)?].to_owned())
+    let end = bytes.windows(2).position(|w| w == b"?>")?;
+    let decl = &bytes[..end];
+    let skip_ws = |mut i: usize| {
+        while decl.get(i).copied().is_some_and(is_xml_ws) {
+            i += 1;
+        }
+        i
+    };
+    let at = decl.windows(8).position(|w| w == b"encoding")?;
+    let i = skip_ws(at + "encoding".len());
+    if decl.get(i) != Some(&b'=') {
+        return None;
+    }
+    let i = skip_ws(i + 1);
+    let quote = *decl.get(i).filter(|&&q| q == b'"' || q == b'\'')?;
+    let start = i + 1;
+    let len = decl[start..].iter().position(|&b| b == quote)?;
+    Some(start..start + len)
 }
 
 #[cfg(test)]
@@ -178,6 +194,21 @@ mod tests {
         let d = decode(b"<?xml version='1.0' encoding='ISO-8859-1'?><a>\xFC</a>").expect("decodes");
         assert_eq!(d.encoding, Encoding::Latin1);
         assert!(d.text.ends_with("<a>ü</a>"));
+    }
+
+    #[test]
+    fn finds_declared_encoding() {
+        let t = "<?xml version='1.0' encoding = 'UTF-16'?><a/>";
+        let r = declared_encoding(t.as_bytes()).expect("found");
+        assert_eq!(&t[r], "UTF-16");
+        let none = [
+            "<?xml version='1.0'?><a encoding='x'/>",
+            "<a/>",
+            "<?xml encoding='x",
+        ];
+        for t in none {
+            assert_eq!(declared_encoding(t.as_bytes()), None, "{t}");
+        }
     }
 
     #[test]
