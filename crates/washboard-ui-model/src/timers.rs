@@ -36,14 +36,7 @@ impl App {
     }
 
     fn stop_timers_where(&mut self, matches: impl Fn(ProjectKey, TimerKind) -> bool) {
-        let ids: Vec<TimerId> = self
-            .timers
-            .iter()
-            .filter(|(_, (k, t))| matches(*k, *t))
-            .map(|(id, _)| *id)
-            .collect();
-        for id in ids {
-            self.timers.remove(&id);
+        for (id, _) in self.timers.extract_if(|_, (k, t)| matches(*k, *t)) {
             self.front.timers.cancel(id);
         }
     }
