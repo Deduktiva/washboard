@@ -83,6 +83,7 @@ impl ResponseView {
     }
 }
 
+/// Pretty-printed only if it decodes; a lossy fallback is shown as received.
 fn display_body(bytes: &[u8]) -> String {
     match xml::decode(bytes) {
         Ok(decoded) => xml::pretty_print(&decoded.text).unwrap_or(decoded.text),
@@ -306,9 +307,7 @@ impl App {
     pub fn restore_request(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
         let window = self.window_mut(key).ok_or(ModelError::UnknownProject)?;
         let record = window.project.load_history(entry)?;
-        let text = xml::decode(&record.request_body)
-            .map(|d| d.text)
-            .unwrap_or_else(|_| String::from_utf8_lossy(&record.request_body).into_owned());
+        let text = xml::decode_lossy(&record.request_body);
         let editor = window
             .editor
             .as_ref()

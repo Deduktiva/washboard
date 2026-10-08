@@ -242,9 +242,7 @@ fn message_text(start_line: &str, headers: &[(String, String)], body: &[u8]) -> 
         text.push_str(&format!("{name}: {value}\n"));
     }
     text.push('\n');
-    let body =
-        xml::decode(body).map_or_else(|_| String::from_utf8_lossy(body).into_owned(), |d| d.text);
-    text.push_str(&body);
+    text.push_str(&xml::decode_lossy(body));
     text
 }
 
