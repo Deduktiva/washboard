@@ -9,9 +9,11 @@ use std::ffi::CStr;
 
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
+
+use crate::welcome::RecentProject;
 
 const CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
 const SHIFT_CMD: NSEventModifierFlags =
@@ -25,6 +27,9 @@ const FIND_SHOW: isize = 1;
 const FIND_NEXT: isize = 2;
 const FIND_PREVIOUS: isize = 3;
 const FIND_SET_FIND_STRING: isize = 7;
+
+const OPEN_RECENT: &str = "Open Recent";
+const CLEAR_MENU: &str = "Clear Menu";
 
 /// `NSBackspaceCharacter`: the key equivalent AppKit shows as ⌫.
 const BACKSPACE: &str = "\u{8}";
@@ -108,11 +113,11 @@ const APP: &[Entry] = &[
 const FILE: &[Entry] = &[
     item("New Project…", c"newProject:", "n", SHIFT_CMD),
     item("Open Project…", c"openProject:", "o", CMD),
-    // NSDocumentController fills the submenu that holds `clearRecentDocuments:`.
+    // Refilled from the model's recent projects by `set_recent_projects`.
     Entry::Submenu(
-        "Open Recent",
+        OPEN_RECENT,
         Special::None,
-        &[item("Clear Menu", c"clearRecentDocuments:", "", NONE)],
+        &[item(CLEAR_MENU, c"clearRecentProjects:", "", NONE)],
     ),
     Entry::Separator,
     item("Close", c"performClose:", "w", CMD),
@@ -175,6 +180,50 @@ const MAIN: &[Entry] = &[
 pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     let menu = build("", MAIN, app, mtm);
     app.setMainMenu(Some(&menu));
+}
+
+/// Refills File ▸ Open Recent: one item per project, most recent first, whose tag is its index
+/// in the model's list, then Clear Menu.
+pub(crate) fn set_recent_projects(app: &NSApplication, recent: &[RecentProject]) {
+    let mtm = app.mtm();
+    let submenu = app
+        .mainMenu()
+        .and_then(|m| m.itemWithTitle(&NSString::from_str("File")))
+        .and_then(|i| i.submenu())
+        .and_then(|m| m.itemWithTitle(&NSString::from_str(OPEN_RECENT)))
+        .and_then(|i| i.submenu());
+    let Some(submenu) = submenu else {
+        return;
+    };
+    submenu.removeAllItems();
+    for (index, project) in recent.iter().enumerate() {
+        // SAFETY: no target: the action goes up the responder chain to the app delegate, whose
+        // handler takes the sender as its only argument.
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&project.name),
+                Some(sel!(openRecentProject:)),
+                &NSString::new(),
+            )
+        };
+        item.setTag(index as isize);
+        item.setToolTip(Some(&NSString::from_str(&project.path)));
+        submenu.addItem(&item);
+    }
+    if !recent.is_empty() {
+        submenu.addItem(&NSMenuItem::separatorItem(mtm));
+    }
+    // SAFETY: as above.
+    let clear = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(CLEAR_MENU),
+            Some(sel!(clearRecentProjects:)),
+            &NSString::new(),
+        )
+    };
+    submenu.addItem(&clear);
 }
 
 fn build(

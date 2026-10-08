@@ -2,10 +2,12 @@
 //! editor, issues bar and response pane.
 //!
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
-//! answers the Project menu while its window is key. Handlers are stubs until
-//! WP-APP-INTEGRATION binds them to `washboard-ui-model`.
+//! answers the Project menu while its window is key. One per project open in the model; the
+//! app delegate creates and closes it on the model's events. Handlers not bound to the model
+//! yet are stubs (WP-APP-INTEGRATION).
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
+use std::path::Path;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
@@ -24,6 +26,8 @@ use objc2_foundation::{
 };
 
 use dispatch2::{DispatchQueue, MainThreadBound};
+
+use washboard_ui_model::ProjectKey;
 
 use crate::editor::EditorController;
 use crate::panes::{FakeResponse, IssuesBar, ResponsePane, sample_issues};
@@ -95,7 +99,10 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
 
 #[derive(Debug)]
 pub struct ProjectIvars {
+    key: ProjectKey,
     name: String,
+    /// The model has closed the project (or is closing it); the window follows.
+    closing: Cell<bool>,
     sidebar: Retained<SidebarController>,
     editor: Retained<EditorController>,
     issues: OnceCell<Retained<IssuesBar>>,
@@ -120,10 +127,23 @@ define_class!(
 
     // SAFETY: `NSWindowDelegate` has no safety requirements.
     unsafe impl NSWindowDelegate for ProjectWindowController {
+        // SAFETY: the signature matches `windowShouldClose:`.
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            let mut close = true;
+            crate::app::with_delegate(self.mtm(), |app| close = app.close_requested(self));
+            close
+        }
+
         // SAFETY: the signature matches `windowWillClose:`.
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notification: &NSNotification) {
-            crate::app::with_delegate(self.mtm(), |app| app.project_closed(self));
+            // `close` skips `windowShouldClose:`; the model must still let the project go.
+            if !self.is_closing() {
+                crate::app::with_delegate(self.mtm(), |app| {
+                    app.close_requested(self);
+                });
+            }
         }
     }
 
@@ -208,10 +228,18 @@ define_class!(
 );
 
 impl ProjectWindowController {
-    pub fn new(name: &str, mtm: MainThreadMarker) -> Retained<Self> {
+    pub fn new(
+        key: ProjectKey,
+        name: &str,
+        folder: &Path,
+        mtm: MainThreadMarker,
+    ) -> Retained<Self> {
         let window = window(name, mtm);
+        window.setRepresentedFilename(&NSString::from_str(&folder.display().to_string()));
         let this = Self::alloc(mtm).set_ivars(ProjectIvars {
+            key,
             name: name.to_owned(),
+            closing: Cell::new(false),
             sidebar: SidebarController::new(mtm),
             editor: EditorController::new(mtm),
             issues: OnceCell::new(),
@@ -239,8 +267,21 @@ impl ProjectWindowController {
         this
     }
 
+    /// The model's project this window shows.
+    pub fn key(&self) -> ProjectKey {
+        self.ivars().key
+    }
+
     pub fn name(&self) -> &str {
         &self.ivars().name
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.ivars().closing.get()
+    }
+
+    pub(crate) fn set_closing(&self, closing: bool) {
+        self.ivars().closing.set(closing);
     }
 
     pub fn sidebar(&self) -> &SidebarController {
