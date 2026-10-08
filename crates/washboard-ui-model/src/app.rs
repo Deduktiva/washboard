@@ -220,6 +220,15 @@ impl App {
         &self.recent
     }
 
+    /// File ▸ Open Recent ▸ Clear Menu. Written to `state.json` with the open projects, at
+    /// quit.
+    pub fn clear_recent_projects(&mut self) {
+        if !self.recent.is_empty() {
+            self.recent.clear();
+            self.events.push(Event::RecentProjectsChanged);
+        }
+    }
+
     pub fn welcome_visible(&self) -> bool {
         self.projects.is_empty()
     }
@@ -395,7 +404,9 @@ impl App {
         }
     }
 
-    pub(crate) fn alert_error(&self, title: &str, error: &ModelError) {
+    /// Shows `error` as an alert through the front end's [`Dialogs`](crate::Dialogs). For
+    /// errors a command returned to the front end, so they look like the model's own.
+    pub fn alert_error(&self, title: &str, error: &ModelError) {
         self.front.dialogs.alert(Alert {
             title: title.into(),
             message: error.to_string(),
