@@ -3,6 +3,7 @@
 //! user reveals them, so a screen share or screenshot doesn't leak credentials.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::fmt::Write as _;
 use std::time::UNIX_EPOCH;
 
 use objc2::rc::Retained;
@@ -247,7 +248,7 @@ fn status_of(start_line: &str) -> String {
 fn message_text(start_line: &str, headers: &[(String, String)], body: &[u8]) -> String {
     let mut text = format!("{start_line}\n");
     for (name, value) in headers {
-        text.push_str(&format!("{name}: {value}\n"));
+        let _ = writeln!(text, "{name}: {value}");
     }
     text.push('\n');
     let body =
