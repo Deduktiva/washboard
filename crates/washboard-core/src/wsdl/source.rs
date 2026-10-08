@@ -243,41 +243,42 @@ pub(crate) enum Location {
     },
 }
 
+/// Splits off an RFC 3986 scheme: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )` before the first
+/// `:`. A single letter does not count, so a Windows drive letter (`C:/x.xsd`) stays a path.
+pub(crate) fn split_scheme(s: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = s.split_once(':')?;
+    let mut chars = scheme.chars();
+    let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    (valid && scheme.len() > 1).then_some((scheme, rest))
+}
+
 pub(crate) fn classify(raw: &str) -> Location {
     let s = raw.trim();
     let s = s.split('#').next().unwrap_or("");
-    if let Some(colon) = s.find(':') {
-        let scheme = &s[..colon];
-        let is_scheme = scheme.len() > 1
-            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-        if is_scheme {
-            let rest = &s[colon + 1..];
-            if scheme.eq_ignore_ascii_case("file") {
-                let path = match rest.strip_prefix("//") {
-                    Some(after) => after.find('/').map_or("", |i| &after[i..]),
-                    None => rest,
-                };
-                return Location::Path(normalize(&percent_decode(path)));
-            }
-            let after_authority = match rest.strip_prefix("//") {
+    if let Some((scheme, rest)) = split_scheme(s) {
+        if scheme.eq_ignore_ascii_case("file") {
+            let path = match rest.strip_prefix("//") {
                 Some(after) => after.find('/').map_or("", |i| &after[i..]),
                 None => rest,
             };
-            let (path, query) = match after_authority.split_once('?') {
-                Some((p, q)) => (p, Some(q)),
-                None => (after_authority, None),
-            };
-            return Location::Remote {
-                segments: segments(&normalize(&percent_decode(path)))
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect(),
-                has_query: query.is_some_and(|q| !q.is_empty()),
-            };
+            return Location::Path(normalize(&percent_decode(path)));
         }
+        let after_authority = match rest.strip_prefix("//") {
+            Some(after) => after.find('/').map_or("", |i| &after[i..]),
+            None => rest,
+        };
+        let (path, query) = match after_authority.split_once('?') {
+            Some((p, q)) => (p, Some(q)),
+            None => (after_authority, None),
+        };
+        return Location::Remote {
+            segments: segments(&normalize(&percent_decode(path)))
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            has_query: query.is_some_and(|q| !q.is_empty()),
+        };
     }
     let path = s.split('?').next().unwrap_or("");
     Location::Path(percent_decode(path))
