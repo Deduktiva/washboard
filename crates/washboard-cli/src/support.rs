@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use washboard_core::diag;
 use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
-use washboard_core::project::{Project, ProjectError, WsdlFile, WsdlSet};
+use washboard_core::project::{Project, ProjectError, WsdlSet};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::xsd::CompiledSchema;
 use washboard_core::wsdl::{self, Binding, Operation, Protocol, Sources, Style, Support, Wsdl};
@@ -87,21 +87,7 @@ pub fn check_import(entry: &Path, extra: &[PathBuf]) -> anyhow::Result<CheckedIm
             }
         }
     }
-    let files = sources
-        .files()
-        .iter()
-        .zip(&w.layout)
-        .zip(&w.check.files)
-        .filter(|(_, info)| info.used)
-        .map(|((src, layout), _)| WsdlFile {
-            source: PathBuf::from(&src.path),
-            dest: layout.dest.clone(),
-        })
-        .collect();
-    let set = WsdlSet {
-        files,
-        entry: w.entry_dest().to_owned(),
-    };
+    let set = WsdlSet::from_import(&sources, &w);
     Ok(CheckedImport { wsdl: w, set })
 }
 

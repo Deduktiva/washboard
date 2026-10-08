@@ -41,6 +41,7 @@ use uuid::Uuid;
 
 use crate::model::{ProjectId, RequestId, ServerId};
 use crate::secrets::SecretError;
+use crate::wsdl::{Sources, Wsdl};
 use crate::xml::DecodeError;
 
 pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE};
@@ -127,6 +128,28 @@ pub struct WsdlSet {
     pub files: Vec<WsdlFile>,
     /// `dest` of the entry WSDL; must be one of `files`.
     pub entry: String,
+}
+
+impl WsdlSet {
+    /// The files to copy for an import of `sources`: those the check found in use, at the
+    /// destinations its layout chose.
+    pub fn from_import(sources: &Sources, wsdl: &Wsdl) -> WsdlSet {
+        let files = sources
+            .files()
+            .iter()
+            .zip(&wsdl.layout)
+            .zip(&wsdl.check.files)
+            .filter(|(_, info)| info.used)
+            .map(|((src, layout), _)| WsdlFile {
+                source: PathBuf::from(&src.path),
+                dest: layout.dest.clone(),
+            })
+            .collect();
+        WsdlSet {
+            files,
+            entry: wsdl.entry_dest().to_owned(),
+        }
+    }
 }
 
 /// What [`Project::reconcile`] changed.

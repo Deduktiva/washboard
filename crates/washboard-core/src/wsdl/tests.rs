@@ -217,6 +217,33 @@ fn customer_operations_headers_and_soap_actions() {
 }
 
 #[test]
+fn supported_operations_and_soap11_addresses() {
+    let w = customer();
+    assert_eq!(
+        w.soap11_addresses(),
+        [(
+            "CustomerPort".to_owned(),
+            "https://customer.example.invalid/ws/customer".to_owned()
+        )],
+        "the SOAP 1.2 port is not offered"
+    );
+    let ops = w.supported_operations();
+    assert!(!ops.is_empty());
+    assert!(
+        ops.iter()
+            .all(|o| o.binding == q(CUS_SVC, "CustomerBinding"))
+    );
+
+    let w = legacy();
+    let ops = w.supported_operations();
+    assert!(ops.iter().all(|o| o.binding == q(LEGACY, "LegacyBinding")));
+    assert!(
+        !ops.is_empty(),
+        "rpc/literal is supported, rpc/encoded is not"
+    );
+}
+
+#[test]
 fn customer_dispatch() {
     let w = customer();
     let get = w.dispatch(&q(CUS_MSG, "GetCustomer"), None).unwrap();

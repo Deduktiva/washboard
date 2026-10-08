@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use anyhow::Context;
 use washboard_core::diag::Severity;
 use washboard_core::project::{Project, format_timestamp};
-use washboard_core::wsdl::{Protocol, Wsdl};
+use washboard_core::wsdl::Wsdl;
 
 use crate::support::{self, short_time};
 
@@ -33,7 +33,7 @@ pub fn new(
         checked.set.files.len()
     );
     // PLAN §4: the address is only a suggestion; nothing connects until the user adds it.
-    for (port, url) in soap11_addresses(&checked.wsdl) {
+    for (port, url) in checked.wsdl.soap11_addresses() {
         println!(
             "address of port {port}: {url}\n  add it with: washboard -C {} server add {port} {url}",
             shell_word(&dir.display().to_string())
@@ -121,30 +121,9 @@ pub fn show(dir: &Path) -> anyhow::Result<ExitCode> {
 }
 
 fn supported_ops(w: &Wsdl) -> BTreeSet<String> {
-    w.definitions
-        .bindings
+    w.supported_operations()
         .iter()
-        .flat_map(|b| {
-            b.operations
-                .iter()
-                .filter(|o| o.is_supported())
-                .map(|o| format!("{}#{}", b.name, o.name))
-        })
-        .collect()
-}
-
-/// `(port name, address)` of every port bound to a SOAP 1.1 binding.
-fn soap11_addresses(w: &Wsdl) -> Vec<(String, String)> {
-    w.definitions
-        .services
-        .iter()
-        .flat_map(|s| &s.ports)
-        .filter(|p| {
-            w.definitions
-                .binding(&p.binding)
-                .is_some_and(|b| b.protocol == Protocol::Soap11)
-        })
-        .filter_map(|p| Some((p.name.clone(), p.address.clone()?)))
+        .map(ToString::to_string)
         .collect()
 }
 
