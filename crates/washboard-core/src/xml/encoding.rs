@@ -125,27 +125,20 @@ fn utf16(bytes: &[u8], encoding: Encoding, had_bom: bool) -> Result<Decoded, Dec
 /// Takes the raw bytes of an ASCII-compatible document or decoded text (`text.as_bytes()`):
 /// the declaration is ASCII, so the range is valid for slicing either.
 pub(crate) fn declared_encoding(bytes: &[u8]) -> Option<Range<usize>> {
-    if !bytes.starts_with(b"<?xml") {
-        return None;
-    }
-    let end = bytes.windows(2).position(|w| w == b"?>")?;
-    let decl = &bytes[..end];
-    let skip_ws = |mut i: usize| {
-        while decl.get(i).copied().is_some_and(is_xml_ws) {
-            i += 1;
-        }
-        i
-    };
-    let at = decl.windows(8).position(|w| w == b"encoding")?;
-    let i = skip_ws(at + "encoding".len());
-    if decl.get(i) != Some(&b'=') {
-        return None;
-    }
-    let i = skip_ws(i + 1);
-    let quote = *decl.get(i).filter(|&&q| q == b'"' || q == b'\'')?;
-    let start = i + 1;
-    let len = decl[start..].iter().position(|&b| b == quote)?;
-    Some(start..start + len)
+    // The declaration is ASCII; what follows it need not be UTF-8.
+    let head = bytes.utf8_chunks().next()?.valid();
+    let decl = &head[..head.find("?>")?];
+    let ws = |c: char| u8::try_from(c).is_ok_and(is_xml_ws);
+    let (_, rest) = decl.strip_prefix("<?xml")?.split_once("encoding")?;
+    let rest = rest
+        .trim_start_matches(ws)
+        .strip_prefix('=')?
+        .trim_start_matches(ws);
+    let quote = rest.chars().next().filter(|q| matches!(q, '"' | '\''))?;
+    let value = &rest[1..];
+    // `value` is a suffix of `decl`, which starts at byte 0.
+    let start = decl.len() - value.len();
+    Some(start..start + value.find(quote)?)
 }
 
 #[cfg(test)]

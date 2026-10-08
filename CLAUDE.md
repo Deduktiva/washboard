@@ -44,7 +44,7 @@ must likewise skip its build when cross-checking for macOS from another host (se
 - **Scope:** SOAP 1.1 only, `document/literal` and `rpc/literal`. SOAP 1.2 and rpc/encoded
   operations are shown as unsupported, never silently dropped and never an error.
 - **Encodings:** every XML input goes through `xml::decode` before a Rust parser sees it
-  (BOMs and UTF-16 occur in real WSDLs). libxml2 gets the original bytes.
+  (BOMs and UTF-16 occur in real WSDLs). libxml2 gets the decoded text as UTF-8, too.
 - **Positions:** `diag::TextPos` is 1-based line and char column, BOM not counted.
 - **Errors:** per-module error enums with `thiserror`. No `unwrap`/`expect` on user input or
   file contents outside tests; malformed WSDLs are normal input.
