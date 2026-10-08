@@ -13,12 +13,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSMenu, NSMenuItem,
-    NSPopUpButton, NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem,
-    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
-    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
-    NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
+    NSAlert, NSBackingStoreType, NSButton, NSImage, NSMenu, NSMenuItem, NSPopUpButton, NSResponder,
+    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
+    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
+    NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -30,6 +30,7 @@ use washboard_ui_model::{App, ImportTarget, ModelError, ProjectKey};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
+use crate::layout;
 use crate::panes::{IssuesBar, ResponsePane};
 use crate::sheets::{ImportSheetController, SettingsSheet};
 use crate::sidebar::SidebarController;
@@ -44,7 +45,6 @@ const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
         "validateRequest:",
     ),
     ("send", "Send", "paperplane", "sendRequest:"),
-    ("saveAll", "Save All", "square.and.arrow.down", "saveAll:"),
     (
         "httpLog",
         "HTTP Log",
@@ -57,30 +57,23 @@ const SERVER_ITEM: &str = "server";
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     // SAFETY: AppKit's identifier constants are immutable statics.
-    let (toggle, tracking, flexible) = unsafe {
+    let (tracking, flexible) = unsafe {
         (
-            NSToolbarToggleSidebarItemIdentifier,
             NSToolbarSidebarTrackingSeparatorItemIdentifier,
             NSToolbarFlexibleSpaceItemIdentifier,
         )
     };
-    let mut ids = vec![
-        toggle.copy(),
+    // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps. The
+    // server sits right before Send, which goes to it. No Save All: autosave makes it a no-op
+    // nearly always, and File ▸ Save All (⌘S) remains.
+    vec![
         tracking.copy(),
+        NSString::from_str("validate"),
         NSString::from_str(SERVER_ITEM),
-    ];
-    ids.extend(
-        TOOLBAR_ITEMS[..2]
-            .iter()
-            .map(|(id, ..)| NSString::from_str(id)),
-    );
-    ids.push(flexible.copy());
-    ids.extend(
-        TOOLBAR_ITEMS[2..]
-            .iter()
-            .map(|(id, ..)| NSString::from_str(id)),
-    );
-    ids
+        NSString::from_str("send"),
+        flexible.copy(),
+        NSString::from_str("httpLog"),
+    ]
 }
 
 #[derive(Debug)]
@@ -311,6 +304,9 @@ impl ProjectWindowController {
         let toolbar =
             NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("ProjectWindow"));
         toolbar.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        // Icons only, as macOS 26 apps show their toolbars; labels make the unified toolbar
+        // tall and crowded.
+        toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
         window.setToolbar(Some(&toolbar));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
 
@@ -601,6 +597,8 @@ impl ProjectWindowController {
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&outline));
         scroll.setHasVerticalScroller(true);
+        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+        scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
 
         let footer: Vec<Retained<NSView>> = [
@@ -613,15 +611,14 @@ impl ProjectWindowController {
             Retained::into_super(Retained::into_super(footer_button(title, action, mtm)))
         })
         .collect();
-        let footer = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&footer), mtm);
-        footer.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        let footer = layout::row(&footer, mtm);
         footer.setSpacing(2.0);
+        footer.setEdgeInsets(layout::insets(4.0, 10.0, 8.0, 10.0));
 
-        let views = [Retained::into_super(scroll), Retained::into_super(footer)];
-        let pane = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
-        pane.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        pane.setAlignment(NSLayoutAttribute::Leading);
-        pane.setSpacing(0.0);
+        let pane = layout::fill_column(
+            &[Retained::into_super(scroll), Retained::into_super(footer)],
+            mtm,
+        );
         Retained::into_super(pane)
     }
 }
@@ -647,6 +644,7 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     // as well.
     unsafe { window.setReleasedWhenClosed(false) };
     window.setTitle(&NSString::from_str(name));
+    window.setContentMinSize(NSSize::new(720.0, 560.0));
     window
 }
 
@@ -689,7 +687,6 @@ fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NS
     button
 }
 
-/// Editor with the issues bar under it, above the response pane.
 /// The sidebar's ⋯ menu: the request commands without a footer button of their own. The
 /// items go up the responder chain like the Project menu's, so they validate the same way.
 pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
@@ -714,26 +711,42 @@ pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
     menu
 }
 
+/// The editor (with its issues bar) and the response pane each keep at least this much of the
+/// content split; the window's minimum size leaves room for both.
+const MIN_EDITOR_HEIGHT: f64 = 260.0;
+const MIN_RESPONSE_HEIGHT: f64 = 200.0;
+
+/// Editor with the issues bar under it, above the response pane.
 fn content_pane(
     editor: &NSScrollView,
     issues: &NSStackView,
     response: &NSStackView,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
-    let top: [Retained<NSView>; 2] = [
-        Retained::into_super(editor.retain()),
-        Retained::into_super(issues.retain()),
-    ];
-    let top = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&top), mtm);
-    top.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-    top.setAlignment(NSLayoutAttribute::Leading);
-    top.setSpacing(0.0);
+    let top = layout::fill_column(
+        &[
+            Retained::into_super(editor.retain()),
+            Retained::into_super(issues.retain()),
+        ],
+        mtm,
+    );
 
     let split = NSSplitView::new(mtm);
     // Horizontal dividers: editor above, response below.
     split.setVertical(false);
+    // A hairline, not the thick divider with its dimple.
+    split.setDividerStyle(NSSplitViewDividerStyle::Thin);
     split.addSubview(&top);
     split.addSubview(response);
+    // The split starts at zero size, so without minimums the editor keeps all the height
+    // once the window lays out and the response pane is a sliver.
+    top.heightAnchor()
+        .constraintGreaterThanOrEqualToConstant(MIN_EDITOR_HEIGHT)
+        .setActive(true);
+    response
+        .heightAnchor()
+        .constraintGreaterThanOrEqualToConstant(MIN_RESPONSE_HEIGHT)
+        .setActive(true);
     split.adjustSubviews();
     Retained::into_super(split)
 }

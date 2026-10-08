@@ -9,10 +9,10 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSScrollView,
-    NSStackView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
-    NSWindowStyleMask, NSWindowTitleVisibility,
+    NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
+    NSScrollView, NSStackView, NSTableColumn, NSTableView, NSTableViewDataSource,
+    NSTableViewDelegate, NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
+    NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
@@ -45,6 +45,8 @@ impl RecentProject {
 const WIDTH: f64 = 640.0;
 const HEIGHT: f64 = 400.0;
 const LEFT: f64 = 250.0;
+const ICON: f64 = 96.0;
+const BUTTON_WIDTH: f64 = 160.0;
 
 #[derive(Debug)]
 pub struct WelcomeIvars {
@@ -193,11 +195,27 @@ fn window(mtm: MainThreadMarker) -> Retained<NSWindow> {
     window
 }
 
-fn left_pane(mtm: MainThreadMarker) -> Retained<NSStackView> {
+/// Icon, name, version and the two buttons, centred in the left part of the window. Auto
+/// Layout, not frames: a stack view sizes its arranged views itself, so a frame set on the
+/// icon is ignored and the column ends up pinned to a corner.
+fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
+    let pane = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(LEFT, HEIGHT)),
+    );
+    pane.setAutoresizingMask(NSAutoresizingMaskOptions::ViewHeightSizable);
+
     let mut views: Vec<Retained<NSView>> = Vec::new();
     if let Some(icon) = NSApplication::sharedApplication(mtm).applicationIconImage() {
         let image = NSImageView::imageViewWithImage(&icon, mtm);
-        image.setFrameSize(NSSize::new(96.0, 96.0));
+        image
+            .widthAnchor()
+            .constraintEqualToConstant(ICON)
+            .setActive(true);
+        image
+            .heightAnchor()
+            .constraintEqualToConstant(ICON)
+            .setActive(true);
         views.push(Retained::into_super(Retained::into_super(image)));
     }
     let name = NSTextField::labelWithString(ns_string!("Washboard"), mtm);
@@ -208,7 +226,8 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSStackView> {
         mtm,
     );
     version.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    views.push(Retained::into_super(Retained::into_super(version)));
+    let version: Retained<NSView> = Retained::into_super(Retained::into_super(version));
+    views.push(version.clone());
     for (title, action) in [
         ("New Project…", sel!(newProject:)),
         ("Open Project…", sel!(openProject:)),
@@ -223,19 +242,29 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSStackView> {
                 mtm,
             )
         };
+        button
+            .widthAnchor()
+            .constraintEqualToConstant(BUTTON_WIDTH)
+            .setActive(true);
         views.push(Retained::into_super(Retained::into_super(button)));
     }
 
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::CenterX);
-    stack.setSpacing(10.0);
-    stack.setFrame(NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(LEFT, HEIGHT),
-    ));
-    stack.setAutoresizingMask(NSAutoresizingMaskOptions::ViewHeightSizable);
+    stack.setSpacing(8.0);
+    stack.setCustomSpacing_afterView(24.0, &version);
+    stack.setTranslatesAutoresizingMaskIntoConstraints(false);
+    pane.addSubview(&stack);
     stack
+        .centerXAnchor()
+        .constraintEqualToAnchor(&pane.centerXAnchor())
+        .setActive(true);
+    stack
+        .centerYAnchor()
+        .constraintEqualToAnchor(&pane.centerYAnchor())
+        .setActive(true);
+    pane
 }
 
 fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTableView>) {
@@ -252,6 +281,8 @@ fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTa
     let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), frame);
     scroll.setDocumentView(Some(&table));
     scroll.setHasVerticalScroller(true);
+    // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+    scroll.setAutohidesScrollers(true);
     scroll.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
@@ -263,6 +294,8 @@ fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSStackV
     let path = NSTextField::labelWithString(&NSString::from_str(&project.path), mtm);
     path.setFont(Some(&NSFont::systemFontOfSize(11.0)));
     path.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    // Long paths keep both ends: the folder's name is at the end.
+    path.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
     let views = [
         Retained::into_super(Retained::into_super(name)),
         Retained::into_super(Retained::into_super(path)),

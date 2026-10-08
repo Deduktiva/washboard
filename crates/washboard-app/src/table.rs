@@ -9,7 +9,8 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSScrollView, NSTableColumn,
-    NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTextField, NSView,
+    NSTableColumnResizingOptions, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+    NSTextField, NSView,
 };
 use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSString};
 
@@ -126,6 +127,8 @@ impl TextTable {
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&table));
         scroll.setHasVerticalScroller(true);
+        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+        scroll.setAutohidesScrollers(true);
         scroll.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
@@ -142,6 +145,16 @@ impl TextTable {
     /// The scroll view to put into a window.
     pub fn view(&self) -> &NSScrollView {
         self.ivars().scroll.get().expect("set in new()")
+    }
+
+    /// Fixes `column` at `width`, e.g. a narrow ✓/✗ column; the others share the rest.
+    pub fn fix_column_width(&self, column: usize, width: f64) {
+        if let Some(c) = self.table().tableColumns().iter().nth(column) {
+            c.setMinWidth(width);
+            c.setMaxWidth(width);
+            c.setWidth(width);
+            c.setResizingMask(NSTableColumnResizingOptions::empty());
+        }
     }
 
     pub fn set_rows(&self, rows: Vec<Vec<String>>) {

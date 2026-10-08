@@ -12,15 +12,16 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSControlStateValue, NSControlStateValueOff,
-    NSControlStateValueOn, NSControlTextEditingDelegate, NSGridView, NSLayoutAttribute,
-    NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSecureTextField, NSSplitView, NSStackView,
-    NSTabView, NSTabViewItem, NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation,
-    NSView, NSWindow, NSWindowStyleMask,
+    NSBackingStoreType, NSBezelStyle, NSButton, NSControlStateValue, NSControlStateValueOff,
+    NSControlStateValueOn, NSControlTextEditingDelegate, NSGridCellPlacement, NSGridRowAlignment,
+    NSGridView, NSLayoutAttribute, NSModalResponse, NSModalResponseOK, NSOpenPanel,
+    NSSecureTextField, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField,
+    NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize,
-    NSString, ns_string,
+    NSArray, NSEdgeInsets, NSIndexSet, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSString, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{
@@ -30,6 +31,13 @@ use washboard_ui_model::{
 use crate::app::with_delegate;
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
+
+/// The ✓/✗ columns: wide enough for the mark, so the reference text gets the room.
+const MARK_WIDTH: f64 = 22.0;
+/// The Servers tab's list column.
+const LIST_WIDTH: f64 = 180.0;
+const TIMEOUT_WIDTH: f64 = 60.0;
+const SQUARE_BUTTON: f64 = 24.0;
 
 /// The import sheet's controls.
 #[derive(Debug)]
@@ -75,6 +83,15 @@ define_class!(
         #[unsafe(method(controlTextDidChange:))]
         fn text_did_change(&self, _notification: &NSNotification) {
             self.name_changed();
+        }
+    }
+
+    // SAFETY: `NSWindowDelegate` has no safety requirements.
+    unsafe impl NSWindowDelegate for ImportSheetController {
+        // SAFETY: the signature matches `windowWillClose:`.
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _notification: &NSNotification) {
+            self.closed();
         }
     }
 
@@ -182,17 +199,19 @@ impl ImportSheetController {
             sel!(finish:),
         );
         finish.setKeyEquivalent(ns_string!("\r"));
-        let buttons = row(vec![view(cancel), view(finish.clone())], mtm);
+        let buttons = trailing_row(vec![view(cancel), view(finish.clone())], mtm);
+        references.fix_column_width(0, MARK_WIDTH);
+        messages.fix_column_width(0, MARK_WIDTH);
 
-        let content = column(
+        let content = window_content(
             vec![
                 form,
                 label("References", mtm),
                 view(references.view().retain()),
                 view(messages.view().retain()),
                 view(status.clone()),
-                buttons,
             ],
+            buttons,
             mtm,
         );
         let title = if new_project {
@@ -200,7 +219,19 @@ impl ImportSheetController {
         } else {
             "Replace WSDL"
         };
-        let window = sheet_window(title, NSSize::new(600.0, 480.0), mtm);
+        let size = NSSize::new(600.0, 480.0);
+        let window = sheet_window(title, size, mtm);
+        if new_project {
+            // Its own window, so that open projects stay usable meanwhile.
+            window.setStyleMask(
+                NSWindowStyleMask::Titled
+                    | NSWindowStyleMask::Closable
+                    | NSWindowStyleMask::Miniaturizable
+                    | NSWindowStyleMask::Resizable,
+            );
+            window.setContentMinSize(size);
+            window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        }
         window.setContentView(Some(&content));
 
         let _ = this.ivars().views.set(ImportViews {
@@ -250,8 +281,15 @@ impl ImportSheetController {
         &self.views().finish
     }
 
+    /// Attaches Replace WSDL to its project's window.
     pub fn present(&self, parent: &NSWindow) {
         parent.beginSheet_completionHandler(self.window(), None);
+    }
+
+    /// Shows New Project as a window of its own, centred on the screen.
+    pub fn show(&self) {
+        self.window().center();
+        self.window().makeKeyAndOrderFront(None);
     }
 
     /// Shows the model's sheet, or ends this one once the model has dropped it (Cancel,
@@ -265,7 +303,7 @@ impl ImportSheetController {
             })
             .flatten();
         let Some(shown) = shown else {
-            end_sheet(self.window());
+            dismiss(self.window());
             return;
         };
         let views = self.views();
@@ -331,7 +369,7 @@ impl ImportSheetController {
             d.sync();
         });
         // Also when the model had no sheet left to cancel.
-        end_sheet(self.window());
+        dismiss(self.window());
     }
 
     /// Create or Replace; also called by tests. Does nothing while disabled. A new project
@@ -366,6 +404,16 @@ impl ImportSheetController {
 
     fn views(&self) -> &ImportViews {
         self.ivars().views.get().expect("set in new()")
+    }
+
+    /// The New Project window's close button means Cancel. Create and Cancel order the window
+    /// out rather than closing it, so the model only still has the sheet when the user closed
+    /// the window.
+    fn closed(&self) {
+        let target = self.target();
+        if self.read(|app| app.import_sheet(target).is_some()) == Some(true) {
+            self.cancel();
+        }
     }
 
     fn name_changed(&self) {
@@ -647,24 +695,43 @@ impl SettingsSheet {
             ],
             mtm,
         );
-        let list = column(
+        set_width(&form.timeout, TIMEOUT_WIDTH);
+        let buttons = [
+            square_button("+", &this, sel!(addServer:), mtm),
+            square_button("−", &this, sel!(removeServer:), mtm),
+        ];
+        let buttons = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&buttons), mtm);
+        buttons.setSpacing(0.0);
+        let list = column_stack(
             vec![
                 view(table.view().retain()),
-                row(
-                    vec![
-                        view(target_button("+", &this, sel!(addServer:), mtm)),
-                        view(target_button("−", &this, sel!(removeServer:), mtm)),
-                    ],
-                    mtm,
-                ),
+                view(buttons),
                 suggestions.clone(),
             ],
             mtm,
         );
-        let servers = NSSplitView::new(mtm);
-        servers.setVertical(true);
-        servers.addSubview(&list);
-        servers.addSubview(&fields);
+        // The +/− buttons sit right under the list, as in System Settings.
+        list.setSpacing(0.0);
+        list.setCustomSpacing_afterView(12.0, &list.arrangedSubviews().objectAtIndex(1));
+        set_width(&list, LIST_WIDTH);
+        // List and form side by side; the form takes the remaining width.
+        let servers = NSStackView::stackViewWithViews(
+            &NSArray::from_retained_slice(&[view(list.clone()), fields]),
+            mtm,
+        );
+        servers.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        servers.setAlignment(NSLayoutAttribute::Top);
+        servers.setSpacing(20.0);
+        servers.setEdgeInsets(NSEdgeInsets {
+            top: 12.0,
+            left: 12.0,
+            bottom: 12.0,
+            right: 12.0,
+        });
+        // The list runs the full height; the form stays at the top.
+        list.heightAnchor()
+            .constraintEqualToAnchor_constant(&servers.heightAnchor(), -24.0)
+            .setActive(true);
 
         let general = label(&format!("Name: {project}"), mtm);
         let tabs = NSTabView::new(mtm);
@@ -678,7 +745,11 @@ impl SettingsSheet {
 
         let done = target_button("Done", &this, sel!(done:), mtm);
         done.setKeyEquivalent(ns_string!("\r"));
-        let content = column(vec![view(tabs.clone()), view(done)], mtm);
+        let content = window_content(
+            vec![view(tabs.clone())],
+            trailing_row(vec![view(done)], mtm),
+            mtm,
+        );
         let window = sheet_window(
             &format!("{project} — Settings"),
             NSSize::new(640.0, 420.0),
@@ -1031,6 +1102,15 @@ fn end_sheet(sheet: &NSWindow) {
     }
 }
 
+/// Ends a sheet, or hides a standalone window without closing it (closing means Cancel).
+fn dismiss(window: &NSWindow) {
+    if window.sheetParent().is_some() {
+        end_sheet(window);
+    } else {
+        window.orderOut(None);
+    }
+}
+
 fn sheet_window(title: &str, size: NSSize, mtm: MainThreadMarker) -> Retained<NSWindow> {
     let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
     // SAFETY: the designated initializer, on the main thread.
@@ -1078,6 +1158,16 @@ fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
     v.retain()
 }
 
+/// Dialog buttons, pushed to the trailing edge.
+fn trailing_row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    let stack = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    for v in &views {
+        stack.addView_inGravity(v, NSStackViewGravity::Trailing);
+    }
+    view(stack)
+}
+
 fn row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
@@ -1085,19 +1175,74 @@ fn row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> 
 }
 
 fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    view(column_stack(views, mtm))
+}
+
+fn column_stack(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSStackView> {
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::Leading);
+    stack
+}
+
+/// A window's content: a column with the standard 20 pt margin, its buttons at the trailing
+/// edge.
+fn window_content(
+    views: Vec<Retained<NSView>>,
+    buttons: Retained<NSView>,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let stack = column_stack(views, mtm);
+    stack.addView_inGravity(&buttons, NSStackViewGravity::Bottom);
+    stack.setEdgeInsets(NSEdgeInsets {
+        top: 20.0,
+        left: 20.0,
+        bottom: 20.0,
+        right: 20.0,
+    });
+    stack.setSpacing(12.0);
+    stack.setAlignment(NSLayoutAttribute::Width);
     view(stack)
 }
 
+/// A form: labels right-aligned on the controls' baselines, controls filling the rest, as
+/// in macOS settings panes.
 fn grid(rows: Vec<Vec<Retained<NSView>>>, mtm: MainThreadMarker) -> Retained<NSView> {
     let rows: Vec<Retained<NSArray<NSView>>> = rows
         .iter()
         .map(|r| NSArray::from_retained_slice(r))
         .collect();
-    view(NSGridView::gridViewWithViews(
-        &NSArray::from_retained_slice(&rows),
-        mtm,
-    ))
+    let grid = NSGridView::gridViewWithViews(&NSArray::from_retained_slice(&rows), mtm);
+    grid.setRowAlignment(NSGridRowAlignment::FirstBaseline);
+    grid.setColumnSpacing(8.0);
+    grid.setRowSpacing(10.0);
+    grid.columnAtIndex(0)
+        .setXPlacement(NSGridCellPlacement::Trailing);
+    grid.columnAtIndex(1)
+        .setXPlacement(NSGridCellPlacement::Fill);
+    view(grid)
+}
+
+/// Pins `v`'s width, which a stack view respects where frames are ignored.
+fn set_width(v: &NSView, width: f64) {
+    v.widthAnchor()
+        .constraintEqualToConstant(width)
+        .setActive(true);
+}
+
+/// The small square +/− buttons under a list.
+fn square_button(
+    title: &str,
+    target: &NSObject,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let button = target_button(title, target, action, mtm);
+    button.setBezelStyle(NSBezelStyle::SmallSquare);
+    set_width(&button, SQUARE_BUTTON);
+    button
+        .heightAnchor()
+        .constraintEqualToConstant(SQUARE_BUTTON)
+        .setActive(true);
+    view(button)
 }

@@ -7,8 +7,8 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSFont, NSLayoutAttribute, NSScrollView, NSStackView, NSTabView,
-    NSTabViewItem, NSTextField, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
+    NSButton, NSColor, NSControlSize, NSFont, NSScrollView, NSStackView, NSStackViewGravity,
+    NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
 };
 use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
@@ -19,6 +19,7 @@ use washboard_ui_model::{App, Issue, ModelError, ProjectKey, ResponseView};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
+use crate::layout;
 use crate::table::TextTable;
 
 #[derive(Debug)]
@@ -28,6 +29,8 @@ pub struct IssuesIvars {
     /// The listed issues, in the table's order.
     issues: RefCell<Vec<Issue>>,
     summary: OnceCell<Retained<NSTextField>>,
+    /// Hide or Show, for the list.
+    hide: OnceCell<Retained<NSButton>>,
     view: OnceCell<Retained<NSStackView>>,
 }
 
@@ -49,7 +52,7 @@ define_class!(
         #[unsafe(method(toggleIssues:))]
         fn toggle(&self, _sender: Option<&AnyObject>) {
             let list = self.ivars().table.view();
-            list.setHidden(!list.isHidden());
+            self.show_list(list.isHidden());
         }
     }
 );
@@ -62,6 +65,7 @@ impl IssuesBar {
             table,
             issues: RefCell::new(Vec::new()),
             summary: OnceCell::new(),
+            hide: OnceCell::new(),
             view: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -80,12 +84,15 @@ impl IssuesBar {
                 mtm,
             )
         };
-        let header: [Retained<NSView>; 2] = [
-            Retained::into_super(Retained::into_super(summary.clone())),
-            Retained::into_super(Retained::into_super(hide)),
-        ];
-        let header = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&header), mtm);
-        header.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        hide.setControlSize(NSControlSize::Small);
+        let header = layout::row(
+            &[
+                Retained::into_super(Retained::into_super(summary.clone())),
+                Retained::into_super(Retained::into_super(hide.clone())),
+            ],
+            mtm,
+        );
+        header.setEdgeInsets(layout::insets(4.0, 8.0, 4.0, 8.0));
 
         // The table belongs to this bar: a strong reference back would be a cycle.
         let bar = Weak::from(&*this);
@@ -95,11 +102,11 @@ impl IssuesBar {
             }
         });
         let list: Retained<NSView> = Retained::into_super(this.ivars().table.view().retain());
-        let views = [Retained::into_super(header), list];
-        let view = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
-        view.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        view.setAlignment(NSLayoutAttribute::Leading);
+        layout::set_height(&list, ISSUES_HEIGHT);
+        let view = layout::fill_column(&[Retained::into_super(header), list], mtm);
+        layout::hug_vertically(&view);
         let _ = this.ivars().summary.set(summary);
+        let _ = this.ivars().hide.set(hide);
         let _ = this.ivars().view.set(view);
         this
     }
@@ -154,7 +161,19 @@ impl IssuesBar {
 
     /// Shows the list if it was hidden (`ShowIssues`).
     pub fn reveal(&self) {
-        self.ivars().table.view().setHidden(false);
+        self.show_list(true);
+    }
+
+    /// A hidden list leaves the stack, so the editor takes its height.
+    fn show_list(&self, shown: bool) {
+        self.ivars().table.view().setHidden(!shown);
+        if let Some(hide) = self.ivars().hide.get() {
+            hide.setTitle(if shown {
+                ns_string!("Hide")
+            } else {
+                ns_string!("Show")
+            });
+        }
     }
 
     /// A click on row `row`: selects the issue's range, else its line.
@@ -171,6 +190,9 @@ impl IssuesBar {
         }
     }
 }
+
+/// The issues list's height while shown; the editor gets the rest.
+const ISSUES_HEIGHT: f64 = 110.0;
 
 pub const RESPONSE_TABS: [&str; 3] = ["Response", "Headers", "History"];
 
@@ -215,6 +237,7 @@ impl ResponsePane {
         let body = EditorController::new(mtm);
         body.text_view().setEditable(false);
         let headers = NSTextView::scrollableTextView(mtm);
+        headers.setAutohidesScrollers(true);
         if let Some(text) = headers
             .documentView()
             .and_then(|v| v.downcast::<NSTextView>().ok())
@@ -256,14 +279,17 @@ impl ResponsePane {
                 mtm,
             )
         };
-        let history_page: [Retained<NSView>; 2] = [
-            Retained::into_super(this.ivars().history.view().retain()),
-            Retained::into_super(Retained::into_super(restore)),
-        ];
-        let history_page =
-            NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&history_page), mtm);
-        history_page.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        history_page.setAlignment(NSLayoutAttribute::Leading);
+        let buttons = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        buttons.addView_inGravity(&restore, NSStackViewGravity::Trailing);
+        buttons.setEdgeInsets(layout::insets(8.0, 8.0, 8.0, 8.0));
+        layout::hug_vertically(&buttons);
+        let history_page = layout::fill_column(
+            &[
+                Retained::into_super(this.ivars().history.view().retain()),
+                Retained::into_super(buttons),
+            ],
+            mtm,
+        );
 
         let pages: [Retained<NSView>; 3] = [
             Retained::into_super(this.ivars().body.view().retain()),
@@ -273,16 +299,23 @@ impl ResponsePane {
         for (label, page) in RESPONSE_TABS.iter().zip(&pages) {
             let item = NSTabViewItem::new();
             item.setLabel(&NSString::from_str(label));
-            item.setView(Some(page));
+            item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
-        let views: [Retained<NSView>; 2] = [
-            Retained::into_super(Retained::into_super(this.ivars().status.clone())),
-            Retained::into_super(this.ivars().tabs.clone()),
-        ];
-        let view = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
-        view.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        view.setAlignment(NSLayoutAttribute::Leading);
+        let status = layout::row(
+            &[Retained::into_super(Retained::into_super(
+                this.ivars().status.clone(),
+            ))],
+            mtm,
+        );
+        status.setEdgeInsets(layout::insets(6.0, 8.0, 2.0, 8.0));
+        let view = layout::fill_column(
+            &[
+                Retained::into_super(status),
+                Retained::into_super(this.ivars().tabs.clone()),
+            ],
+            mtm,
+        );
         let _ = this.ivars().view.set(view);
         this
     }

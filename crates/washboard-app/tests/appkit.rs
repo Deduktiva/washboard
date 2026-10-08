@@ -64,11 +64,12 @@ mod checks {
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
         NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
-        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView, NSWindow,
+        NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
+        NSView,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRunLoop, NSString,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -78,7 +79,9 @@ mod checks {
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
-    use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs, ProjectKey};
+    use washboard_ui_model::{
+        Alert, Confirm, DialogAnswer, DialogId, Dialogs, ImportTarget, ProjectKey,
+    };
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -316,6 +319,7 @@ mod checks {
     const C: usize = NSEventModifierFlags::Command.0;
     const S: usize = NSEventModifierFlags::Shift.0;
     const O: usize = NSEventModifierFlags::Option.0;
+    const CTRL: usize = NSEventModifierFlags::Control.0;
 
     /// (title, key equivalent, modifiers, action); `-` is a separator, an action of `>` a
     /// submenu.
@@ -363,6 +367,7 @@ mod checks {
                 ("Find", "", 0, ">"),
             ],
         ),
+        ("View", &[("Show Sidebar", "s", CTRL | C, "toggleSidebar:")]),
         (
             "Project",
             &[
@@ -497,7 +502,35 @@ mod checks {
         let welcome = ctx.delegate.welcome();
         assert!(welcome.window().isVisible(), "welcome window back");
 
+        // The left column sits centred in its pane, clear of the edges.
+        let content = welcome.window().contentView().expect("content view");
+        content.layoutSubtreeIfNeeded();
+        let pane = content.subviews().firstObject().expect("the left pane");
+        let column = pane.subviews().firstObject().expect("the column");
+        let (outer, inner) = (pane.bounds(), column.frame());
+        assert!(
+            inner.size.height > 0.0 && inner.size.width > 0.0,
+            "{inner:?}"
+        );
+        let centre = |r: NSRect| {
+            (
+                r.origin.x + r.size.width / 2.0,
+                r.origin.y + r.size.height / 2.0,
+            )
+        };
+        let ((ox, oy), (ix, iy)) = (centre(outer), centre(inner));
+        assert!(
+            (ox - ix).abs() < 1.0 && (oy - iy).abs() < 1.0,
+            "{outer:?} {inner:?}"
+        );
+        assert!(inner.origin.y > 0.0, "clear of the bottom edge: {inner:?}");
+
         let table = welcome.table();
+        let scroll = table.enclosingScrollView().expect("the table scrolls");
+        assert!(
+            scroll.autohidesScrollers(),
+            "no idle scroller beside one recent project"
+        );
         assert_eq!(table.numberOfRows(), 1);
         let view = table
             .viewAtColumn_row_makeIfNecessary(0, 0, true)
@@ -585,6 +618,7 @@ mod checks {
             .map(|i| i.to_string())
             .collect();
         assert_eq!(ids, expected, "toolbar items");
+        assert_eq!(toolbar.displayMode(), NSToolbarDisplayMode::IconOnly);
 
         // The sidebar's ⋯ menu offers the request commands with no button of their own.
         let more =
@@ -595,6 +629,45 @@ mod checks {
             .map(|i| i.title().to_string())
             .collect();
         assert_eq!(titles, ["Rename", "Duplicate", "Validate"]);
+
+        // Stacked views share the height instead of drawing over each other.
+        window.layoutIfNeeded();
+        let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let editor = in_window(project.editor().view());
+        let issues = in_window(project.issues().view());
+        assert!(
+            editor.size.height > 100.0,
+            "the editor takes the slack: {editor:?}"
+        );
+        assert!(
+            issues.origin.y + issues.size.height <= editor.origin.y + 0.5,
+            "the issues bar sits below the editor: {issues:?} vs {editor:?}"
+        );
+        project.response().tabs().selectTabViewItemAtIndex(2);
+        let history = || project.response().history().view().frame();
+        // Give AppKit a few turns to frame the newly selected page.
+        for _ in 0..40 {
+            if history().size.height > 40.0 {
+                break;
+            }
+            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+        }
+        let history = history();
+        // SAFETY: reading the view hierarchy on the main thread; nothing is changed.
+        let page = unsafe { project.response().history().view().superview() };
+        // SAFETY: as above.
+        let container = page.as_ref().and_then(|p| unsafe { p.superview() });
+        assert!(
+            history.size.height > 40.0 && history.size.width > 400.0,
+            "the history list has room: {history:?} in page {:?} in container {:?}, tab content \
+             {:?}, tabs {:?}, pane {:?}",
+            page.map(|v| v.frame()),
+            container.map(|v| v.frame()),
+            project.response().tabs().contentRect(),
+            project.response().tabs().frame(),
+            project.response().view().frame()
+        );
+        project.response().tabs().selectTabViewItemAtIndex(0);
 
         let split = project.split_view();
         let items = split.splitViewItems();
@@ -1427,19 +1500,23 @@ mod checks {
 
         // SAFETY: `newProject:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
-        let welcome = ctx.delegate.welcome().window().retain();
-        wait_until("the sheet to attach", || welcome.attachedSheet().is_some());
         let sheet = ctx
             .delegate
             .new_project_sheet()
             .expect("created by newProject:");
-        assert_eq!(
-            welcome
-                .attachedSheet()
-                .as_deref()
-                .map(|w| w as *const NSWindow),
-            Some(sheet.window() as *const NSWindow),
-            "one New Project sheet, on the welcome window"
+        let window = sheet.window().retain();
+        wait_until("the window to show", || window.isVisible());
+        assert!(
+            window.sheetParent().is_none(),
+            "its own window, not a sheet"
+        );
+        // SAFETY: `newProject:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
+        assert!(
+            ctx.delegate
+                .new_project_sheet()
+                .is_some_and(|again| std::ptr::eq(&*again, &*sheet)),
+            "a second New Project brings the first forward"
         );
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
@@ -1474,7 +1551,7 @@ mod checks {
         assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
         sheet.finish();
-        wait_until("the sheet to end", || welcome.attachedSheet().is_none());
+        wait_until("the window to hide", || !window.isVisible());
         let project = ctx
             .delegate
             .projects()
@@ -1505,6 +1582,19 @@ mod checks {
         let _: () = unsafe { msg_send![settings, done: None::<&AnyObject>] };
         wait_until("the sheet to end", || window.attachedSheet().is_none());
         autoreleasepool(|_| window.performClose(None));
+
+        // The close button cancels, like Cancel.
+        let sheet = ctx.delegate.show_new_project_sheet();
+        let window = sheet.window().retain();
+        wait_until("the window to show", || window.isVisible());
+        autoreleasepool(|_| window.performClose(None));
+        assert!(!window.isVisible());
+        assert_eq!(
+            ctx.delegate
+                .read(|app| app.import_sheet(ImportTarget::NewProject).is_some()),
+            Some(false),
+            "closing the window cancels the import"
+        );
     }
 
     /// Replace WSDL checks the new files like New Project, swaps the WSDL and says what
@@ -1565,6 +1655,22 @@ mod checks {
             .selectedTabViewItem()
             .map(|t| t.label().to_string());
         assert_eq!(selected_tab.as_deref(), Some("Servers"));
+        sheet.window().layoutIfNeeded();
+        let content = sheet.window().contentLayoutRect().size;
+        // Auto Layout places the alignment rect; a tab view's frame reaches past it.
+        let tabs = sheet
+            .tabs()
+            .alignmentRectForFrame(sheet.tabs().frame())
+            .size;
+        assert!(
+            (tabs.width - (content.width - 40.0)).abs() < 1.0,
+            "the tabs fill the sheet inside its margins: {tabs:?} in {content:?}"
+        );
+        let list = sheet.table().view().frame().size;
+        assert!(
+            (list.width - 180.0).abs() < 1.0 && list.height > 100.0,
+            "the server list keeps its column: {list:?}"
+        );
 
         let names = table_column(sheet.table(), 0);
         assert_eq!(names, server_names(ctx, key));

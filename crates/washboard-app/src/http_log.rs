@@ -279,6 +279,7 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
 
 fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
     let scroll = NSTextView::scrollableTextView(mtm);
+    scroll.setAutohidesScrollers(true);
     if let Some(text) = text_view(&scroll) {
         text.setEditable(false);
     }

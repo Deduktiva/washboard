@@ -20,6 +20,8 @@ const SHIFT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Shift.0);
 const OPT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Option.0);
+const CTRL_CMD: NSEventModifierFlags =
+    NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Control.0);
 const NONE: NSEventModifierFlags = NSEventModifierFlags(0);
 
 /// `NSFindPanelAction` values, sent as the item's tag with `performFindPanelAction:`.
@@ -145,6 +147,10 @@ const EDIT: &[Entry] = &[
     ),
 ];
 
+// `toggleSidebar:` reaches the project window's split view controller, which also retitles
+// the item Show or Hide Sidebar.
+const VIEW: &[Entry] = &[item("Show Sidebar", c"toggleSidebar:", "s", CTRL_CMD)];
+
 const PROJECT: &[Entry] = &[
     item("New Request", c"newRequest:", "n", CMD),
     item("Duplicate", c"duplicateRequest:", "d", CMD),
@@ -171,6 +177,7 @@ const MAIN: &[Entry] = &[
     Entry::Submenu("Washboard", Special::None, APP),
     Entry::Submenu("File", Special::None, FILE),
     Entry::Submenu("Edit", Special::None, EDIT),
+    Entry::Submenu("View", Special::None, VIEW),
     Entry::Submenu("Project", Special::None, PROJECT),
     Entry::Submenu("Window", Special::Window, WINDOW),
 ];
