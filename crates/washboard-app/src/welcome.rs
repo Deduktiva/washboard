@@ -281,6 +281,8 @@ fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTa
     let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), frame);
     scroll.setDocumentView(Some(&table));
     scroll.setHasVerticalScroller(true);
+    // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+    scroll.setAutohidesScrollers(true);
     scroll.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );

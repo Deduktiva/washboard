@@ -601,6 +601,8 @@ impl ProjectWindowController {
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&outline));
         scroll.setHasVerticalScroller(true);
+        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+        scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
 
         let footer: Vec<Retained<NSView>> = [

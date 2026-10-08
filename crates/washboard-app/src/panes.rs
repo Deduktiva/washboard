@@ -215,6 +215,7 @@ impl ResponsePane {
         let body = EditorController::new(mtm);
         body.text_view().setEditable(false);
         let headers = NSTextView::scrollableTextView(mtm);
+        headers.setAutohidesScrollers(true);
         if let Some(text) = headers
             .documentView()
             .and_then(|v| v.downcast::<NSTextView>().ok())

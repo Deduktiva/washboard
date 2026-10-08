@@ -524,6 +524,11 @@ mod checks {
         assert!(inner.origin.y > 0.0, "clear of the bottom edge: {inner:?}");
 
         let table = welcome.table();
+        let scroll = table.enclosingScrollView().expect("the table scrolls");
+        assert!(
+            scroll.autohidesScrollers(),
+            "no idle scroller beside one recent project"
+        );
         assert_eq!(table.numberOfRows(), 1);
         let view = table
             .viewAtColumn_row_makeIfNecessary(0, 0, true)

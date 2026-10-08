@@ -357,6 +357,8 @@ impl EditorController {
         let scroll = NSScrollView::new(mtm);
         scroll.setHasVerticalScroller(true);
         scroll.setHasHorizontalScroller(true);
+        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+        scroll.setAutohidesScrollers(true);
         scroll.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
