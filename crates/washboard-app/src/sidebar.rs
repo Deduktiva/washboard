@@ -452,6 +452,10 @@ impl SidebarController {
         unsafe { outline.setOutlineTableColumn(Some(&column)) };
         outline.setHeaderView(None);
         outline.setStyle(NSTableViewStyle::SourceList);
+        // A floating group row draws a separator under itself. At the top of the list the first
+        // header counts as floating, so the line came and went with hover redraws; the sidebar
+        // is short enough that headers need not stay pinned while scrolling.
+        outline.setFloatsGroupRows(false);
         // SAFETY: the project window controller owns this controller and the outline view's
         // window, so the controller outlives the outline view's weak references to it, the
         // target included; `sidebarDoubleClicked:` takes the sender.
