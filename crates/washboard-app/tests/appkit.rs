@@ -698,6 +698,10 @@ mod checks {
         let rows = all_nodes(&project.sidebar().roots()).len();
         let outline = project.sidebar().outline().expect("outline built");
         assert_eq!(outline.numberOfRows() as usize, rows, "sidebar rows");
+        assert!(
+            !outline.floatsGroupRows(),
+            "headers do not float, so the first one draws no separator"
+        );
 
         // AppKit holds data sources and delegates weakly: they must survive a pool drain.
         autoreleasepool(|_| outline.reloadData());
