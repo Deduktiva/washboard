@@ -341,8 +341,8 @@ persisted. Bodies over 5 MB are truncated in the view.
 ### Save / autosave
 - Each editor is a buffer with a dirty flag. Autosave 1 s after the last keystroke, and
   immediately on: switching requests, send, window losing key, app deactivate, quit.
-- ⌘S = **Save All** across every open project (toolbar button too). Since autosave is
-  aggressive, it mostly acts as "flush now"; the window's edited dot reflects unsaved buffers.
+- ⌘S = **Save All** across every open project (menu only, no toolbar button). Since autosave
+  is aggressive, it mostly acts as "flush now"; the window's edited dot reflects unsaved buffers.
 - Metadata changes (servers, renames, last server) go straight to SQLite.
 
 ### Multiple projects / restore
