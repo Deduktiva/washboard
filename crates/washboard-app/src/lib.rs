@@ -13,24 +13,36 @@ mod app;
 #[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
+mod http_log;
+#[cfg(target_os = "macos")]
 mod menu;
+#[cfg(target_os = "macos")]
+mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
 #[cfg(target_os = "macos")]
 mod sidebar;
 #[cfg(target_os = "macos")]
+mod table;
+#[cfg(target_os = "macos")]
 mod welcome;
-// Used by the editor; built everywhere so its tests run on Linux.
+// Used by the views; built everywhere so its tests run on Linux.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-mod text_diff;
+mod text;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, install, run};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
+pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
+#[cfg(target_os = "macos")]
+pub use panes::{FakeResponse, Issue, IssuesBar, RESPONSE_TABS, ResponsePane, sample_issues};
+#[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
 #[cfg(target_os = "macos")]
 pub use sidebar::{NodeKind, SAMPLE_OPERATIONS, SAMPLE_REQUESTS, SidebarController, SidebarNode};
+#[cfg(target_os = "macos")]
+pub use table::TextTable;
 #[cfg(target_os = "macos")]
 pub use welcome::{RecentProject, WelcomeController, sample_recent_projects};

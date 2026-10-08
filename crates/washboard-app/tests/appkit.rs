@@ -20,6 +20,8 @@ fn main() {
         ("project_window", checks::project_window),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
+        ("issues_and_fake_send", checks::issues_and_fake_send),
+        ("http_log", checks::http_log),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -48,8 +50,8 @@ mod checks {
         NSSplitViewItemBehavior, NSStackView, NSTextField, NSTextInputClient, NSView,
     };
     use objc2_foundation::{
-        NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint, NSRange,
-        NSString,
+        NSDate, NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint,
+        NSRange, NSRunLoop, NSString,
     };
     use washboard_app::{AppDelegate, EditorController};
 
@@ -544,5 +546,76 @@ mod checks {
             text_view.insertText_replacementRange(&NSString::from_str("x"), NSRange::new(at, 0))
         };
         print!("(keystroke {} ms) ", started.elapsed().as_millis());
+    }
+
+    /// Clicking an issue selects its line; a fake send finishes on the main thread and fills
+    /// the response pane.
+    pub fn issues_and_fake_send(ctx: &Ctx) {
+        let project = ctx.delegate.open_project_window("Customer API");
+
+        let issues = project.issues().table().rows();
+        assert_eq!(issues.len(), 1, "sample issue listed");
+        assert_eq!(issues[0][0], "6");
+        project.issues().table().click(0);
+        let sample = washboard_app::SAMPLE_REQUEST;
+        let line6 = sample
+            .split_inclusive('\n')
+            .take(5)
+            .map(str::len)
+            .sum::<usize>();
+        let selected = project.editor().text_view().selectedRange();
+        assert_eq!(selected.location, line6, "click selects line 6");
+
+        let response = project.response();
+        let tabs: Vec<String> = response
+            .tabs()
+            .tabViewItems()
+            .iter()
+            .map(|t| t.label().to_string())
+            .collect();
+        assert_eq!(tabs, washboard_app::RESPONSE_TABS);
+
+        project.fake_send();
+        assert_eq!(response.status(), "Sending…");
+        // The result arrives through the main dispatch queue, which the run loop drains.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !response.status().starts_with("200") {
+            assert!(
+                Instant::now() < deadline,
+                "fake send did not finish: {}",
+                response.status()
+            );
+            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+        }
+        assert_eq!(response.history().rows().len(), 1, "history row added");
+        let body = response.body().text_view().string().to_string();
+        assert!(body.contains("GetCustomerResponse"), "response body shown");
+
+        autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// One log panel for the app, opened from the menu action, with `Authorization` masked
+    /// until revealed.
+    pub fn http_log(ctx: &Ctx) {
+        // SAFETY: `showHttpLog:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, showHttpLog: None::<&AnyObject>] };
+        let log = ctx.delegate.http_log();
+        assert!(log.panel().isVisible(), "log panel shown");
+        assert_eq!(
+            log.table().rows().len(),
+            washboard_app::sample_exchanges().len()
+        );
+
+        let secret = "YWxpY2U6c2VjcmV0";
+        assert!(
+            log.request_text().contains("Authorization: ••••••••"),
+            "masked"
+        );
+        assert!(!log.request_text().contains(secret), "secret hidden");
+        log.set_revealed(true);
+        assert!(log.request_text().contains(secret), "revealed on request");
+        log.set_revealed(false);
+        assert!(!log.request_text().contains(secret), "masked again");
+        log.panel().close();
     }
 }

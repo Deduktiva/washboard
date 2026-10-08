@@ -11,9 +11,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSColor, NSFont, NSImage, NSLayoutAttribute, NSPopUpButton,
-    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView,
-    NSTextField, NSToolbar, NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSPopUpButton, NSResponder,
+    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem, NSStackView, NSToolbar,
+    NSToolbarDelegate, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarToggleSidebarItemIdentifier,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
     NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
@@ -23,7 +23,10 @@ use objc2_foundation::{
     NSString, ns_string,
 };
 
+use dispatch2::{DispatchQueue, MainThreadBound};
+
 use crate::editor::EditorController;
+use crate::panes::{FakeResponse, IssuesBar, ResponsePane, sample_issues};
 use crate::sidebar::SidebarController;
 
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
@@ -94,6 +97,8 @@ pub struct ProjectIvars {
     name: String,
     sidebar: Retained<SidebarController>,
     editor: Retained<EditorController>,
+    issues: OnceCell<Retained<IssuesBar>>,
+    response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
 }
 
@@ -180,7 +185,7 @@ define_class!(
 
         #[unsafe(method(sendRequest:))]
         fn send_request(&self, _sender: Option<&AnyObject>) {
-            self.stub("Send");
+            self.fake_send();
         }
 
         #[unsafe(method(replaceWsdl:))]
@@ -207,6 +212,8 @@ impl ProjectWindowController {
             name: name.to_owned(),
             sidebar: SidebarController::new(mtm),
             editor: EditorController::new(mtm),
+            issues: OnceCell::new(),
+            response: ResponsePane::new(mtm),
             split: OnceCell::new(),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
@@ -241,6 +248,39 @@ impl ProjectWindowController {
         &self.ivars().editor
     }
 
+    pub fn issues(&self) -> &IssuesBar {
+        self.ivars().issues.get().expect("set in new()")
+    }
+
+    pub fn response(&self) -> &ResponsePane {
+        &self.ivars().response
+    }
+
+    /// Sends nothing: waits on a worker thread, then shows a canned response on the main
+    /// thread. This is the pattern every background job follows: the work gets owned data,
+    /// and the result comes back through the main dispatch queue to a `MainThreadBound`
+    /// reference, so no AppKit object is touched off the main thread.
+    pub fn fake_send(&self) {
+        self.response().set_status("Sending…");
+        let this = MainThreadBound::new(self.retain(), self.mtm());
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let response = FakeResponse {
+                sent: "now".into(),
+                status: 200,
+                reason: "OK".into(),
+                millis: started.elapsed().as_millis() as u64,
+                headers: "Content-Type: text/xml; charset=utf-8\n".into(),
+                body: FAKE_RESPONSE_BODY.into(),
+            };
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("the main queue runs on the main thread");
+                this.get(mtm).response().show(&response);
+            });
+        });
+    }
+
     pub fn split_view(&self) -> &NSSplitViewController {
         self.ivars().split.get().expect("set in new()")
     }
@@ -268,8 +308,15 @@ impl ProjectWindowController {
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
         editor.set_text(SAMPLE_REQUEST);
-        editor.ruler().set_error_lines(vec![6]);
-        content_vc.setView(&content_pane(editor.view(), mtm));
+        let issues = IssuesBar::new(editor, mtm);
+        issues.set_issues(&sample_issues());
+        content_vc.setView(&content_pane(
+            editor.view(),
+            issues.view(),
+            self.response().view(),
+            mtm,
+        ));
+        let _ = self.ivars().issues.set(issues);
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content_vc);
         split.addSplitViewItem(&content_item);
         split
@@ -373,32 +420,36 @@ fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NS
     button
 }
 
-/// Editor, issues bar and response pane. The issues bar and response pane are placeholders
-/// until step 5.
-fn content_pane(editor: &NSScrollView, mtm: MainThreadMarker) -> Retained<NSView> {
-    let editor: Retained<NSView> = Retained::into_super(editor.retain());
-    let issues = NSTextField::labelWithString(
-        ns_string!("⚠ 1 error  line 6: 'customerId': '?' is not a valid xs:long"),
-        mtm,
-    );
-    issues.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-    issues.setTextColor(Some(&NSColor::systemOrangeColor()));
-    let top = [editor, Retained::into_super(Retained::into_super(issues))];
+/// Editor with the issues bar under it, above the response pane.
+fn content_pane(
+    editor: &NSScrollView,
+    issues: &NSStackView,
+    response: &NSStackView,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let top: [Retained<NSView>; 2] = [
+        Retained::into_super(editor.retain()),
+        Retained::into_super(issues.retain()),
+    ];
     let top = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&top), mtm);
     top.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     top.setAlignment(NSLayoutAttribute::Leading);
+    top.setSpacing(0.0);
 
     let split = NSSplitView::new(mtm);
     // Horizontal dividers: editor above, response below.
     split.setVertical(false);
     split.addSubview(&top);
-    split.addSubview(&placeholder("Response", mtm));
+    split.addSubview(response);
     split.adjustSubviews();
     Retained::into_super(split)
 }
 
-fn placeholder(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setTextColor(Some(&NSColor::tertiaryLabelColor()));
-    Retained::into_super(Retained::into_super(label))
-}
+const FAKE_RESPONSE_BODY: &str = r#"<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <GetCustomerResponse xmlns="urn:example:customer">
+      <customer><id>42</id><name>Example Ltd</name></customer>
+    </GetCustomerResponse>
+  </soap:Body>
+</soap:Envelope>
+"#;

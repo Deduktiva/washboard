@@ -8,6 +8,7 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_se
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
 use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
 
+use crate::http_log::{HttpLog, sample_exchanges};
 use crate::menu;
 use crate::project_window::ProjectWindowController;
 use crate::welcome::{WelcomeController, sample_recent_projects};
@@ -16,6 +17,7 @@ use crate::welcome::{WelcomeController, sample_recent_projects};
 pub struct AppDelegateIvars {
     welcome: OnceCell<Retained<WelcomeController>>,
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
+    http_log: OnceCell<Retained<HttpLog>>,
 }
 
 define_class!(
@@ -79,7 +81,7 @@ define_class!(
 
         #[unsafe(method(showHttpLog:))]
         fn show_http_log(&self, _sender: Option<&AnyObject>) {
-            not_implemented("HTTP Log");
+            self.http_log().show();
         }
     }
 );
@@ -125,6 +127,13 @@ impl AppDelegate {
         if self.ivars().projects.borrow().is_empty() {
             self.welcome().show();
         }
+    }
+
+    /// The app's one HTTP log panel, created on first use.
+    pub fn http_log(&self) -> &HttpLog {
+        self.ivars()
+            .http_log
+            .get_or_init(|| HttpLog::new(sample_exchanges(), self.mtm()))
     }
 
     /// The welcome window's controller, created on first use.
