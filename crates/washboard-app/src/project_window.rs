@@ -13,13 +13,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSImage, NSLayoutAttribute, NSMenu, NSMenuItem,
-    NSPopUpButton, NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewItem,
+    NSAlert, NSBackingStoreType, NSButton, NSImage, NSMenu, NSMenuItem, NSPopUpButton, NSResponder,
+    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
     NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSUserInterfaceLayoutOrientation, NSView,
-    NSViewController, NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask,
-    NSWindowToolbarStyle,
+    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
+    NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -31,6 +30,7 @@ use washboard_ui_model::{App, ImportTarget, ModelError, ProjectKey};
 
 use crate::app::with_delegate;
 use crate::editor::EditorController;
+use crate::layout;
 use crate::panes::{IssuesBar, ResponsePane};
 use crate::sheets::{ImportSheetController, SettingsSheet};
 use crate::sidebar::SidebarController;
@@ -611,15 +611,14 @@ impl ProjectWindowController {
             Retained::into_super(Retained::into_super(footer_button(title, action, mtm)))
         })
         .collect();
-        let footer = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&footer), mtm);
-        footer.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        let footer = layout::row(&footer, mtm);
         footer.setSpacing(2.0);
+        footer.setEdgeInsets(layout::insets(4.0, 10.0, 8.0, 10.0));
 
-        let views = [Retained::into_super(scroll), Retained::into_super(footer)];
-        let pane = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
-        pane.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-        pane.setAlignment(NSLayoutAttribute::Leading);
-        pane.setSpacing(0.0);
+        let pane = layout::fill_column(
+            &[Retained::into_super(scroll), Retained::into_super(footer)],
+            mtm,
+        );
         Retained::into_super(pane)
     }
 }
@@ -718,18 +717,19 @@ fn content_pane(
     response: &NSStackView,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
-    let top: [Retained<NSView>; 2] = [
-        Retained::into_super(editor.retain()),
-        Retained::into_super(issues.retain()),
-    ];
-    let top = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&top), mtm);
-    top.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-    top.setAlignment(NSLayoutAttribute::Leading);
-    top.setSpacing(0.0);
+    let top = layout::fill_column(
+        &[
+            Retained::into_super(editor.retain()),
+            Retained::into_super(issues.retain()),
+        ],
+        mtm,
+    );
 
     let split = NSSplitView::new(mtm);
     // Horizontal dividers: editor above, response below.
     split.setVertical(false);
+    // A hairline, not the thick divider with its dimple.
+    split.setDividerStyle(NSSplitViewDividerStyle::Thin);
     split.addSubview(&top);
     split.addSubview(response);
     split.adjustSubviews();

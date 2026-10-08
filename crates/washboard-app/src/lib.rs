@@ -18,6 +18,8 @@ mod front_end;
 #[cfg(target_os = "macos")]
 mod http_log;
 #[cfg(target_os = "macos")]
+mod layout;
+#[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
 mod panes;

@@ -630,6 +630,31 @@ mod checks {
             .collect();
         assert_eq!(titles, ["Rename", "Duplicate", "Validate"]);
 
+        // Stacked views share the height instead of drawing over each other.
+        window.layoutIfNeeded();
+        let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let editor = in_window(project.editor().view());
+        let issues = in_window(project.issues().view());
+        assert!(
+            editor.size.height > 100.0,
+            "the editor takes the slack: {editor:?}"
+        );
+        assert!(
+            issues.origin.y + issues.size.height <= editor.origin.y + 0.5,
+            "the issues bar sits below the editor: {issues:?} vs {editor:?}"
+        );
+        project.response().tabs().selectTabViewItemAtIndex(2);
+        window.displayIfNeeded();
+        window.layoutIfNeeded();
+        let history = project.response().history().view().frame();
+        assert!(
+            history.size.height > 40.0,
+            "the history list has room: {history:?} in tabs {:?}, pane {:?}",
+            project.response().tabs().frame(),
+            project.response().view().frame()
+        );
+        project.response().tabs().selectTabViewItemAtIndex(0);
+
         let split = project.split_view();
         let items = split.splitViewItems();
         assert_eq!(items.len(), 2, "sidebar and content");
