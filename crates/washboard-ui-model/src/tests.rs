@@ -1042,6 +1042,33 @@ fn send_shows_the_response_and_records_history() {
 }
 
 #[test]
+fn responses_name_their_server_after_renames_and_deletes() {
+    let setup = Setup::new();
+    let (url, _server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
+    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    send_and_wait(&fake, &mut app, key);
+    let label = |app: &App| {
+        let window = app.project(key).expect("open");
+        let response = window.response().expect("response");
+        window.server_label(response.server, &response.url)
+    };
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    assert_eq!(label(&app), server.name);
+
+    server.name = "Renamed".into();
+    app.update_server(key, &server, None).expect("rename");
+    assert_eq!(label(&app), "Renamed", "the current name");
+
+    app.delete_server(key, server.id).expect("delete");
+    let host = url.split("://").nth(1).and_then(|r| r.split('/').next());
+    assert_eq!(
+        Some(label(&app).as_str()),
+        host,
+        "the URL's host once deleted"
+    );
+}
+
+#[test]
 fn faults_are_called_out() {
     let setup = Setup::new();
     let (url, _server) = server::serve_once("500 Internal Server Error", FAULT, Duration::ZERO);
