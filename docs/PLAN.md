@@ -491,8 +491,8 @@ Behaviour:
   requires the header to be present).
 - **BOM / encodings**: all inputs are decoded through one function that honours a UTF-8/UTF-16
   BOM and the XML declaration's `encoding`, then hands `&str` to `roxmltree`/`quick-xml`
-  (neither accepts a BOM-prefixed or UTF-16 input as-is). libxml2 gets the same decoded
-  UTF-8 text (requests, schema documents, the editor's well-formedness check). Copied WSDL/XSD files stay byte-identical. Line/column mapping is char-based, so the BOM does
+  (neither accepts a BOM-prefixed or UTF-16 input as-is). libxml2 gets the original bytes.
+  Copied WSDL/XSD files stay byte-identical. Line/column mapping is char-based, so the BOM does
   not shift positions. Request files are written as UTF-8 without BOM; a BOM in a file the
   user edited externally is preserved.
 
