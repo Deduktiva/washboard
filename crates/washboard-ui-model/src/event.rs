@@ -32,7 +32,8 @@ pub enum Event {
     ServersChanged { project: ProjectKey },
     /// The server popup's selection changed.
     ServerSelectionChanged { project: ProjectKey },
-    /// The editor shows a different request (or none); reload its whole text.
+    /// The editor shows a different request (or none), or its text was replaced by the model;
+    /// reload its whole text, and the response pane and history with it.
     EditorReplaced { project: ProjectKey },
     /// Re-colour this UTF-16 range of the editor's text after an edit.
     TokensChanged {
@@ -44,4 +45,14 @@ pub enum Event {
     EditedChanged { project: ProjectKey },
     /// The editor's issues (list, underlines) changed.
     DiagnosticsChanged { project: ProjectKey },
+    /// A send started or ended (Send ↔ Cancel).
+    SendStateChanged { project: ProjectKey },
+    /// Send was refused for validation errors: show the issues list.
+    ShowIssues { project: ProjectKey },
+    /// The response pane shows something else.
+    ResponseChanged { project: ProjectKey },
+    /// The selected request's history list changed.
+    HistoryChanged { project: ProjectKey },
+    /// An exchange was added to the HTTP log (and the oldest maybe dropped).
+    LogAppended,
 }

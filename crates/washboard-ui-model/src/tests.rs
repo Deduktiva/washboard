@@ -11,6 +11,7 @@ use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlS
 use washboard_core::xml::TokenKind;
 
 use crate::fake::Fake;
+use crate::server;
 use crate::{App, DialogAnswer, Event, Issue, ModelError, OperationNode, ProjectKey, SchemaState};
 
 fn fixtures() -> PathBuf {
@@ -922,4 +923,199 @@ fn without_a_schema_only_well_formedness_is_checked() {
         issues[0].message.contains("only well-formedness"),
         "{issues:?}"
     );
+}
+
+const FAULT: &str = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+<soapenv:Body><soapenv:Fault><faultcode>soapenv:Server</faultcode>\
+<faultstring>no such customer</faultstring></soapenv:Fault></soapenv:Body></soapenv:Envelope>";
+
+const OK_BODY: &str = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\
+<soapenv:Body><r/></soapenv:Body></soapenv:Envelope>";
+
+/// A project with one request and a server pointing at `url`, selected.
+fn ready_to_send(setup: &Setup, url: &str) -> (Fake, App, ProjectKey, RequestId) {
+    let (fake, mut app, key, first, _) = with_requests(setup, "Legacy");
+    let id = app.add_server(key).expect("add");
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    server.url = url.to_owned();
+    server.auth = Auth::Basic {
+        username: "alice".into(),
+    };
+    app.update_server(key, &server, Some("s3cret"))
+        .expect("update");
+    app.choose_server(key, id).expect("choose");
+    settle(&fake, &mut app);
+    (fake, app, key, first)
+}
+
+fn send_and_wait(fake: &Fake, app: &mut App, key: ProjectKey) -> Vec<Event> {
+    app.send(key).expect("send");
+    assert!(app.project(key).expect("open").sending());
+    fake.pump_until(app, |app| app.jobs_running() == 0);
+    app.take_events()
+}
+
+#[test]
+fn send_shows_the_response_and_records_history() {
+    let setup = Setup::new();
+    let (url, server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
+    let (fake, mut app, key, first) = ready_to_send(&setup, &url);
+    let events = send_and_wait(&fake, &mut app, key);
+    for e in [
+        Event::SendStateChanged { project: key },
+        Event::ResponseChanged { project: key },
+        Event::HistoryChanged { project: key },
+        Event::LogAppended,
+    ] {
+        assert!(events.contains(&e), "{e:?} in {events:?}");
+    }
+    let wire = server.join().expect("server");
+    assert!(wire.starts_with("POST /soap HTTP/1.1"), "{wire}");
+    assert!(wire.contains("<tns:Lookup>"), "{wire}");
+
+    let window = app.project(key).expect("open");
+    assert!(!window.sending());
+    let response = window.response().expect("response");
+    assert_eq!(response.status, Some(200));
+    assert_eq!(response.error, None);
+    assert!(response.fault.is_none());
+    assert_eq!(response.size, OK_BODY.len());
+    assert!(
+        response.body.as_deref().expect("body").contains("\n"),
+        "pretty-printed"
+    );
+    assert_eq!(window.history().len(), 1);
+    assert_eq!(response.history, Some(window.history()[0].id));
+    assert_eq!(window.history()[0].request_id, first);
+
+    let log = app.http_log();
+    assert_eq!(log.len(), 1);
+    let masked = log[0].request_headers(false);
+    let auth = masked
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"));
+    assert_eq!(auth.map(|(_, v)| v.as_str()), Some("Basic ••••••••"));
+    let revealed = log[0].request_headers(true);
+    let auth = revealed
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"));
+    assert_ne!(auth.map(|(_, v)| v.as_str()), Some("Basic ••••••••"));
+}
+
+#[test]
+fn faults_are_called_out() {
+    let setup = Setup::new();
+    let (url, _server) = server::serve_once("500 Internal Server Error", FAULT, Duration::ZERO);
+    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    send_and_wait(&fake, &mut app, key);
+    let window = app.project(key).expect("open");
+    let response = window.response().expect("response");
+    assert_eq!(response.status, Some(500));
+    let fault = response.fault.as_ref().expect("fault");
+    assert_eq!(fault.string, "no such customer");
+    assert!(window.history()[0].soap_fault);
+}
+
+#[test]
+fn a_transport_error_is_shown_and_recorded() {
+    let setup = Setup::new();
+    let url = server::closed_port_url();
+    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    send_and_wait(&fake, &mut app, key);
+    let window = app.project(key).expect("open");
+    let response = window.response().expect("response");
+    assert!(response.error.is_some());
+    assert_eq!(response.status, None);
+    assert!(window.history()[0].error.is_some());
+}
+
+#[test]
+fn send_refuses_an_invalid_request() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _) = ready_to_send(&setup, "http://127.0.0.1:9/");
+    let text = editor_text(&app, key).replace("2026-01-01", "yesterday");
+    set_text(&mut app, key, &text);
+    let events = send_and_wait(&fake, &mut app, key);
+    assert!(
+        events.contains(&Event::ShowIssues { project: key }),
+        "{events:?}"
+    );
+    let window = app.project(key).expect("open");
+    assert!(
+        window
+            .editor()
+            .expect("editor")
+            .issues()
+            .iter()
+            .any(Issue::is_error)
+    );
+    assert!(window.response().is_none());
+    assert!(window.history().is_empty());
+    assert!(app.http_log().is_empty());
+    assert!(
+        on_disk(&app, key, window.editor().expect("editor").request()).contains("yesterday"),
+        "send saves first"
+    );
+}
+
+#[test]
+fn a_cancelled_send_is_ignored() {
+    let setup = Setup::new();
+    let (url, _server) = server::serve_once("200 OK", OK_BODY, ms(300));
+    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    app.send(key).expect("send");
+    assert!(matches!(app.send(key), Err(ModelError::AlreadySending)));
+    app.cancel_send(key);
+    assert!(!app.project(key).expect("open").sending());
+    fake.pump_until(&mut app, |app| app.jobs_running() == 0);
+    let events = app.take_events();
+    assert!(
+        !events.contains(&Event::ResponseChanged { project: key }),
+        "{events:?}"
+    );
+    let window = app.project(key).expect("open");
+    assert!(window.response().is_none());
+    assert!(window.history().is_empty());
+    assert!(app.http_log().is_empty());
+}
+
+#[test]
+fn history_entries_can_be_shown_and_restored() {
+    let setup = Setup::new();
+    let (url, _server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
+    let (fake, mut app, key, first) = ready_to_send(&setup, &url);
+    let sent = editor_text(&app, key);
+    send_and_wait(&fake, &mut app, key);
+    let entry = app.project(key).expect("open").history()[0].id;
+
+    set_text(&mut app, key, "<changed/>");
+    app.restore_request(key, entry).expect("restore");
+    assert!(
+        app.take_events()
+            .contains(&Event::EditorReplaced { project: key })
+    );
+    assert_eq!(editor_text(&app, key), sent);
+    assert!(app.project(key).expect("open").edited());
+
+    // Another request has no history; coming back shows the last response again.
+    let op = lookup(&app, key, "LegacyPort").operation;
+    app.new_request(key, &op).expect("new");
+    assert!(app.project(key).expect("open").response().is_none());
+    app.select_request(key, Some(first)).expect("select");
+    let window = app.project(key).expect("open");
+    assert_eq!(window.response().expect("response").history, Some(entry));
+
+    app.show_history(key, entry).expect("show");
+    assert!(
+        app.take_events()
+            .contains(&Event::ResponseChanged { project: key })
+    );
+}
+
+#[test]
+fn send_needs_a_server() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    assert!(matches!(app.send(key), Err(ModelError::NoServer)));
+    assert!(!app.project(key).expect("open").sending());
 }
