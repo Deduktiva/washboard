@@ -1,10 +1,14 @@
-//! Headless AppKit checks, run by the macOS CI job (WP-APP-SHELL in `docs/TASKS.md`).
+//! Headless AppKit checks, run by the macOS CI job (WP-APP-SHELL and WP-APP-INTEGRATION in
+//! `docs/TASKS.md`).
 //!
 //! `harness = false`: AppKit objects must be created on the main thread, and libtest runs
 //! tests on worker threads. The app is launched once, through `NSApplication::run` until
 //! `applicationDidFinishLaunching:` has been delivered; then each check inspects the real
 //! objects from `washboard_app` and asserts on them. A failed assertion panics and fails the
 //! run. Checks share the application and run in order.
+//!
+//! The app runs on a temp state dir and projects built from `fixtures/`, with an in-memory
+//! secret store and dialogs that are recorded and answered by the checks.
 
 #[cfg(target_os = "macos")]
 type Check = (&'static str, fn(&checks::Ctx));
@@ -17,6 +21,7 @@ fn main() {
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
+        ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
@@ -39,7 +44,11 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod checks {
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
+    use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     use block2::RcBlock;
@@ -55,22 +64,113 @@ mod checks {
         NSDate, NSIndexSet, NSNotification, NSNotificationCenter, NSObjectProtocol, NSPoint,
         NSRange, NSRunLoop, NSString,
     };
-    use washboard_app::{AppDelegate, EditorController};
+    use tempfile::TempDir;
+    use washboard_app::{AppDelegate, EditorController, Options, ProjectWindowController};
+    use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
+    use washboard_core::secrets::MemorySecretStore;
+    use washboard_ui_model::{Alert, Confirm, DialogAnswer, DialogId, Dialogs};
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
 
+    /// What the app asked the user, in order.
+    #[derive(Debug, Default)]
+    pub struct DialogLog {
+        pub folders: Vec<DialogId>,
+        pub alerts: Vec<Alert>,
+        pub confirms: Vec<(DialogId, Confirm)>,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct RecordingDialogs(Rc<RefCell<DialogLog>>);
+
+    impl Dialogs for RecordingDialogs {
+        fn choose_project_folder(&self, id: DialogId) {
+            self.0.borrow_mut().folders.push(id);
+        }
+
+        fn alert(&self, alert: Alert) {
+            self.0.borrow_mut().alerts.push(alert);
+        }
+
+        fn confirm(&self, id: DialogId, confirm: Confirm) {
+            self.0.borrow_mut().confirms.push((id, confirm));
+        }
+    }
+
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
+    }
+
+    /// Creates a project named `name` in `<tmp>/<name>` from the legacy-rpc fixture.
+    fn make_project(tmp: &TempDir, name: &str) -> PathBuf {
+        let folder = tmp.path().join(name);
+        let set = WsdlSet {
+            files: vec![WsdlFile {
+                source: fixtures().join("legacy-rpc/Legacy.wsdl"),
+                dest: "Legacy.wsdl".into(),
+            }],
+            entry: "Legacy.wsdl".into(),
+        };
+        Project::create(&folder, name, &set).expect("create project");
+        folder
+    }
+
     pub struct Ctx {
         pub app: Retained<NSApplication>,
         pub delegate: Retained<AppDelegate>,
+        pub dialogs: Rc<RefCell<DialogLog>>,
+        /// Restored on launch.
+        pub project: PathBuf,
+        /// Not open on launch.
+        pub other: PathBuf,
+        /// Holds the state dir and projects until the run ends.
+        _tmp: TempDir,
     }
 
     impl Ctx {
+        /// Opens the restored project through the model (focusing it if it is open) and
+        /// returns its window controller.
+        pub fn open(&self) -> Retained<ProjectWindowController> {
+            let key = self
+                .delegate
+                .open_project_at(&self.project)
+                .expect("the fixture project opens");
+            self.delegate
+                .project(key)
+                .expect("a window for the project")
+        }
+
+        pub fn alerts(&self) -> Vec<Alert> {
+            std::mem::take(&mut self.dialogs.borrow_mut().alerts)
+        }
+
         /// `applicationDidFinishLaunching:` is sent from inside `run` (`finishLaunching` alone
         /// does not send it), so run the app and stop it once that notification has been
         /// delivered. The test's observer is added after the delegate's, so it runs second.
         pub fn launch(mtm: MainThreadMarker) -> Self {
-            let delegate = washboard_app::install(mtm);
+            let tmp = TempDir::new().expect("temp dir");
+            let project = make_project(&tmp, "Customer API");
+            let other = make_project(&tmp, "Billing");
+            let state_dir = tmp.path().join("state");
+            AppState {
+                open_projects: vec![
+                    OpenProject::new(&project),
+                    OpenProject::new(tmp.path().join("Gone")),
+                ],
+                recent_projects: vec![project.clone()],
+            }
+            .save(&state_dir)
+            .expect("write state.json");
+
+            let dialogs = RecordingDialogs::default();
+            let log = dialogs.0.clone();
+            let options = Options {
+                state_dir,
+                secrets: Arc::new(MemorySecretStore::default()),
+                dialogs: Some(Box::new(dialogs)),
+            };
+            let delegate = washboard_app::install(options, mtm);
             let app = NSApplication::sharedApplication(mtm);
 
             let stopper = app.clone();
@@ -112,14 +212,32 @@ mod checks {
             app.run();
             // SAFETY: `token` is the observer returned by `addObserverForName…` above.
             unsafe { center.removeObserver(token.as_ref()) };
-            Self { app, delegate }
+            Self {
+                app,
+                delegate,
+                dialogs: log,
+                project,
+                other,
+                _tmp: tmp,
+            }
         }
     }
 
-    /// Launching shows the welcome window, and closing the last window does not quit.
+    /// Launching restores the project from `state.json` and reports the missing one once;
+    /// closing the last window does not quit.
     pub fn lifecycle(ctx: &Ctx) {
-        let welcome = ctx.delegate.welcome().window();
-        assert!(welcome.isVisible(), "welcome window after launch");
+        let projects = ctx.delegate.projects();
+        assert_eq!(projects.len(), 1, "the restored project");
+        let window = projects[0].project_window();
+        assert!(window.isVisible(), "restored window shown");
+        assert_eq!(window.title().to_string(), "Customer API");
+        assert!(
+            !ctx.delegate.welcome().window().isVisible(),
+            "no welcome window while a project is open"
+        );
+        let alerts = ctx.alerts();
+        assert_eq!(alerts.len(), 1, "one alert for the missing project");
+        assert!(alerts[0].message.contains("Gone"), "{alerts:?}");
 
         // Ask through the Objective-C runtime, as AppKit does, so this also checks the
         // selector is registered.
@@ -285,13 +403,37 @@ mod checks {
         );
     }
 
-    /// The recent-projects table shows the sample rows through its data source and delegate.
-    pub fn welcome_window(ctx: &Ctx) {
-        let welcome = ctx.delegate.welcome();
-        let table = welcome.table();
-        let sample = washboard_app::sample_recent_projects();
-        assert_eq!(table.numberOfRows() as usize, sample.len());
+    fn open_recent_titles(ctx: &Ctx) -> Vec<String> {
+        let file = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("File")))
+            .and_then(|i| i.submenu())
+            .expect("File menu");
+        let recent = file
+            .itemWithTitle(&NSString::from_str("Open Recent"))
+            .and_then(|i| i.submenu())
+            .expect("Open Recent submenu");
+        recent
+            .itemArray()
+            .iter()
+            .filter(|i| !i.isSeparatorItem())
+            .map(|i| i.title().to_string())
+            .collect()
+    }
 
+    /// Closing the last project shows the welcome window listing it; opening it from the list
+    /// or from File ▸ Open Recent brings it back, once.
+    pub fn welcome_window(ctx: &Ctx) {
+        let window = ctx.open().project_window();
+        autoreleasepool(|_| window.performClose(None));
+        assert!(!window.isVisible(), "project window closed");
+        assert!(ctx.delegate.projects().is_empty(), "controller released");
+        let welcome = ctx.delegate.welcome();
+        assert!(welcome.window().isVisible(), "welcome window back");
+
+        let table = welcome.table();
+        assert_eq!(table.numberOfRows(), 1);
         let view = table
             .viewAtColumn_row_makeIfNecessary(0, 0, true)
             .expect("row 0 view");
@@ -308,13 +450,57 @@ mod checks {
                     .to_string()
             })
             .collect();
-        assert_eq!(labels, [sample[0].name.as_str(), sample[0].path.as_str()]);
+        assert_eq!(labels[0], "Customer API");
+        assert!(labels[1].ends_with("Customer API"), "{labels:?}");
+        assert_eq!(open_recent_titles(ctx), ["Customer API", "Clear Menu"]);
+
+        welcome.open_recent(0);
+        assert_eq!(ctx.delegate.projects().len(), 1, "reopened");
+        assert!(!welcome.window().isVisible(), "welcome window hidden again");
+        welcome.open_recent(0);
+        assert_eq!(
+            ctx.delegate.projects().len(),
+            1,
+            "focused, not opened twice"
+        );
     }
 
-    /// Opening a project replaces the welcome window with a project window whose toolbar,
-    /// sidebar and split are built, and closing it brings the welcome window back.
+    /// File ▸ Open Project… asks for a folder; Cancel does nothing, a project folder opens
+    /// and goes to the top of Open Recent.
+    pub fn open_project_panel(ctx: &Ctx) {
+        let answer = |answer: DialogAnswer| {
+            let id = ctx
+                .dialogs
+                .borrow_mut()
+                .folders
+                .pop()
+                .expect("an open panel was requested");
+            ctx.delegate.dialog_answered(id, answer);
+        };
+        // SAFETY: `openProject:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, openProject: None::<&AnyObject>] };
+        answer(DialogAnswer::Cancelled);
+        assert_eq!(ctx.delegate.projects().len(), 1);
+
+        // SAFETY: as above.
+        let _: () = unsafe { msg_send![&*ctx.delegate, openProject: None::<&AnyObject>] };
+        answer(DialogAnswer::Folder(ctx.other.clone()));
+        let projects = ctx.delegate.projects();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[1].name(), "Billing");
+        assert_eq!(
+            open_recent_titles(ctx),
+            ["Billing", "Customer API", "Clear Menu"]
+        );
+        autoreleasepool(|_| projects[1].project_window().performClose(None));
+        assert_eq!(ctx.delegate.projects().len(), 1);
+        assert!(ctx.alerts().is_empty());
+    }
+
+    /// The project window's toolbar, sidebar and split are built, and closing it brings the
+    /// welcome window back.
     pub fn project_window(ctx: &Ctx) {
-        let project = ctx.delegate.open_project_window("Customer API");
+        let project = ctx.open();
         let window = project.project_window();
         assert!(window.isVisible(), "project window shown");
         assert!(
@@ -419,7 +605,7 @@ mod checks {
     /// TextKit 1, no substitutions, highlighting only as temporary attributes, and undo that
     /// restores the text and its colours.
     pub fn editor(ctx: &Ctx) {
-        let project = ctx.delegate.open_project_window("Customer API");
+        let project = ctx.open();
         let editor = project.editor();
         let text_view = editor.text_view();
         // SAFETY: plain getters.
@@ -553,7 +739,7 @@ mod checks {
     /// Clicking an issue selects its line; a fake send finishes on the main thread and fills
     /// the response pane.
     pub fn issues_and_fake_send(ctx: &Ctx) {
-        let project = ctx.delegate.open_project_window("Customer API");
+        let project = ctx.open();
 
         let issues = project.issues().table().rows();
         assert_eq!(issues.len(), 1, "sample issue listed");
@@ -630,7 +816,8 @@ mod checks {
         }
     }
 
-    /// Create stays disabled while a reference is unresolved; creating opens the project.
+    /// Create stays disabled while a reference is unresolved, then ends the sheet. Creating the
+    /// project is step 6 of WP-APP-INTEGRATION.
     pub fn new_project_sheet(ctx: &Ctx) {
         // SAFETY: `newProject:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, newProject: None::<&AnyObject>] };
@@ -678,16 +865,12 @@ mod checks {
             .setStringValue(&NSString::from_str("Billing"));
         sheet.create();
         wait_until("the sheet to end", || welcome.attachedSheet().is_none());
-        let projects = ctx.delegate.projects();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].name(), "Billing");
-        autoreleasepool(|_| projects[0].project_window().performClose(None));
     }
 
     /// Project Settings opens on Servers; the form edits the selected row, auth enables the
     /// user field, and + / − add and remove rows.
     pub fn settings_sheet(ctx: &Ctx) {
-        let project = ctx.delegate.open_project_window("Customer API");
+        let project = ctx.open();
         let window = project.project_window();
         // SAFETY: `projectSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };

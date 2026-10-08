@@ -1,21 +1,72 @@
-//! Application lifecycle: the `NSApplication` delegate and launching.
+//! Application lifecycle: the `NSApplication` delegate, which owns the model.
+//!
+//! Every input reaches `washboard-ui-model` through [`AppDelegate::command`] or
+//! [`AppDelegate::update`]: borrow the model, run, release, then [`AppDelegate::sync`] applies
+//! the events the model queued. The model is never borrowed while AppKit runs, so a view
+//! callback triggered by applying an event can issue its own command.
 
 use std::cell::{OnceCell, RefCell};
+use std::collections::HashMap;
+use std::fmt;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
-use objc2::rc::{Retained, Weak};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol};
+use objc2_app_kit::{
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSMenuItem,
+};
+use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
+use washboard_core::secrets::SecretStore;
+use washboard_ui_model::{
+    App, DialogAnswer, DialogId, Dialogs, Event, FrontEnd, ModelError, ProjectKey, TimerId,
+};
 
+use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
 use crate::http_log::{HttpLog, sample_exchanges};
 use crate::menu;
 use crate::project_window::ProjectWindowController;
 use crate::sheets::{NewProjectSheet, sample_references};
-use crate::welcome::{WelcomeController, sample_recent_projects};
+use crate::welcome::{RecentProject, WelcomeController};
+
+/// What the app runs with. Tests pass a temp state dir, an in-memory secret store and dialogs
+/// that record instead of showing panels.
+pub struct Options {
+    /// Holds `state.json`.
+    pub state_dir: PathBuf,
+    pub secrets: Arc<dyn SecretStore>,
+    /// `None`: AppKit open panels and alerts.
+    pub dialogs: Option<Box<dyn Dialogs>>,
+}
+
+impl Options {
+    /// `~/Library/Application Support/Washboard`, the Keychain, AppKit panels.
+    pub fn standard() -> Options {
+        Options {
+            state_dir: default_state_dir(),
+            secrets: Arc::new(washboard_core::secrets::KeychainSecretStore),
+            dialogs: None,
+        }
+    }
+}
+
+impl fmt::Debug for Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Options")
+            .field("state_dir", &self.state_dir)
+            .finish_non_exhaustive()
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct AppDelegateIvars {
+    /// Set right after the delegate is created: the front end it gets needs the delegate.
+    model: RefCell<Option<App>>,
+    /// The generation of each running timer (see `DispatchTimers`).
+    timers: Rc<RefCell<HashMap<TimerId, u64>>>,
     welcome: OnceCell<Retained<WelcomeController>>,
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
     http_log: OnceCell<Retained<HttpLog>>,
@@ -40,7 +91,8 @@ define_class!(
         // SAFETY: the signature matches `applicationDidFinishLaunching:`.
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
-            self.welcome().show();
+            self.update(App::launch);
+            self.sync();
             NSApplication::sharedApplication(self.mtm()).activate();
         }
 
@@ -51,19 +103,41 @@ define_class!(
             false
         }
 
+        // SAFETY: the signature matches `applicationShouldTerminate:`.
+        #[unsafe(method(applicationShouldTerminate:))]
+        fn should_terminate(&self, _sender: &NSApplication) -> NSApplicationTerminateReply {
+            let quit = self.update(App::quit);
+            self.sync();
+            match quit {
+                // An editor could not be saved; the model has said why.
+                Some(Ok(false)) => NSApplicationTerminateReply::TerminateCancel,
+                // Every edit is saved; only the list of open projects is lost.
+                Some(Err(e)) => {
+                    eprintln!("washboard-app: could not save the app state: {e}");
+                    NSApplicationTerminateReply::TerminateNow
+                }
+                Some(Ok(true)) | None => NSApplicationTerminateReply::TerminateNow,
+            }
+        }
+
         // SAFETY: the signature matches `applicationShouldHandleReopen:hasVisibleWindows:`.
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_handle_reopen(&self, _sender: &NSApplication, has_visible_windows: bool) -> bool {
             // Clicking the Dock icon with nothing open brings the welcome window back.
-            if !has_visible_windows {
+            if !has_visible_windows && self.read(App::welcome_visible).unwrap_or(true) {
                 self.welcome().show();
             }
             true
         }
+
+        // SAFETY: the signature matches `application:openFile:`.
+        #[unsafe(method(application:openFile:))]
+        fn open_file(&self, _sender: &NSApplication, filename: &NSString) -> bool {
+            self.open_project_at(Path::new(&filename.to_string())).is_some()
+        }
     }
 
-    // Menu actions that reach the app delegate through the responder chain. Stubs until
-    // WP-APP-INTEGRATION binds them to `washboard-ui-model`.
+    // Menu actions that reach the app delegate through the responder chain.
     impl AppDelegate {
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(newProject:))]
@@ -73,12 +147,30 @@ define_class!(
 
         #[unsafe(method(openProject:))]
         fn open_project(&self, _sender: Option<&AnyObject>) {
-            not_implemented("Open Project");
+            self.update(App::choose_and_open_project);
+            self.sync();
+        }
+
+        #[unsafe(method(openRecentProject:))]
+        fn open_recent_project(&self, sender: Option<&AnyObject>) {
+            let index = sender
+                .and_then(|s| s.downcast_ref::<NSMenuItem>())
+                .and_then(|item| usize::try_from(item.tag()).ok());
+            if let Some(index) = index {
+                self.open_recent(index);
+            }
+        }
+
+        #[unsafe(method(clearRecentProjects:))]
+        fn clear_recent_projects(&self, _sender: Option<&AnyObject>) {
+            self.update(App::clear_recent_projects);
+            self.sync();
         }
 
         #[unsafe(method(saveAll:))]
         fn save_all(&self, _sender: Option<&AnyObject>) {
-            not_implemented("Save All");
+            self.update(App::save_all);
+            self.sync();
         }
 
         #[unsafe(method(showHttpLog:))]
@@ -89,21 +181,120 @@ define_class!(
 );
 
 impl AppDelegate {
-    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+    fn new(options: Options, mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(AppDelegateIvars::default());
         // SAFETY: `NSObject`'s `init` has this signature.
-        unsafe { msg_send![super(this), init] }
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        let delegate = delegate_ref(&this, mtm);
+        let dialogs = options
+            .dialogs
+            .unwrap_or_else(|| Box::new(AppKitDialogs::new(delegate.clone())));
+        let front = FrontEnd {
+            main_thread: Arc::new(Wake::new(delegate.clone())),
+            timers: Box::new(DispatchTimers::new(delegate, this.ivars().timers.clone())),
+            dialogs,
+            secrets: options.secrets,
+        };
+        *this.ivars().model.borrow_mut() = Some(App::new(options.state_dir, front));
+        this
     }
 
-    /// Opens a project window (sample content for now) and hides the welcome window, which
-    /// is shown only while no project is open.
-    pub fn open_project_window(&self, name: &str) -> Retained<ProjectWindowController> {
-        let project = ProjectWindowController::new(name, self.mtm());
-        // SAFETY: `showWindow:` takes any sender.
-        unsafe { project.showWindow(None) };
-        self.ivars().projects.borrow_mut().push(project.clone());
-        self.welcome().window().orderOut(None);
-        project
+    /// Runs `f` on the model and alerts with `title` if it fails, then applies the events.
+    pub fn command<R>(
+        &self,
+        title: &str,
+        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        let result = self.update(|app| {
+            let result = f(app);
+            if let Err(e) = &result {
+                app.alert_error(title, e);
+            }
+            result.ok()
+        });
+        self.sync();
+        result.flatten()
+    }
+
+    /// Runs `f` on the model. The caller applies the events with [`sync`](Self::sync).
+    pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> Option<R> {
+        let mut model = self.ivars().model.borrow_mut();
+        model.as_mut().map(f)
+    }
+
+    /// Reads from the model.
+    pub fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        let model = self.ivars().model.borrow();
+        model.as_ref().map(f)
+    }
+
+    /// Applies the events the model has queued, until it queues no more.
+    pub fn sync(&self) {
+        loop {
+            let events = self.update(App::take_events).unwrap_or_default();
+            if events.is_empty() {
+                return;
+            }
+            for event in events {
+                self.apply(event);
+            }
+        }
+    }
+
+    /// Worker results are waiting: apply them. Called from the main queue after a wake.
+    pub fn pump(&self) {
+        self.update(App::pump);
+        self.sync();
+    }
+
+    /// A timer block ran; it counts only if the timer was not restarted or cancelled since.
+    pub(crate) fn timer_due(&self, id: TimerId, generation: u64) {
+        let current = {
+            let mut timers = self.ivars().timers.borrow_mut();
+            let current = timers.get(&id) == Some(&generation);
+            if current {
+                timers.remove(&id);
+            }
+            current
+        };
+        if current {
+            self.update(|app| app.timer_fired(id));
+            self.sync();
+        }
+    }
+
+    /// The front end's answer to a dialog the model asked for.
+    pub fn dialog_answered(&self, id: DialogId, answer: DialogAnswer) {
+        self.update(|app| app.dialog_answered(id, answer));
+        self.sync();
+    }
+
+    /// Opens the project in `folder`, or brings its window forward.
+    pub fn open_project_at(&self, folder: &Path) -> Option<ProjectKey> {
+        self.command(&format!("Could not open {}", folder.display()), |app| {
+            app.open_project(folder)
+        })
+    }
+
+    /// Opens the `index`th recent project.
+    pub fn open_recent(&self, index: usize) -> Option<ProjectKey> {
+        let folder = self.read(|app| app.recent_projects().get(index).cloned())??;
+        self.open_project_at(&folder)
+    }
+
+    /// The window controller of an open project.
+    pub fn project(&self, key: ProjectKey) -> Option<Retained<ProjectWindowController>> {
+        self.ivars()
+            .projects
+            .borrow()
+            .iter()
+            .find(|p| p.key() == key)
+            .cloned()
+    }
+
+    /// The open project windows' controllers, in opening order.
+    pub fn projects(&self) -> Vec<Retained<ProjectWindowController>> {
+        self.ivars().projects.borrow().clone()
     }
 
     /// Shows the New Project sheet on the key window, or on the welcome window when no window
@@ -117,11 +308,8 @@ impl AppDelegate {
             return sheet.clone();
         }
         let sheet = NewProjectSheet::new(sample_references(), mtm);
-        let weak = Weak::from(self);
-        sheet.on_create(move |name| {
-            if let Some(app) = weak.load() {
-                app.open_project_window(name);
-            }
+        sheet.on_create(|name| {
+            eprintln!("washboard-app: creating {name:?} is not implemented yet");
         });
         let parent = match NSApplication::sharedApplication(mtm).keyWindow() {
             Some(window) if window.attachedSheet().is_none() => window,
@@ -140,29 +328,18 @@ impl AppDelegate {
         self.ivars().new_project.borrow().clone()
     }
 
-    /// The open project windows' controllers, in opening order.
-    pub fn projects(&self) -> Vec<Retained<ProjectWindowController>> {
-        self.ivars().projects.borrow().clone()
-    }
-
-    /// Called from the project window's `windowWillClose:`.
-    pub(crate) fn project_closed(&self, project: &ProjectWindowController) {
-        // Keep the controller alive until AppKit is done closing its window; the run loop's
-        // autorelease pool releases it afterwards.
-        let closed: Vec<_> = {
-            let mut projects = self.ivars().projects.borrow_mut();
-            let (closed, open) = projects
-                .drain(..)
-                .partition(|p| std::ptr::eq(&**p, project));
-            *projects = open;
-            closed
-        };
-        for project in closed {
-            let _ = Retained::autorelease_ptr(project);
+    /// The window's close button: the model saves the editor first and keeps the project open
+    /// if that fails. Returns whether the window may close.
+    pub(crate) fn close_requested(&self, project: &ProjectWindowController) -> bool {
+        project.set_closing(true);
+        let closed = self
+            .update(|app| app.close_project(project.key()))
+            .unwrap_or(true);
+        if !closed {
+            project.set_closing(false);
         }
-        if self.ivars().projects.borrow().is_empty() {
-            self.welcome().show();
-        }
+        self.sync();
+        closed
     }
 
     /// The app's one HTTP log panel, created on first use.
@@ -176,7 +353,73 @@ impl AppDelegate {
     pub fn welcome(&self) -> &WelcomeController {
         self.ivars()
             .welcome
-            .get_or_init(|| WelcomeController::new(sample_recent_projects(), self.mtm()))
+            .get_or_init(|| WelcomeController::new(self.mtm()))
+    }
+
+    fn apply(&self, event: Event) {
+        match event {
+            Event::ProjectOpened { project } => self.project_opened(project),
+            Event::ProjectClosed { project } => self.project_closed(project),
+            Event::FocusProject { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.project_window().makeKeyAndOrderFront(None);
+                }
+            }
+            Event::WelcomeVisibility { visible: true } => self.welcome().show(),
+            Event::WelcomeVisibility { visible: false } => {
+                self.welcome().window().orderOut(None);
+            }
+            Event::RecentProjectsChanged => self.recent_projects_changed(),
+            // Bound by the later steps of WP-APP-INTEGRATION.
+            _ => {}
+        }
+    }
+
+    fn project_opened(&self, key: ProjectKey) {
+        let Some((name, path)) = self
+            .read(|app| {
+                let window = app.project(key)?;
+                Some((window.name().to_owned(), window.path().to_owned()))
+            })
+            .flatten()
+        else {
+            return;
+        };
+        let controller = ProjectWindowController::new(key, &name, &path, self.mtm());
+        // SAFETY: `showWindow:` takes any sender.
+        unsafe { controller.showWindow(None) };
+        self.ivars().projects.borrow_mut().push(controller);
+    }
+
+    fn project_closed(&self, key: ProjectKey) {
+        let closed: Vec<_> = {
+            let mut projects = self.ivars().projects.borrow_mut();
+            let (closed, open) = projects.drain(..).partition(|p| p.key() == key);
+            *projects = open;
+            closed
+        };
+        for controller in closed {
+            if !controller.is_closing() {
+                controller.set_closing(true);
+                controller.project_window().close();
+            }
+            // Keep the controller alive until AppKit is done closing its window; the run
+            // loop's autorelease pool releases it afterwards.
+            let _ = Retained::autorelease_ptr(controller);
+        }
+    }
+
+    fn recent_projects_changed(&self) {
+        let recent: Vec<RecentProject> = self
+            .read(|app| {
+                app.recent_projects()
+                    .iter()
+                    .map(|folder| RecentProject::new(folder))
+                    .collect()
+            })
+            .unwrap_or_default();
+        menu::set_recent_projects(&NSApplication::sharedApplication(self.mtm()), &recent);
+        self.welcome().set_recent(recent);
     }
 }
 
@@ -190,25 +433,21 @@ pub(crate) fn with_delegate(mtm: MainThreadMarker, f: impl FnOnce(&AppDelegate))
     }
 }
 
-fn not_implemented(what: &str) {
-    eprintln!("washboard-app: {what} is not implemented yet");
-}
-
-/// Creates the shared application, its main menu and a new delegate. `NSApplication` holds its
-/// delegate weakly, so the caller must keep the returned delegate alive for as long as the app
-/// runs.
-pub fn install(mtm: MainThreadMarker) -> Retained<AppDelegate> {
+/// Creates the shared application, its main menu and a new delegate with its model.
+/// `NSApplication` holds its delegate weakly, so the caller must keep the returned delegate
+/// alive for as long as the app runs.
+pub fn install(options: Options, mtm: MainThreadMarker) -> Retained<AppDelegate> {
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     menu::install(&app, mtm);
-    let delegate = AppDelegate::new(mtm);
+    let delegate = AppDelegate::new(options, mtm);
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     delegate
 }
 
 /// Runs the app until it terminates.
 pub fn run(mtm: MainThreadMarker) {
-    let delegate = install(mtm);
+    let delegate = install(Options::standard(), mtm);
     NSApplication::sharedApplication(mtm).run();
     drop(delegate);
 }

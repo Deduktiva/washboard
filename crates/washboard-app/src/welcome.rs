@@ -1,7 +1,8 @@
 //! The welcome window, shown when no project window is open (PLAN §8, `docs/gui-draft.html`):
 //! icon, name and version on the left, New/Open buttons, recent projects on the right.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
+use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -17,27 +18,28 @@ use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
 
-/// A recent project as the welcome window lists it.
-#[derive(Debug, Clone)]
+/// A recent project as the welcome window and File ▸ Open Recent list it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecentProject {
+    /// The folder's name. The project's own name would mean opening its database.
     pub name: String,
     /// Shown abbreviated with `~`, as Finder does.
     pub path: String,
 }
 
-/// Placeholder rows until `washboard-ui-model` supplies the real list (`project::AppState`).
-pub fn sample_recent_projects() -> Vec<RecentProject> {
-    [
-        ("Customer API", "~/Projects/soap/Customer API"),
-        ("Billing", "~/Projects/soap/Billing"),
-        ("Legacy ERP", "~/Work/erp-soap"),
-    ]
-    .into_iter()
-    .map(|(name, path)| RecentProject {
-        name: name.into(),
-        path: path.into(),
-    })
-    .collect()
+impl RecentProject {
+    pub fn new(folder: &Path) -> RecentProject {
+        let name = folder.file_name().map_or_else(
+            || folder.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = match home.as_deref().and_then(|h| folder.strip_prefix(h).ok()) {
+            Some(rest) => format!("~/{}", rest.display()),
+            None => folder.display().to_string(),
+        };
+        RecentProject { name, path }
+    }
 }
 
 const WIDTH: f64 = 640.0;
@@ -46,7 +48,7 @@ const LEFT: f64 = 250.0;
 
 #[derive(Debug)]
 pub struct WelcomeIvars {
-    recent: Vec<RecentProject>,
+    recent: RefCell<Vec<RecentProject>>,
     window: OnceCell<Retained<NSWindow>>,
     table: OnceCell<Retained<NSTableView>>,
 }
@@ -69,7 +71,7 @@ define_class!(
         // SAFETY: the signature matches `numberOfRowsInTableView:`.
         #[unsafe(method(numberOfRowsInTableView:))]
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
-            self.ivars().recent.len() as NSInteger
+            self.ivars().recent.borrow().len() as NSInteger
         }
     }
 
@@ -87,9 +89,8 @@ define_class!(
             _column: Option<&NSTableColumn>,
             row: NSInteger,
         ) -> Option<Retained<NSView>> {
-            let project = usize::try_from(row)
-                .ok()
-                .and_then(|r| self.ivars().recent.get(r));
+            let recent = self.ivars().recent.borrow();
+            let project = usize::try_from(row).ok().and_then(|r| recent.get(r));
             project.map(|p| Retained::into_super(row_view(p, self.mtm())))
         }
     }
@@ -107,19 +108,27 @@ define_class!(
 );
 
 impl WelcomeController {
-    /// Opens the recent project in `row`; the double-click action of the table.
+    /// Opens the recent project in `row`; the double-click action of the table. Rows are in
+    /// the model's order.
     pub fn open_recent(&self, row: usize) {
-        let Some(project) = self.ivars().recent.get(row) else {
-            return;
-        };
         crate::app::with_delegate(self.mtm(), |app| {
-            app.open_project_window(&project.name);
+            app.open_recent(row);
         });
     }
 
-    pub fn new(recent: Vec<RecentProject>, mtm: MainThreadMarker) -> Retained<Self> {
+    /// The model's recent projects, most recent first.
+    pub fn set_recent(&self, recent: Vec<RecentProject>) {
+        *self.ivars().recent.borrow_mut() = recent;
+        self.table().reloadData();
+    }
+
+    pub fn recent(&self) -> Vec<RecentProject> {
+        self.ivars().recent.borrow().clone()
+    }
+
+    pub fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(WelcomeIvars {
-            recent,
+            recent: RefCell::new(Vec::new()),
             window: OnceCell::new(),
             table: OnceCell::new(),
         });
