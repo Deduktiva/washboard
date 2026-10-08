@@ -1618,7 +1618,11 @@ mod checks {
         assert_eq!(selected_tab.as_deref(), Some("Servers"));
         sheet.window().layoutIfNeeded();
         let content = sheet.window().contentLayoutRect().size;
-        let tabs = sheet.tabs().frame().size;
+        // Auto Layout places the alignment rect; a tab view's frame reaches past it.
+        let tabs = sheet
+            .tabs()
+            .alignmentRectForFrame(sheet.tabs().frame())
+            .size;
         assert!(
             (tabs.width - (content.width - 40.0)).abs() < 1.0,
             "the tabs fill the sheet inside its margins: {tabs:?} in {content:?}"
