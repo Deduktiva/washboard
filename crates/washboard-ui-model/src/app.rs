@@ -13,6 +13,7 @@ use washboard_core::soap::EnvelopeError;
 
 use crate::diagnostics::Check;
 use crate::event::Event;
+use crate::format::FormatSettings;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
 use crate::import::Imports;
 use crate::send::LogEntry;
@@ -52,6 +53,9 @@ pub enum ModelError {
     /// Editing needs a selected request whose text could be read.
     #[error("no request is open in the editor")]
     NoRequestSelected,
+    /// Format XML leaves a request that is not well-formed alone.
+    #[error("the request is not well-formed XML: {0}")]
+    NotWellFormed(String),
 }
 
 /// Identifies an open project for as long as it is open. Not reused within one run, so a
@@ -89,6 +93,7 @@ pub struct App {
     jobs: usize,
     pub(crate) log: VecDeque<LogEntry>,
     pub(crate) imports: Imports,
+    pub(crate) format: FormatSettings,
 }
 
 impl fmt::Debug for App {
@@ -119,6 +124,7 @@ impl App {
             jobs: 0,
             log: VecDeque::new(),
             imports: Imports::new(),
+            format: FormatSettings::default(),
         }
     }
 
