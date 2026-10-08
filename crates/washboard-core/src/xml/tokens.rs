@@ -11,6 +11,7 @@
 use std::ops::Range;
 
 use super::lex::{Construct, Lexer, RawAttr};
+use super::utf16::Utf16Cursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TokenKind {
@@ -133,6 +134,16 @@ impl TokenBuffer {
         let from = self.tokens.partition_point(|t| t.end <= range.start);
         let to = self.tokens.partition_point(|t| t.start < range.end);
         self.tokens.get(from..to.max(from)).unwrap_or(&[])
+    }
+
+    /// [`tokens_in`](Self::tokens_in) with spans as UTF-16 offsets, which AppKit's text system
+    /// counts in. `text` is the text the buffer currently describes.
+    pub fn tokens_utf16(&self, text: &str, range: Range<usize>) -> Vec<(Range<usize>, TokenKind)> {
+        let mut cursor = Utf16Cursor::new(text);
+        self.tokens_in(range)
+            .iter()
+            .map(|t| (cursor.utf16_range(t.span()), t.kind))
+            .collect()
     }
 
     /// Updates the tokens after `old_range` (byte range in the previous text) was replaced by

@@ -8,7 +8,7 @@ use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
 use washboard_core::project::{Project, ProjectError, WsdlSet};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::wsdl::{self, Binding, Operation, Protocol, Sources, Style, Support, Wsdl};
+use washboard_core::wsdl::{self, Binding, Operation, Protocol, Sources, Style, Wsdl};
 
 /// Opens without the lock, for commands that only read: they work while the app (or a writing
 /// command) has the project open.
@@ -155,10 +155,11 @@ pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
     match matches.first() {
         None => bail!("no operation {spec:?} in the WSDL"),
         Some((b, o)) => {
-            let reason = match &o.support {
-                Support::Unsupported(r) => r.to_string(),
-                Support::Supported => String::new(),
-            };
+            let reason = o
+                .support
+                .reason()
+                .map(ToString::to_string)
+                .unwrap_or_default();
             bail!(
                 "operation {}#{} is not supported: {reason}",
                 b.name.local,

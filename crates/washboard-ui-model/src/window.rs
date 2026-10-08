@@ -9,7 +9,7 @@ use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, Serve
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
-use washboard_core::wsdl::{self, Sources, Support, Wsdl};
+use washboard_core::wsdl::{self, Sources, Wsdl};
 
 use crate::app::ModelError;
 use crate::editor::Editor;
@@ -290,10 +290,7 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                                         binding: b.name.clone(),
                                         operation: op.name.clone(),
                                     },
-                                    unsupported: match &op.support {
-                                        Support::Supported => None,
-                                        Support::Unsupported(why) => Some(why.to_string()),
-                                    },
+                                    unsupported: op.support.reason().map(ToString::to_string),
                                 })
                                 .collect()
                         })

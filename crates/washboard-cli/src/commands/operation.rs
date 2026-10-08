@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use serde::Serialize;
 use washboard_core::model::OperationRef;
 use washboard_core::project::Project;
-use washboard_core::wsdl::{Protocol, Support};
+use washboard_core::wsdl::Protocol;
 
 use crate::support::{self, protocol_label, style_label};
 
@@ -29,10 +29,7 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
     let mut rows = Vec::new();
     for b in &w.definitions.bindings {
         for o in &b.operations {
-            let reason = match &o.support {
-                Support::Supported => None,
-                Support::Unsupported(r) => Some(r.to_string()),
-            };
+            let reason = o.support.reason().map(ToString::to_string);
             rows.push(OperationRow {
                 id: format!("{}#{}", b.name, o.name),
                 binding: b.name.local.clone(),

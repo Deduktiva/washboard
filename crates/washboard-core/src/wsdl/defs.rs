@@ -212,6 +212,16 @@ pub enum Support {
     Unsupported(UnsupportedReason),
 }
 
+impl Support {
+    /// Why the operation can't be used; what the UI and the CLI show next to it.
+    pub fn reason(&self) -> Option<&UnsupportedReason> {
+        match self {
+            Support::Supported => None,
+            Support::Unsupported(reason) => Some(reason),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedReason {
     /// SOAP 1.2 binding.
