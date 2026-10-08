@@ -1,6 +1,8 @@
 //! What changed, for the front end to apply to its widgets. Events are small and name what to
 //! redraw; the front end reads the details from the [`App`](crate::App) when it applies them.
 
+use std::ops::Range;
+
 use washboard_core::model::RequestId;
 
 use crate::app::ProjectKey;
@@ -30,4 +32,14 @@ pub enum Event {
     ServersChanged { project: ProjectKey },
     /// The server popup's selection changed.
     ServerSelectionChanged { project: ProjectKey },
+    /// The editor shows a different request (or none); reload its whole text.
+    EditorReplaced { project: ProjectKey },
+    /// Re-colour this UTF-16 range of the editor's text after an edit.
+    TokensChanged {
+        project: ProjectKey,
+        range: Range<usize>,
+    },
+    /// The window's edited state ([`ProjectWindow::edited`](crate::ProjectWindow::edited))
+    /// changed.
+    EditedChanged { project: ProjectKey },
 }

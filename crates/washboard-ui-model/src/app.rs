@@ -31,6 +31,9 @@ pub enum ModelError {
     SchemaFailed(String),
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
+    /// Editing needs a selected request whose text could be read.
+    #[error("no request is open in the editor")]
+    NoRequestSelected,
 }
 
 /// Identifies an open project for as long as it is open. Not reused within one run, so a
@@ -48,6 +51,12 @@ pub(crate) enum PendingDialog {
     },
 }
 
+/// What an outstanding timer is for.
+#[derive(Debug)]
+pub(crate) enum PendingTimer {
+    Autosave(ProjectKey),
+}
+
 /// Work finished on a worker thread, to be applied on the main thread.
 type Completion = Box<dyn FnOnce(&mut App) + Send>;
 
@@ -60,6 +69,7 @@ pub struct App {
     pub(crate) events: Vec<Event>,
     welcome_visible: Option<bool>,
     pub(crate) dialogs: HashMap<DialogId, PendingDialog>,
+    pub(crate) timers: HashMap<TimerId, PendingTimer>,
     next_id: u64,
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
@@ -86,6 +96,7 @@ impl App {
             events: Vec::new(),
             welcome_visible: None,
             dialogs: HashMap::new(),
+            timers: HashMap::new(),
             next_id: 0,
             done_tx,
             done_rx,
@@ -151,20 +162,31 @@ impl App {
         self.front.dialogs.choose_project_folder(id);
     }
 
-    /// Closes the project's window. Its lock is released here.
-    pub fn close_project(&mut self, key: ProjectKey) {
+    /// Closes the project's window after saving its editor. Its lock is released here. If the
+    /// save fails the window stays open (an alert says why), so no edit is lost.
+    pub fn close_project(&mut self, key: ProjectKey) -> bool {
+        if !self.flush_or_alert(key) {
+            return false;
+        }
         let Some(i) = self.projects.iter().position(|(k, _)| *k == key) else {
-            return;
+            return true;
         };
-        self.projects.remove(i);
+        let (_, window) = self.projects.remove(i);
+        if let Some(timer) = window.autosave {
+            self.cancel_timer(timer);
+        }
         self.events.push(Event::ProjectClosed { project: key });
         self.update_welcome();
+        true
     }
 
-    /// Writes which projects are open, for the next launch. Projects stay open: the front end
-    /// terminates after this returns.
-    pub fn quit(&mut self) -> Result<(), ModelError> {
-        self.save_state()
+    /// Saves every editor and writes which projects are open, for the next launch. Projects
+    /// stay open: the front end terminates after this returns. `false` means an editor could
+    /// not be saved (already alerted); the front end should cancel termination.
+    pub fn quit(&mut self) -> Result<bool, ModelError> {
+        let saved = self.save_all();
+        self.save_state()?;
+        Ok(saved)
     }
 
     pub fn project(&self, key: ProjectKey) -> Option<&ProjectWindow> {
@@ -221,7 +243,19 @@ impl App {
     }
 
     /// The front end reports a timer started through [`Timers`](crate::Timers).
-    pub fn timer_fired(&mut self, _id: TimerId) {}
+    /// Unknown ids (a timer cancelled after it already fired) are ignored.
+    pub fn timer_fired(&mut self, id: TimerId) {
+        match self.timers.remove(&id) {
+            Some(PendingTimer::Autosave(key)) => self.autosave_fired(key),
+            None => {}
+        }
+    }
+
+    pub(crate) fn cancel_timer(&mut self, id: TimerId) {
+        if self.timers.remove(&id).is_some() {
+            self.front.timers.cancel(id);
+        }
+    }
 
     /// The front end reports the answer to a dialog. Unknown ids are ignored, so a dialog that
     /// outlived its purpose does no harm.
@@ -267,6 +301,8 @@ impl App {
             schema: SchemaState::Loading,
             sidebar: Sidebar::default(),
             servers: Vec::new(),
+            editor: None,
+            autosave: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
@@ -276,6 +312,7 @@ impl App {
         }
         self.projects.push((key, window));
         self.events.push(Event::ProjectOpened { project: key });
+        self.load_editor(key);
 
         match entry {
             Ok(entry) => self.spawn(

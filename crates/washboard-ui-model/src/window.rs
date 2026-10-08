@@ -8,6 +8,9 @@ use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::wsdl::{self, Sources, Support, Wsdl};
 
+use crate::editor::Editor;
+use crate::front_end::TimerId;
+
 /// The project's WSDL and the schema model built from it, loaded off the main thread and then
 /// shared read-only.
 #[derive(Debug)]
@@ -87,6 +90,9 @@ pub struct ProjectWindow {
     pub(crate) schema: SchemaState,
     pub(crate) sidebar: Sidebar,
     pub(crate) servers: Vec<Server>,
+    pub(crate) editor: Option<Editor>,
+    /// The running autosave timer, if an edit is waiting to be saved.
+    pub(crate) autosave: Option<TimerId>,
 }
 
 impl ProjectWindow {
@@ -113,6 +119,16 @@ impl ProjectWindow {
 
     pub fn selected_request(&self) -> Option<RequestId> {
         self.restore.last_selected_request
+    }
+
+    /// The selected request's buffer; `None` without a selection or if it could not be read.
+    pub fn editor(&self) -> Option<&Editor> {
+        self.editor.as_ref()
+    }
+
+    /// Has unsaved edits: the window's edited dot.
+    pub fn edited(&self) -> bool {
+        self.editor.as_ref().is_some_and(|e| e.dirty())
     }
 
     /// The server popup's items, in the project's order.
@@ -157,6 +173,12 @@ impl ProjectWindow {
             self.restore.last_selected_request = None;
         }
         Ok(())
+    }
+
+    pub(crate) fn mark_dirty(&mut self, request: RequestId, dirty: bool) {
+        if let Some(row) = self.sidebar.requests.iter_mut().find(|r| r.id == request) {
+            row.dirty = dirty;
+        }
     }
 
     pub(crate) fn reload_servers(&mut self) -> Result<(), washboard_core::project::ProjectError> {

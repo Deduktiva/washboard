@@ -114,6 +114,34 @@ impl Fake {
         app.pump();
     }
 
+    /// Moves the manual clock forward by `by`, firing due timers in order on the way.
+    pub fn advance(&self, app: &mut App, by: Duration) {
+        let target = self.clock.borrow().now + by;
+        loop {
+            let due = {
+                let clock = self.clock.borrow();
+                clock
+                    .timers
+                    .iter()
+                    .filter(|(_, at)| **at <= target)
+                    .min_by_key(|(_, at)| **at)
+                    .map(|(id, at)| (*id, *at))
+            };
+            let Some((id, at)) = due else { break };
+            {
+                let mut clock = self.clock.borrow_mut();
+                clock.timers.remove(&id);
+                clock.now = at;
+            }
+            app.timer_fired(id);
+        }
+        self.clock.borrow_mut().now = target;
+    }
+
+    pub fn running_timers(&self) -> usize {
+        self.clock.borrow().timers.len()
+    }
+
     /// Answers the most recent open-panel request.
     pub fn answer_folder(&self, app: &mut App, answer: DialogAnswer) {
         let id = self
