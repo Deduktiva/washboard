@@ -131,11 +131,11 @@ Owns: `crates/washboard-ui-model/**` and its workspace member entry; for step 7 
 
 New crate (PLAN §2.1): app and window state, commands, editor buffers, autosave, background
 jobs, and events to the front end. Depends on `washboard-core` only, no toolkit. State lives
-on the main thread (`Rc<RefCell<…>>`, not `Send`); workers get owned snapshots and post results
-back through the front end's `MainThread`.
+on the main thread (`Rc<RefCell<…>>`, not `Send`); workers get owned snapshots, queue their results in
+the model and wake the front end through `MainThread`; the front end then calls `App::pump`.
 
 Built as a stack of PRs like WP-APP-SHELL, one per step. Every step is tested on Linux with a
-fake front end in the crate: `MainThread` queues closures the test runs explicitly, `Timers`
+fake front end in the crate: `MainThread` counts wakes and the test pumps explicitly, `Timers`
 uses a manual clock the test advances, `Dialogs` answers from a script, and the secret store is
 `MemorySecretStore`. Tests assert on the emitted events, so timing (autosave, debounce,
 stale results) is deterministic. Project tests use temp dirs and `fixtures/`.
