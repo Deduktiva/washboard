@@ -24,7 +24,7 @@ pub fn utf16_len(s: &str) -> usize {
 
 /// UTF-16 offset of byte offset `byte` in `text`.
 pub fn byte_to_utf16(text: &str, byte: usize) -> usize {
-    let byte = floor_char_boundary(text, byte);
+    let byte = text.floor_char_boundary(byte);
     utf16_len(&text[..byte])
 }
 
@@ -39,14 +39,6 @@ pub fn utf16_to_byte(text: &str, utf16: usize) -> usize {
         seen = next;
     }
     text.len()
-}
-
-fn floor_char_boundary(text: &str, byte: usize) -> usize {
-    let mut byte = byte.min(text.len());
-    while !text.is_char_boundary(byte) {
-        byte -= 1;
-    }
-    byte
 }
 
 /// Converts many offsets of one text, cheaply when they come in ascending order.
@@ -72,7 +64,7 @@ impl<'a> Utf16Cursor<'a> {
 
     /// UTF-16 offset of byte offset `byte`.
     pub fn utf16_at(&mut self, byte: usize) -> usize {
-        let byte = floor_char_boundary(self.text, byte);
+        let byte = self.text.floor_char_boundary(byte);
         if byte < self.byte {
             self.byte = 0;
             self.utf16 = 0;
