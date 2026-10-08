@@ -26,11 +26,9 @@ use objc2_foundation::{
     NSSize, NSString, NSURL, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
-use washboard_ui_model::{
-    App, CheckState, ImportSheet, ImportTarget, ModelError, ProjectKey, SuggestedServer,
-};
+use washboard_ui_model::{App, CheckState, ImportSheet, ImportTarget, ProjectKey, SuggestedServer};
 
-use crate::app::with_delegate;
+use crate::app::{ModelAccess, with_delegate};
 use crate::layout;
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
@@ -515,18 +513,6 @@ impl ImportSheetController {
             }
         });
         panel.beginSheetModalForWindow_completionHandler(self.window(), &handler);
-    }
-
-    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.read(f)).flatten()
-    }
-
-    fn command<R>(
-        &self,
-        title: &str,
-        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
-    ) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
     }
 }
 
@@ -1083,18 +1069,6 @@ impl SettingsSheet {
         form.password.setEnabled(basic_auth);
     }
 
-    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.read(f)).flatten()
-    }
-
-    fn command<R>(
-        &self,
-        title: &str,
-        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
-    ) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
-    }
-
     fn server_form(&self, mtm: MainThreadMarker) -> ServerForm {
         let text = |placeholder: &str| {
             let field = NSTextField::textFieldWithString(ns_string!(""), mtm);
@@ -1334,3 +1308,7 @@ fn square_button(
         .setActive(true);
     view(button)
 }
+
+impl ModelAccess for ImportSheetController {}
+
+impl ModelAccess for SettingsSheet {}

@@ -22,9 +22,9 @@ use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
 };
 use washboard_core::model::{OperationRef, RequestId};
-use washboard_ui_model::{App, ModelError, ProjectKey, SchemaState, Sidebar};
+use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 
-use crate::app::with_delegate;
+use crate::app::{ModelAccess, with_delegate};
 use crate::layout;
 
 /// What a sidebar row stands for.
@@ -632,14 +632,6 @@ impl SidebarController {
         self.ivars().applying.set(was);
     }
 
-    fn command<R>(
-        &self,
-        title: &str,
-        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
-    ) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
-    }
-
     fn selection_changed_by_user(&self) {
         let Some(outline) = self.outline() else {
             return;
@@ -731,3 +723,5 @@ impl SidebarController {
         Retained::into_super(layout::cell(&stack, Some(&name), mtm))
     }
 }
+
+impl ModelAccess for SidebarController {}

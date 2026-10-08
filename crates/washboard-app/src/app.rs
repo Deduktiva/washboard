@@ -524,6 +524,23 @@ impl AppDelegate {
 }
 
 /// Runs `f` with the app delegate, if it is ours (it is, unless a test installed another).
+/// The model as a controller sees it: through the app delegate, which owns it. `None` once the
+/// delegate is gone (the app is terminating).
+pub(crate) trait ModelAccess: MainThreadOnly {
+    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.read(f)).flatten()
+    }
+
+    /// [`AppDelegate::command`]: alerts with `title` if `f` fails.
+    fn command<R>(
+        &self,
+        title: &str,
+        f: impl FnOnce(&mut App) -> Result<R, ModelError>,
+    ) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.command(title, f)).flatten()
+    }
+}
+
 pub(crate) fn with_delegate<R>(
     mtm: MainThreadMarker,
     f: impl FnOnce(&AppDelegate) -> R,

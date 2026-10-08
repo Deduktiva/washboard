@@ -38,9 +38,9 @@ use objc2_foundation::{
     NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
-use washboard_ui_model::{App, Completions, ProjectKey};
+use washboard_ui_model::{Completions, ProjectKey};
 
-use crate::app::with_delegate;
+use crate::app::{ModelAccess, with_delegate};
 use crate::text::{changed_range, completion_kinds, hover_text, utf16_edit};
 
 const FONT_SIZE: f64 = 12.0;
@@ -517,15 +517,13 @@ impl EditorController {
         let Some(key) = self.ivars().key.get() else {
             return;
         };
-        let text = with_delegate(self.mtm(), |d| {
-            d.read(|app| {
+        let text = self
+            .read(|app| {
                 app.project(key)
                     .and_then(|w| w.editor())
                     .map(|e| e.text().to_owned())
             })
-        })
-        .flatten()
-        .flatten();
+            .flatten();
         let text_view = self.text_view();
         self.ivars().pending.borrow_mut().clear();
         let was = self.ivars().applying.replace(true);
@@ -552,16 +550,14 @@ impl EditorController {
         let end = range.end.clamp(start, len);
         let lines = string.lineRangeForRange(NSRange::new(start, end - start));
         let lines = lines.location..lines.location + lines.length;
-        let tokens = with_delegate(self.mtm(), |d| {
-            d.read(|app| {
+        let tokens = self
+            .read(|app| {
                 app.project(key)
                     .and_then(|w| w.editor())
                     .map(|e| e.tokens_utf16(lines.clone()))
             })
-        })
-        .flatten()
-        .flatten()
-        .unwrap_or_default();
+            .flatten()
+            .unwrap_or_default();
         self.paint(lines, tokens);
     }
 
@@ -714,10 +710,6 @@ impl EditorController {
                 ];
             }
         }
-    }
-
-    fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
-        with_delegate(self.mtm(), |d| d.read(f)).flatten()
     }
 
     fn text_changed(&self) {
@@ -887,3 +879,5 @@ fn strip_prose_items(menu: &NSMenu) {
         menu.removeItemAtIndex(last);
     }
 }
+
+impl ModelAccess for EditorController {}
