@@ -120,6 +120,14 @@ define_class!(
             }
         }
 
+        // SAFETY: the signature matches `applicationDidResignActive:`.
+        #[unsafe(method(applicationDidResignActive:))]
+        fn did_resign_active(&self, _notification: &NSNotification) {
+            // Switching apps saves every edit (PLAN §4 "Save / autosave").
+            self.update(App::app_deactivated);
+            self.sync();
+        }
+
         // SAFETY: the signature matches `applicationShouldHandleReopen:hasVisibleWindows:`.
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
         fn should_handle_reopen(&self, _sender: &NSApplication, has_visible_windows: bool) -> bool {
@@ -395,6 +403,21 @@ impl AppDelegate {
                     controller.show_server_selection();
                 }
             }
+            Event::EditorReplaced { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.editor().show_model_text();
+                }
+            }
+            Event::TokensChanged { project, range } => {
+                if let Some(controller) = self.project(project) {
+                    controller.editor().recolor(range);
+                }
+            }
+            Event::EditedChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_edited();
+                }
+            }
             // Bound by the later steps of WP-APP-INTEGRATION.
             _ => {}
         }
@@ -415,6 +438,8 @@ impl AppDelegate {
         // The model announces a new project once; its state so far is read here.
         controller.sidebar().reload();
         controller.reload_servers();
+        controller.editor().show_model_text();
+        controller.show_edited();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };
     }

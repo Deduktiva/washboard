@@ -3,15 +3,20 @@
 //!
 //! TextKit 1, because highlighting uses the layout manager's temporary attributes: they colour
 //! glyphs without touching the text storage, so undo and the saved text never see them.
-//! After each edit only the tokens `xml::TokenBuffer` reports as changed are recoloured, over
-//! whole lines. The text view keeps its own undo manager.
+//! After each edit only the tokens reported as changed are recoloured, over whole lines. The
+//! text view keeps its own undo manager.
+//!
+//! A project window's editor is bound to the model's [`Editor`](washboard_ui_model::Editor):
+//! the text view owns the visible text and undo, each change (typing, paste, undo) goes to
+//! `App::edit` as the UTF-16 range and string AppKit reports, and colours come from the model
+//! on `TokensChanged`. An unbound editor (the response body) keeps its own `TokenBuffer`.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::ops::Range;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSColor, NSFont, NSFontAttributeName, NSFontWeightRegular,
     NSForegroundColorAttributeName, NSLayoutManager, NSResponder, NSRulerOrientation, NSRulerView,
@@ -22,8 +27,10 @@ use objc2_foundation::{
     NSString,
 };
 use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
+use washboard_ui_model::ProjectKey;
 
-use crate::text::changed_range;
+use crate::app::with_delegate;
+use crate::text::{changed_range, utf16_edit};
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
@@ -193,7 +200,14 @@ fn visible_chars(text_view: &NSTextView) -> NSRange {
 
 #[derive(Debug, Default)]
 pub struct EditorIvars {
-    /// The text as of the last highlight, to find what an edit changed.
+    /// The project whose model editor this shows; `None` for a stand-alone text.
+    key: Cell<Option<ProjectKey>>,
+    /// Changes AppKit announced in `shouldChangeTextInRange…` and has not reported done yet:
+    /// UTF-16 ranges of the text before them, and their replacements.
+    pending: RefCell<Vec<(Range<usize>, String)>>,
+    /// Set while the controller replaces the text itself.
+    applying: Cell<bool>,
+    /// Stand-alone only: the text as of the last highlight, to find what an edit changed.
     text: RefCell<String>,
     tokens: RefCell<TokenBuffer>,
     scroll: OnceCell<Retained<NSScrollView>>,
@@ -219,12 +233,40 @@ define_class!(
         // SAFETY: the signature matches `textDidChange:`.
         #[unsafe(method(textDidChange:))]
         fn text_did_change(&self, _notification: &NSNotification) {
-            self.text_changed();
+            if self.ivars().applying.get() {
+                return;
+            }
+            match self.ivars().key.get() {
+                Some(key) => self.model_text_changed(key),
+                None => self.text_changed(),
+            }
         }
     }
 
     // SAFETY: `NSTextViewDelegate` has no safety requirements.
-    unsafe impl NSTextViewDelegate for EditorController {}
+    unsafe impl NSTextViewDelegate for EditorController {
+        // SAFETY: the signature matches `textView:shouldChangeTextInRange:replacementString:`.
+        #[unsafe(method(textView:shouldChangeTextInRange:replacementString:))]
+        fn should_change(
+            &self,
+            _text_view: &NSTextView,
+            range: NSRange,
+            replacement: Option<&NSString>,
+        ) -> bool {
+            // `None`: only attributes change.
+            if let Some(replacement) = replacement
+                && self.ivars().key.get().is_some()
+                && !self.ivars().applying.get()
+            {
+                let range = range.location..range.location + range.length;
+                self.ivars()
+                    .pending
+                    .borrow_mut()
+                    .push((range, replacement.to_string()));
+            }
+            true
+        }
+    }
 );
 
 impl EditorController {
@@ -257,6 +299,68 @@ impl EditorController {
         let _ = this.ivars().text_view.set(text_view);
         let _ = this.ivars().ruler.set(ruler);
         this
+    }
+
+    /// An editor for `key`'s request: edits go to the model and colours come from it.
+    pub fn for_project(key: ProjectKey, mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::new(mtm);
+        this.ivars().key.set(Some(key));
+        this.text_view().setEditable(false);
+        this
+    }
+
+    /// Shows the model's editor text, or nothing without a selected request
+    /// (`EditorReplaced`). Starts a new undo history.
+    pub fn show_model_text(&self) {
+        let Some(key) = self.ivars().key.get() else {
+            return;
+        };
+        let text = with_delegate(self.mtm(), |d| {
+            d.read(|app| {
+                app.project(key)
+                    .and_then(|w| w.editor())
+                    .map(|e| e.text().to_owned())
+            })
+        })
+        .flatten()
+        .flatten();
+        let text_view = self.text_view();
+        self.ivars().pending.borrow_mut().clear();
+        let was = self.ivars().applying.replace(true);
+        text_view.setString(&NSString::from_str(text.as_deref().unwrap_or("")));
+        self.ivars().applying.set(was);
+        text_view.setEditable(text.is_some());
+        if let Some(undo) = text_view.undoManager() {
+            undo.removeAllActions();
+        }
+        let text = text.unwrap_or_default();
+        self.update_line_starts(&text);
+        self.recolor(0..text_view.string().length());
+    }
+
+    /// Recolours the UTF-16 range `range`, widened to whole lines, from the model's tokens
+    /// (`TokensChanged`).
+    pub fn recolor(&self, range: Range<usize>) {
+        let Some(key) = self.ivars().key.get() else {
+            return;
+        };
+        let string = self.text_view().string();
+        let len = string.length();
+        let start = range.start.min(len);
+        let end = range.end.clamp(start, len);
+        let lines = string.lineRangeForRange(NSRange::new(start, end - start));
+        let lines = lines.location..lines.location + lines.length;
+        let tokens = with_delegate(self.mtm(), |d| {
+            d.read(|app| {
+                app.project(key)
+                    .and_then(|w| w.editor())
+                    .map(|e| e.tokens_utf16(lines.clone()))
+            })
+        })
+        .flatten()
+        .flatten()
+        .unwrap_or_default();
+        self.paint(lines, tokens);
     }
 
     /// The scroll view to put into a window.
@@ -301,6 +405,36 @@ impl EditorController {
         self.text_view().scrollRangeToVisible(range);
     }
 
+    /// Sends what AppKit changed to the model. Changes it announced are sent as announced, in
+    /// reverse order so each range is still valid; otherwise, or if the model's text
+    /// disagrees afterwards, the difference to the model's text is sent instead.
+    fn model_text_changed(&self, key: ProjectKey) {
+        let mut edits = std::mem::take(&mut *self.ivars().pending.borrow_mut());
+        edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        let view = self.text_view().string().to_string();
+        self.update_line_starts(&view);
+        let Some(delegate) = with_delegate(self.mtm(), |d| d.retain()) else {
+            return;
+        };
+        let title = "Could not edit the request";
+        if !edits.is_empty() {
+            delegate.command(title, |app| {
+                edits
+                    .iter()
+                    .try_for_each(|(range, text)| app.edit(key, range.clone(), text))
+            });
+        }
+        let fix = delegate
+            .read(|app| {
+                let model = app.project(key)?.editor()?.text();
+                (model != view).then(|| utf16_edit(model, &view))
+            })
+            .flatten();
+        if let Some((range, text)) = fix {
+            delegate.command(title, |app| app.edit(key, range, &text));
+        }
+    }
+
     fn text_changed(&self) {
         let new = self.text_view().string().to_string();
         let old = std::mem::take(&mut *self.ivars().text.borrow_mut());
@@ -334,20 +468,32 @@ impl EditorController {
         let end = text[bytes.end.min(text.len())..]
             .find('\n')
             .map_or(text.len(), |i| bytes.end + i);
-        let layout = self.layout_manager();
         let lines = Utf16Cursor::new(text).utf16_range(start..end);
         let mut cursor = Utf16Cursor::new(text);
+        let tokens = self
+            .ivars()
+            .tokens
+            .borrow()
+            .tokens_in(start..end)
+            .iter()
+            .map(|t| (cursor.utf16_range(t.span()), t.kind))
+            .collect();
+        self.paint(lines, tokens);
+    }
+
+    /// Replaces the colours of the UTF-16 range `lines` with those of `tokens`.
+    fn paint(&self, lines: Range<usize>, tokens: Vec<(Range<usize>, TokenKind)>) {
+        let layout = self.layout_manager();
         // SAFETY: an immutable AppKit constant.
         let key = unsafe { NSForegroundColorAttributeName };
         layout.removeTemporaryAttribute_forCharacterRange(
             key,
             NSRange::new(lines.start, lines.end - lines.start),
         );
-        for token in self.ivars().tokens.borrow().tokens_in(start..end) {
-            let Some(color) = color(token.kind) else {
+        for (span, kind) in tokens {
+            let Some(color) = color(kind) else {
                 continue;
             };
-            let span = cursor.utf16_range(token.span());
             let value: &AnyObject = &color;
             // SAFETY: the value for the foreground colour attribute is an `NSColor`.
             unsafe {

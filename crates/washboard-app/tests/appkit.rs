@@ -822,10 +822,20 @@ mod checks {
             "text replacement off"
         );
 
-        let sample = washboard_app::SAMPLE_REQUEST;
-        assert_eq!(text_view.string().to_string(), sample);
-        // The sample is ASCII, so byte offsets are UTF-16 offsets.
-        let envelope = sample.find("Envelope").expect("tag name in sample");
+        // The editor shows the selected request as saved.
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            // SAFETY: `newRequest:` takes the sender.
+            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+        }
+        let window = project.project_window();
+        window.makeFirstResponder(Some(text_view));
+        let file = selected_file(ctx, &project);
+        let saved = std::fs::read_to_string(&file).expect("request file");
+        assert_eq!(text_view.string().to_string(), saved);
+        assert!(text_view.isEditable());
+        let utf16 = |byte: usize| saved[..byte].encode_utf16().count();
+        let envelope = utf16(saved.find("Envelope").expect("an envelope"));
         assert!(
             is_tag_color(temporary_color(editor, envelope)),
             "tag name coloured"
@@ -834,27 +844,22 @@ mod checks {
             !is_tag_color(stored_color(editor, envelope)),
             "highlight colour not in the text storage"
         );
-        assert_eq!(editor.ruler().error_lines(), [6], "error marker on line 6");
         assert!(
             editor.ruler().visible_lines().contains(&1),
             "ruler sees line 1"
         );
+        assert!(!window.isDocumentEdited());
 
-        // Type a new element at the start of line 4, as the keyboard would.
-        let at = sample
-            .find("  <soapenv:Body>")
-            .expect("Body line in sample");
+        // Type a new element at the start of the Body line, as the keyboard would.
+        let body = saved.find("Body").expect("a Body element");
+        let at = utf16(saved[..body].rfind('\n').map_or(0, |i| i + 1));
         // SAFETY: inserting a string at an empty range inside the text.
         unsafe {
             text_view
                 .insertText_replacementRange(&NSString::from_str("<new/>"), NSRange::new(at, 0))
         };
-        assert!(
-            text_view
-                .string()
-                .to_string()
-                .contains("<new/>  <soapenv:Body>")
-        );
+        let typed = text_view.string().to_string();
+        assert!(typed.contains("<new/>"), "{typed}");
         assert!(
             is_tag_color(temporary_color(editor, at + 1)),
             "typed tag name coloured"
@@ -863,6 +868,15 @@ mod checks {
             !is_tag_color(stored_color(editor, at + 1)),
             "typing stores no highlight colour"
         );
+        assert!(window.isDocumentEdited(), "edited dot");
+        assert!(selected_markers(&project).0, "unsaved marker");
+
+        // Autosave writes what the text view shows.
+        wait_until("autosave", || {
+            std::fs::read_to_string(&file).is_ok_and(|t| t == typed)
+        });
+        assert!(!window.isDocumentEdited(), "saved");
+        assert!(!selected_markers(&project).0, "marker cleared");
 
         let undo = text_view
             .undoManager()
@@ -874,15 +888,40 @@ mod checks {
         undo.undo();
         assert_eq!(
             text_view.string().to_string(),
-            sample,
+            saved,
             "undo restores the text"
         );
         assert!(
             is_tag_color(temporary_color(editor, envelope)),
             "colours after undo"
         );
+        assert!(window.isDocumentEdited(), "undo is an edit");
+        wait_until("autosave after undo", || {
+            std::fs::read_to_string(&file).is_ok_and(|t| t == saved)
+        });
 
         autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// The file of the request selected in `project`.
+    fn selected_file(ctx: &Ctx, project: &ProjectWindowController) -> PathBuf {
+        let id = project.selected_request().expect("a selected request");
+        let name = all_nodes(&project.sidebar().roots())
+            .into_iter()
+            .find(|n| n.request() == Some(id))
+            .expect("the selected request's row")
+            .title();
+        ctx.project.join("requests").join(format!("{name}.xml"))
+    }
+
+    /// The (unsaved, invalid) markers of the selected request's row.
+    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+        let id = project.selected_request().expect("a selected request");
+        all_nodes(&project.sidebar().roots())
+            .into_iter()
+            .find(|n| n.request() == Some(id))
+            .expect("the selected request's row")
+            .markers()
     }
 
     /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
@@ -937,11 +976,12 @@ mod checks {
         assert_eq!(issues.len(), 1, "sample issue listed");
         assert_eq!(issues[0][0], "6");
         project.issues().table().click(0);
-        let sample = washboard_app::SAMPLE_REQUEST;
-        let line6 = sample
+        let text = project.editor().text_view().string().to_string();
+        assert!(text.lines().count() >= 6, "{text}");
+        let line6 = text
             .split_inclusive('\n')
             .take(5)
-            .map(str::len)
+            .map(|l| l.encode_utf16().count())
             .sum::<usize>();
         let selected = project.editor().text_view().selectedRange();
         assert_eq!(selected.location, line6, "click selects line 6");

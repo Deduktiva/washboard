@@ -44,7 +44,7 @@ pub use http_log::{HttpLog, LoggedExchange, sample_exchanges};
 #[cfg(target_os = "macos")]
 pub use panes::{FakeResponse, Issue, IssuesBar, RESPONSE_TABS, ResponsePane, sample_issues};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, SAMPLE_REQUEST, toolbar_identifiers};
+pub use project_window::{ProjectWindowController, toolbar_identifiers};
 #[cfg(target_os = "macos")]
 pub use sheets::{
     NewProjectSheet, Reference, Server, SettingsSheet, sample_references, sample_servers,
