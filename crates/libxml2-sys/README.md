@@ -30,8 +30,8 @@ bindings and Schematron in 2.16; neither affects us.
 How we watch for advisories: subscribe to releases of the GitLab project (or the GitHub
 mirror's tags) and read the "Security" section of `NEWS` for each 2.15.x; also watch
 oss-security for "libxml2". Updating is `git -C vendor/libxml2 checkout v2.15.N`, then run the
-full test suite (Linux and macOS CI) and update this file. Re-check the upstream bug below on
-every update.
+full test suite (Linux and macOS CI) and update this file. Re-check the upstream bug and the
+behaviour we depend on (both below) on every update.
 
 ## Upstream issue we work around
 
@@ -43,6 +43,20 @@ loaded through the process-global external entity loader, which by default reads
 compile running on the current thread and refuses everything else, and has a regression test
 (`nested_imports_cannot_reach_the_file_system`). If a later release fixes this, the global
 loader can stay as defence in depth.
+
+## Upstream behaviour we depend on
+
+Things a libxml2 update could change without breaking the build. Each has a test that fails if
+it changes:
+
+- **Attribute in schema errors.** 2.15.4 reports attribute errors with the element as the
+  node (`xmlVUpdateError` in `error.c` replaces the attribute), so `validate/xsd.rs` reads the
+  attribute's name from the message prefix `Element '…', attribute '{ns}a': ` (PLAN §5.2).
+  Tests: `attribute_errors_span_the_attribute` (`validate/xsd.rs`),
+  `soap_attribute_errors_span_the_attribute` (`validate/request.rs`).
+- **Error codes.** The span choice and the abstract type/element explanation key on the
+  `XML_SCHEMAV_*` codes in `src/lib.rs`; tests in `validate/xsd.rs` and `validate/request.rs`
+  assert the resulting spans and messages.
 
 ## Build
 
