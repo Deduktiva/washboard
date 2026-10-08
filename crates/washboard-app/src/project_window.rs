@@ -424,15 +424,15 @@ impl ProjectWindowController {
     /// The issues bar, ruler and underlines show the editor's issues (`DiagnosticsChanged`).
     pub fn show_issues(&self) {
         let key = self.key();
-        let issues = self
+        let (issues, basis) = self
             .read(|app| {
                 app.project(key)
                     .and_then(|w| w.editor())
-                    .map(|e| e.issues().to_vec())
+                    .map(|e| (e.issues().to_vec(), Some(e.issues_basis())))
             })
             .flatten()
             .unwrap_or_default();
-        self.issues().set_issues(issues);
+        self.issues().set_issues(issues, basis);
     }
 
     /// The model's selected request.

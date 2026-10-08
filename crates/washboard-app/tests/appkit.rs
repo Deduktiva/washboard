@@ -1119,6 +1119,9 @@ mod checks {
         assert!(text[..end].is_ascii());
         let line = text[..start].matches('\n').count() + 1;
         wait_until("the first check", || issues.rows().is_empty());
+        wait_until("the text to be validated", || {
+            project.issues().summary() == "✓ Valid"
+        });
 
         let replace = |at: usize, len: usize, with: &str| {
             // SAFETY: replacing a range inside the text, as typing over a selection does.
@@ -1132,6 +1135,8 @@ mod checks {
             !issues.rows().is_empty()
         });
         assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
+        let summary = project.issues().summary();
+        assert!(summary.starts_with("⚠ "), "{summary}");
         assert!(
             editor.ruler().error_lines().contains(&line),
             "gutter marker"
@@ -1147,6 +1152,9 @@ mod checks {
         );
 
         replace(start, "someday".len(), &date);
+        wait_until("the edit to read as unchecked", || {
+            project.issues().summary() == "Checking…"
+        });
         let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
         // SAFETY: the window controller's actions take the sender.
         let sent = unsafe {
@@ -1155,6 +1163,9 @@ mod checks {
         };
         assert!(sent);
         wait_until("the issues to clear", || issues.rows().is_empty());
+        wait_until("the text to read as valid again", || {
+            project.issues().summary() == "✓ Valid"
+        });
         assert!(editor.ruler().error_lines().is_empty(), "gutter cleared");
         wait_until("the marker to clear", || !selected_markers(&project).1);
         autoreleasepool(|_| project.project_window().performClose(None));
