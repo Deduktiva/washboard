@@ -125,11 +125,79 @@ the GUI draft in light and dark mode; menus, shortcuts, sidebar rename, ruler, h
 issue click-to-line, fake send, log panel and both sheets behave; typing stays responsive in a
 1 MB file.
 
+### WP-UI-MODEL — the app without the toolkit
+Owns: `crates/washboard-ui-model/**` and its workspace member entry; for step 7 also
+`schema/query.rs` and `validate/request.rs` (moving `block_path`).
+
+New crate (PLAN §2.1): app and window state, commands, editor buffers, autosave, background
+jobs, and events to the front end. Depends on `washboard-core` only, no toolkit. State lives
+on the main thread (`Rc<RefCell<…>>`, not `Send`); workers get owned snapshots and post results
+back through the front end's `MainThread`.
+
+Built as a stack of PRs like WP-APP-SHELL, one per step. Every step is tested on Linux with a
+fake front end in the crate: `MainThread` queues closures the test runs explicitly, `Timers`
+uses a manual clock the test advances, `Dialogs` answers from a script, and the secret store is
+`MemorySecretStore`. Tests assert on the emitted events, so timing (autosave, debounce,
+stale results) is deterministic. Project tests use temp dirs and `fixtures/`.
+
+**Step 1 — crate, front-end traits, events, app state.**
+- The traits `MainThread`, `Timers`, `Dialogs` (PLAN §2.1) and the fake front end.
+- Events as a typed enum the front end drains; positions cross as UTF-16 offsets.
+- App state on `project::AppState`: open/close projects, recent projects, restore on launch
+  (missing folders reported once, then dropped), the welcome-window condition, save on quit.
+- Check: open, close and restore round-trip through `state.json`; welcome shows exactly when
+  no project is open.
+
+**Step 2 — project window state and commands.**
+- Sidebar tree: requests with dirty/invalid markers, operations by service › port incl.
+  unsupported ones; selection; server popup items and selection (last server per request).
+- Commands: new (`<Operation> <n>`), rename, duplicate, delete (confirm via `Dialogs`, history
+  deleted with it); server CRUD and the settings form state, passwords through `SecretStore`.
+- Check: each command's events and its effect on the project folder.
+
+**Step 3 — editor buffers, autosave, Save All.**
+- A buffer per opened request: text, encoding/BOM kept on save, `xml::TokenBuffer`, dirty flag.
+- `edit(range, text)` in UTF-16 → `TokensChanged(range)`; no undo (the widget owns it).
+- Autosave 1 s after the last edit via `Timers`; flush on switch, send, focus loss, quit.
+  Save All across projects; the window's edited state.
+- Check: debounce timing on the manual clock, flush triggers, BOM/UTF-16 round trip.
+
+**Step 4 — background jobs and diagnostics.**
+- Schema compile per project on a worker, shared as `Arc`; one `SchemaModel` also passed to
+  `RequestSchema::with_model`.
+- Well-formedness (debounced 150 ms) and live validation (1 s), plus the Validate command.
+  Results carry the buffer version; stale ones are dropped.
+- Diagnostics to UTF-16 spans, the issues list, sidebar invalid markers.
+- Check: stale results dropped, debounce, markers follow diagnostics.
+
+**Step 5 — send, response pane, history, HTTP log.**
+- Send validates first and refuses on errors (showing the issues); worker thread per send,
+  cancel detaches; the request's last server updated.
+- Response pane state (status line, body, headers, fault), history list and "Restore
+  request", the HTTP log ring buffer (50, Authorization masked until revealed).
+- Check against a local test server (as `http/tests.rs` does): refused send, success, fault,
+  transport error, cancel.
+
+**Step 6 — new project and replace WSDL.**
+- Import-check sheet state from `wsdl` (references resolved/unresolved, warnings); Create
+  enabled only when nothing is unresolved and the schema set compiles.
+- Create: copy files, create the project, default server from `soap:address` disabled until
+  confirmed. Replace WSDL: recompile and re-validate every request; the report itself is
+  WP-REPLACE-REPORT's.
+- Check with `fixtures/` sets including a missing include.
+
+**Step 7 — completion and hover.**
+- Move `validate::request::block_path` into `schema` and use it from both.
+- Completion at a UTF-16 offset (element names, attributes, enumeration values) and hover
+  (type, cardinality, documentation) from the shared `SchemaModel`.
+- Check against fixture schemas.
+
+Front-end binding is WP-APP-INTEGRATION.
+
 ### Later packages
 
 | Package | Depends on | Owns | Scope |
 |---|---|---|---|
-| WP-UI-MODEL | core (done) | `crates/washboard-ui-model/**` (+ its workspace member entry) | New crate (PLAN §2.1): app/window state, commands, editor buffers, autosave, background jobs, events to the front end; front-end traits (`MainThread`, `Timers`, `Dialogs`). Diagnostics as in PLAN §2.1: spans to UTF-16, one shared `SchemaModel` also passed to `RequestSchema::with_model`. Completion needs the editor path (`xml::PathElement`s) as `schema::PathStep`s; `validate::request::block_path` already converts it, so move that into `schema` (may edit `schema/query.rs` and `validate/request.rs` for this) and use it from both. Tested on Linux with a fake front end. No toolkit dependency. |
 | WP-REPLACE-REPORT | VALIDATE (done) | new `crates/washboard-core/src/project/replace_report.rs`, `crates/washboard-cli/src/commands/project.rs` | PLAN §4 "Replace WSDL": after a replace, report operations added/removed and requests that no longer validate; `project replace-wsdl` prints it. Requests are never rewritten. |
 | WP-APP-INTEGRATION | APP-SHELL + UI-MODEL | `crates/washboard-app/**` (after APP-SHELL) | Implement the front-end traits for AppKit and bind views to the model's events and commands. No app behaviour in the AppKit layer. |
 | WP-DIST | APP-SHELL | `cargo-packager` metadata in `crates/washboard-app/Cargo.toml`, a release workflow in `.github/workflows/` | DMG via `cargo-packager`; codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
