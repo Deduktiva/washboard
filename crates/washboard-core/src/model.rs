@@ -1,8 +1,10 @@
 //! Domain types shared across modules and with the UI.
 
 use std::fmt;
+use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
+use thiserror::Error;
 use uuid::Uuid;
 
 macro_rules! id_type {
@@ -69,6 +71,30 @@ impl fmt::Display for QName {
     }
 }
 
+/// Text that is not a [`QName`] or [`OperationRef`] in the notation their `Display` writes.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{0:?} is not of the form {{namespace}}name")]
+pub struct ParseNameError(pub String);
+
+impl FromStr for QName {
+    type Err = ParseNameError;
+
+    /// Parses Clark notation as `Display` writes it. Text without a leading `{` is a name in no
+    /// namespace. The local part must not be empty, and an opening `{` needs its `}`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (ns, local) = match s.strip_prefix('{') {
+            Some(rest) => rest
+                .split_once('}')
+                .ok_or_else(|| ParseNameError(s.to_owned()))?,
+            None => ("", s),
+        };
+        if local.is_empty() {
+            return Err(ParseNameError(s.to_owned()));
+        }
+        Ok(QName::new(ns, local))
+    }
+}
+
 /// Identifies an operation within a WSDL: binding QName + operation name.
 ///
 /// Bindings, not ports, define SOAP details; several ports may share one binding.
@@ -76,6 +102,32 @@ impl fmt::Display for QName {
 pub struct OperationRef {
     pub binding: QName,
     pub operation: String,
+}
+
+impl fmt::Display for OperationRef {
+    /// `{ns}Binding#Operation`: the form stored as a request's operation hint and accepted by
+    /// the command-line tool.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}#{}", self.binding, self.operation)
+    }
+}
+
+impl FromStr for OperationRef {
+    type Err = ParseNameError;
+
+    /// The inverse of `Display`. The last `#` separates the operation, so namespaces may
+    /// contain `#` (operation names, being NCNames, cannot).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let err = || ParseNameError(s.to_owned());
+        let (binding, operation) = s.rsplit_once('#').ok_or_else(err)?;
+        if operation.is_empty() {
+            return Err(err());
+        }
+        Ok(OperationRef {
+            binding: binding.parse().map_err(|_| err())?,
+            operation: operation.to_owned(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,5 +221,39 @@ pub struct SchemaBundle {
 impl SchemaBundle {
     pub fn get(&self, uri: &str) -> Option<&SchemaDoc> {
         self.docs.iter().find(|d| d.uri == uri)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qname_text_round_trips() {
+        for q in [QName::new("urn:x", "a"), QName::new("", "b")] {
+            assert_eq!(q.to_string().parse::<QName>(), Ok(q));
+        }
+        assert_eq!("{}c".parse::<QName>(), Ok(QName::new("", "c")));
+        for bad in ["", "{urn:x}", "{urn:x"] {
+            assert!(bad.parse::<QName>().is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn operation_text_round_trips() {
+        let op = OperationRef {
+            binding: QName::new("urn:x#frag", "Binding"),
+            operation: "GetCustomer".into(),
+        };
+        assert_eq!(op.to_string(), "{urn:x#frag}Binding#GetCustomer");
+        assert_eq!(op.to_string().parse::<OperationRef>(), Ok(op));
+        let local = OperationRef {
+            binding: QName::new("", "B"),
+            operation: "Op".into(),
+        };
+        assert_eq!(local.to_string().parse::<OperationRef>(), Ok(local));
+        for bad in ["garbage", "{urn:x#Op", "B#", "#Op"] {
+            assert!(bad.parse::<OperationRef>().is_err(), "{bad:?}");
+        }
     }
 }

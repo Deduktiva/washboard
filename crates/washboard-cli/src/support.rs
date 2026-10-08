@@ -120,16 +120,17 @@ pub fn style_label(s: Style) -> &'static str {
     }
 }
 
-/// `{ns}Binding#Operation`, the form stored as a request's operation hint.
-pub fn op_ref_text(op: &OperationRef) -> String {
-    format!("{}#{}", op.binding, op.operation)
-}
-
 /// Resolves `Operation`, `Binding#Operation` or `{ns}Binding#Operation` to one supported
 /// operation. Unsupported matches are reported with their reason, never silently skipped.
 pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
     let (binding, name) = match spec.rsplit_once('#') {
-        Some((b, o)) => (Some(parse_binding(b)), o),
+        Some((b, o)) => (
+            Some(
+                b.parse::<QName>()
+                    .map_err(|e| anyhow!("bad binding in {spec:?}: {e}"))?,
+            ),
+            o,
+        ),
         None => (None, spec),
     };
     let matches: Vec<(&Binding, &Operation)> = w
@@ -178,13 +179,6 @@ pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
                 o.name
             )
         }
-    }
-}
-
-fn parse_binding(s: &str) -> QName {
-    match s.strip_prefix('{').and_then(|r| r.split_once('}')) {
-        Some((ns, local)) => QName::new(ns, local),
-        None => QName::new("", s),
     }
 }
 
