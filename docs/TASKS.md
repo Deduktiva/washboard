@@ -76,6 +76,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
 | WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
 | WP-SIDEBAR-MENU | APP-INTEGRATION (done) | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs`; request order in `crates/washboard-ui-model` | Replace the +/−/⋯ buttons under the sidebar with a context menu per row: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request; the REQUESTS header gets New Request. The Project menu and its shortcuts (⌘N, ⌘D, ⌘⌫, ⌘B) stay. Requests sort by name (Finder order: case-insensitive, numbers by value), not by creation; a renamed or new request moves to its place and stays selected. The `sort_order` column stays in the database, unused. |
+| WP-SIDEBAR-FLATTEN | WP-FORMAT-XML (adds the app settings and their window); coordinate with WP-SIDEBAR-MENU, which also changes `sidebar.rs` | the OPERATIONS tree in `crates/washboard-app/src/sidebar.rs`, a pure tree-shaping function in `crates/washboard-app/src/text.rs`, one setting in the app settings (`app_settings.rs`, or `settings_window.rs` once WP-SETTINGS-WINDOW has replaced it) | Most WSDLs have one service, and many have one port, so the OPERATIONS group spends two levels on rows with nothing to choose. Leave out a level that has only one row, behind a setting that is on by default. Below. |
 | WP-SETTINGS-WINDOW | APP-INTEGRATION (done); coordinate with WP-FORMAT-XML, which adds the first app setting | new `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (replaced); the Settings… and Project Settings… items in `menu.rs` | One Settings window for the app and the open projects, replacing the Project Settings sheet. Below. |
 
 ### WP-FORMAT-XML in detail
@@ -111,6 +112,38 @@ error is shown as usual. Spaces only, no tabs.
   text, editor marked dirty and autosaved); format on save on Save All and not on autosave; the
   CLI's exit codes; in `tests/appkit.rs`, ⌃I then ⌘Z restores the text, and the settings round
   trip through a scratch defaults domain.
+
+### WP-SIDEBAR-FLATTEN in detail
+
+The model's tree stays service › port › operation (`Sidebar::services` is unchanged); only the
+app's OPERATIONS group is shaped differently.
+
+- **Rule.** With one service, its row is left out and its ports sit directly under OPERATIONS.
+  With one port in a service, that port's row is left out and its operations sit directly under
+  the service (or under OPERATIONS, when the service row is gone too). Each service is judged on
+  its own: in a WSDL with two services, one with a single port and one with two, the first
+  shows its operations directly and the second keeps its port rows.
+- **Unsupported ports count.** A SOAP 1.2 port is a port: a service with a SOAP 1.1 and a
+  SOAP 1.2 port keeps both port rows, so the 1.2 operations stay visible and greyed (PLAN §1:
+  shown, never dropped). Only levels with exactly one row, supported or not, are flattened.
+- **What a left-out row said** moves into the operations' tooltips: "Service › Port" in front of
+  what the tooltip says today (the unsupported reason, if any). WP-DRAFT-GAPS's port chip
+  ("1.1", "1.2 · unsupported") is not shown for a left-out port; with only one port, its
+  operations' greyed state already tells.
+- **Setting** (per app): "Flatten single services and ports in the sidebar", on by default, in
+  the user defaults as `SidebarFlatten` (bool) next to the format settings, and in the app
+  section of the Settings window. Changing it reshapes every open project window's sidebar at
+  once, keeping the selection and the collapsed rows that still exist.
+- **Collapsed state** is kept by row path as today (`service:…`, `port:…/…`); a left-out row has
+  no state to keep. Turning the setting off shows the restored rows expanded.
+- **Unchanged:** double-click on an operation creates a request; New Request picks the first
+  supported operation in sidebar order; the REQUESTS group.
+- **Tests:** the tree shaping on Linux (`text.rs`): one service with a 1.1 and an unsupported
+  port (both fixtures: `customer` has SOAP 1.2, `legacy-rpc` rpc/encoded; only the service row
+  goes), and synthetic trees for one service with one port, two services with mixed port
+  counts, and the setting off. In `tests/appkit.rs`: the fixture project's OPERATIONS rows
+  with the setting on and off, an operation row's tooltip naming its service and port, and
+  the selection surviving the toggle.
 
 ### WP-SETTINGS-WINDOW in detail
 
