@@ -1,6 +1,7 @@
 //! The HTTP log: one panel for the whole app listing the model's exchanges, with the selected
 //! request and response side by side (PLAN §8). `Authorization` values are masked until the
-//! user reveals them, so a screen share or screenshot doesn't leak credentials.
+//! user reveals them, so a screen share or screenshot doesn't leak credentials. Above the two
+//! sides, a line says how TLS went, loudly when certificate verification was skipped.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt::Write as _;
@@ -10,8 +11,8 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSPanel, NSScrollView, NSSplitView, NSStackView, NSTextView,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
+    NSBackingStoreType, NSButton, NSColor, NSFont, NSPanel, NSScrollView, NSSplitView, NSStackView,
+    NSTextField, NSTextView, NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint,
@@ -21,7 +22,9 @@ use washboard_core::xml;
 use washboard_ui_model::LogEntry;
 
 use crate::app::with_delegate;
+use crate::layout;
 use crate::table::TextTable;
+use crate::text::tls_line;
 
 /// What the log lists for one exchange, copied out of the model so the model is not borrowed
 /// while AppKit draws.
@@ -42,6 +45,7 @@ pub struct LogIvars {
     table: OnceCell<Retained<TextTable>>,
     request: OnceCell<Retained<NSScrollView>>,
     response: OnceCell<Retained<NSScrollView>>,
+    tls: OnceCell<Retained<NSTextField>>,
 }
 
 define_class!(
@@ -77,6 +81,7 @@ impl HttpLog {
             table: OnceCell::new(),
             request: OnceCell::new(),
             response: OnceCell::new(),
+            tls: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -106,10 +111,17 @@ impl HttpLog {
                 mtm,
             )
         };
-        let detail: [Retained<NSView>; 2] = [
-            Retained::into_super(Retained::into_super(reveal)),
-            Retained::into_super(sides),
-        ];
+        let tls = NSTextField::labelWithString(ns_string!(""), mtm);
+        let header = layout::row(
+            &[
+                Retained::into_super(Retained::into_super(reveal)),
+                Retained::into_super(Retained::into_super(tls.clone())),
+            ],
+            mtm,
+        );
+        header.setSpacing(12.0);
+        let detail: [Retained<NSView>; 2] =
+            [Retained::into_super(header), Retained::into_super(sides)];
         let detail = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&detail), mtm);
         detail.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
 
@@ -124,6 +136,7 @@ impl HttpLog {
         let _ = this.ivars().table.set(table);
         let _ = this.ivars().request.set(request);
         let _ = this.ivars().response.set(response);
+        let _ = this.ivars().tls.set(tls);
         this
     }
 
@@ -182,6 +195,7 @@ impl HttpLog {
                 self.ivars().selected.set(None);
                 set_text(self.ivars().request.get().expect("set in new()"), "");
                 set_text(self.ivars().response.get().expect("set in new()"), "");
+                self.tls_label().setStringValue(ns_string!(""));
             }
         }
     }
@@ -201,6 +215,15 @@ impl HttpLog {
     /// The request side as displayed.
     pub fn request_text(&self) -> String {
         text_of(self.ivars().request.get().expect("set in new()"))
+    }
+
+    /// The selected exchange's TLS line, as displayed.
+    pub fn tls_text(&self) -> String {
+        self.tls_label().stringValue().to_string()
+    }
+
+    fn tls_label(&self) -> &NSTextField {
+        self.ivars().tls.get().expect("set in new()")
     }
 
     pub fn set_revealed(&self, revealed: bool) {
@@ -233,6 +256,23 @@ impl HttpLog {
             self.ivars().response.get().expect("set in new()"),
             &response,
         );
+        let tls = self.tls_label();
+        let line = tls_line(&exchange.tls, exchange.response.is_some()).unwrap_or_default();
+        tls.setStringValue(&NSString::from_str(&line));
+        // A skipped check is a warning, as in the draft; anything else is a plain fact.
+        let (colour, font) = if exchange.tls.verification_skipped {
+            (
+                NSColor::systemOrangeColor(),
+                NSFont::boldSystemFontOfSize(12.0),
+            )
+        } else {
+            (
+                NSColor::secondaryLabelColor(),
+                NSFont::systemFontOfSize(12.0),
+            )
+        };
+        tls.setTextColor(Some(&colour));
+        tls.setFont(Some(&font));
     }
 }
 

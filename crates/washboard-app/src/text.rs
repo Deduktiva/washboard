@@ -3,9 +3,11 @@
 use std::ops::Range;
 
 use washboard_core::diag::{Diagnostic, Severity};
-use washboard_core::wsdl::{Reference, Resolution, Unresolved};
+use washboard_core::http::TlsInfo;
+use washboard_core::model::OperationRef;
+use washboard_core::wsdl::{Protocol, Reference, Resolution, Unresolved};
 use washboard_ui_model::{
-    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ReplaceOutcome,
+    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ReplaceOutcome, WellFormedness,
 };
 
 /// The byte range of `old` that was replaced, and the length of its replacement in `new`.
@@ -152,16 +154,120 @@ pub(crate) fn hover_text(hover: &Hover) -> String {
     text
 }
 
+/// The request bar's operation chip. Always SOAP 1.1: that is the only envelope Washboard
+/// sends, whatever else the WSDL offers.
+pub(crate) fn operation_chip(operation: &OperationRef) -> String {
+    format!("SOAP 1.1 · {}", operation.operation)
+}
+
+/// The request bar's well-formedness indicator; empty until the first check has finished.
+pub(crate) fn well_formedness_text(state: WellFormedness) -> String {
+    match state {
+        WellFormedness::Pending => String::new(),
+        WellFormedness::WellFormed => "Well-formed".to_owned(),
+        WellFormedness::Error { line: Some(line) } => format!("XML error, line {line}"),
+        WellFormedness::Error { line: None } => "XML error".to_owned(),
+    }
+}
+
+/// A port's chip in the sidebar: its SOAP version, and whether Washboard can use it. Other
+/// bindings (HTTP GET/POST) get none; their operations are greyed out with the reason.
+pub(crate) fn port_chip(protocol: Option<&Protocol>) -> Option<&'static str> {
+    match protocol? {
+        Protocol::Soap11 => Some("1.1"),
+        Protocol::Soap12 => Some("1.2 · unsupported"),
+        Protocol::Other { .. } => None,
+    }
+}
+
+/// The HTTP log's TLS line for an exchange: the protocol and whether the certificate was
+/// checked. `None` for an exchange that failed before anything about TLS was known.
+/// native-tls does not report the negotiated version, so the protocol is just "TLS".
+pub(crate) fn tls_line(tls: &TlsInfo, got_response: bool) -> Option<String> {
+    const SKIPPED: &str = "certificate verification SKIPPED (server setting)";
+    match (&tls.protocol, tls.verification_skipped) {
+        (Some(protocol), true) => Some(format!("{protocol} · {SKIPPED}")),
+        (Some(protocol), false) => Some(format!("{protocol} · certificate verified")),
+        // HTTPS that failed before a response: the setting was in effect all the same.
+        (None, true) => Some(SKIPPED.to_owned()),
+        (None, false) if got_response => Some("No TLS (plain HTTP)".to_owned()),
+        (None, false) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use washboard_core::diag::TextPos;
-    use washboard_core::model::RequestId;
-    use washboard_core::wsdl::{MatchedBy, RefKind, Reference, Resolution, Unresolved};
-    use washboard_ui_model::{CompletionKind, Hover, ReplaceOutcome};
+    use washboard_core::http::TlsInfo;
+    use washboard_core::model::{OperationRef, QName, RequestId};
+    use washboard_core::wsdl::{MatchedBy, Protocol, RefKind, Reference, Resolution, Unresolved};
+    use washboard_ui_model::{CompletionKind, Hover, ReplaceOutcome, WellFormedness};
 
     use super::{
-        changed_range, completion_kinds, hover_text, reference_row, replace_summary, utf16_edit,
+        changed_range, completion_kinds, hover_text, operation_chip, port_chip, reference_row,
+        replace_summary, tls_line, utf16_edit, well_formedness_text,
     };
+
+    #[test]
+    fn the_request_bar_names_the_operation_and_the_xml_state() {
+        let operation = OperationRef {
+            binding: QName::new("urn:example:legacy", "LegacyBinding"),
+            operation: "Lookup".into(),
+        };
+        assert_eq!(operation_chip(&operation), "SOAP 1.1 · Lookup");
+        assert_eq!(well_formedness_text(WellFormedness::Pending), "");
+        assert_eq!(
+            well_formedness_text(WellFormedness::WellFormed),
+            "Well-formed"
+        );
+        assert_eq!(
+            well_formedness_text(WellFormedness::Error { line: Some(9) }),
+            "XML error, line 9"
+        );
+        assert_eq!(
+            well_formedness_text(WellFormedness::Error { line: None }),
+            "XML error"
+        );
+    }
+
+    #[test]
+    fn ports_are_marked_with_their_soap_version() {
+        assert_eq!(port_chip(Some(&Protocol::Soap11)), Some("1.1"));
+        assert_eq!(
+            port_chip(Some(&Protocol::Soap12)),
+            Some("1.2 · unsupported")
+        );
+        let http = Protocol::Other {
+            namespace: "http://schemas.xmlsoap.org/wsdl/http/".into(),
+        };
+        assert_eq!(port_chip(Some(&http)), None);
+        assert_eq!(port_chip(None), None);
+    }
+
+    #[test]
+    fn the_tls_line_says_whether_the_certificate_was_checked() {
+        let tls = |protocol: Option<&str>, verification_skipped| TlsInfo {
+            protocol: protocol.map(Into::into),
+            verification_skipped,
+        };
+        assert_eq!(
+            tls_line(&tls(Some("TLS"), true), true).as_deref(),
+            Some("TLS · certificate verification SKIPPED (server setting)")
+        );
+        assert_eq!(
+            tls_line(&tls(Some("TLS"), false), true).as_deref(),
+            Some("TLS · certificate verified")
+        );
+        assert_eq!(
+            tls_line(&tls(None, true), false).as_deref(),
+            Some("certificate verification SKIPPED (server setting)")
+        );
+        assert_eq!(
+            tls_line(&tls(None, false), true).as_deref(),
+            Some("No TLS (plain HTTP)")
+        );
+        assert_eq!(tls_line(&tls(None, false), false), None);
+    }
 
     #[test]
     fn completion_opens_after_lt_space_and_eq_quote() {

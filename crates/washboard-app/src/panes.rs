@@ -1,4 +1,5 @@
-//! The issues bar under the editor and the response pane below it (PLAN §8).
+//! The request bar above the editor, the issues bar under it and the response pane below them
+//! (PLAN §8).
 
 use std::cell::{OnceCell, RefCell};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,7 +8,7 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
+    NSBox, NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
     NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView, NSStackViewGravity,
     NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
 };
@@ -15,13 +16,101 @@ use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
     ns_string,
 };
-use washboard_core::model::HistoryId;
-use washboard_ui_model::{Issue, IssuesBasis, ProjectKey, ResponseView};
+use washboard_core::model::{HistoryId, OperationRef};
+use washboard_ui_model::{Issue, IssuesBasis, ProjectKey, ResponseView, WellFormedness};
 
 use crate::app::ModelAccess;
 use crate::editor::EditorController;
 use crate::layout;
 use crate::table::TextTable;
+use crate::text::{operation_chip, well_formedness_text};
+
+/// The bar above the editor (`docs/gui-draft.html`): the request's name, a chip with its
+/// operation, and the live well-formedness state. Plain views with no actions, so no
+/// Objective-C class of its own.
+#[derive(Debug)]
+pub struct RequestBar {
+    name: Retained<NSTextField>,
+    operation: Retained<NSBox>,
+    operation_label: Retained<NSTextField>,
+    state: Retained<NSTextField>,
+    view: Retained<NSStackView>,
+}
+
+impl RequestBar {
+    pub fn new(mtm: MainThreadMarker) -> RequestBar {
+        let name = NSTextField::labelWithString(ns_string!(""), mtm);
+        name.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
+        layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
+        let (operation, operation_label) = layout::chip("", mtm);
+        operation.setHidden(true);
+        let state = NSTextField::labelWithString(ns_string!(""), mtm);
+        state.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+        let view = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        view.addView_inGravity(&name, NSStackViewGravity::Leading);
+        view.addView_inGravity(&operation, NSStackViewGravity::Leading);
+        view.addView_inGravity(&state, NSStackViewGravity::Trailing);
+        view.setSpacing(10.0);
+        view.setEdgeInsets(layout::insets(6.0, 12.0, 6.0, 12.0));
+        layout::hug_vertically(&view);
+        RequestBar {
+            name,
+            operation,
+            operation_label,
+            state,
+            view,
+        }
+    }
+
+    pub fn view(&self) -> &NSStackView {
+        &self.view
+    }
+
+    /// Shows the open request; `None` with no request open.
+    pub fn show(&self, request: Option<(&str, Option<&OperationRef>, WellFormedness)>) {
+        let (name, operation, state) = match request {
+            Some((name, operation, state)) => (name, operation, state),
+            None => ("", None, WellFormedness::Pending),
+        };
+        self.name.setStringValue(&NSString::from_str(name));
+        // A request made before its operation was recorded, or from a file, has no hint.
+        let chip = operation.map(operation_chip);
+        self.operation_label
+            .setStringValue(&NSString::from_str(chip.as_deref().unwrap_or_default()));
+        self.operation.setHidden(chip.is_none());
+        self.set_state(state);
+    }
+
+    /// The well-formedness state alone, which changes with every check.
+    pub fn set_state(&self, state: WellFormedness) {
+        self.state
+            .setStringValue(&NSString::from_str(&well_formedness_text(state)));
+        let colour = match state {
+            WellFormedness::Pending => NSColor::secondaryLabelColor(),
+            WellFormedness::WellFormed => NSColor::systemGreenColor(),
+            WellFormedness::Error { .. } => NSColor::systemRedColor(),
+        };
+        self.state.setTextColor(Some(&colour));
+    }
+
+    pub fn name(&self) -> String {
+        self.name.stringValue().to_string()
+    }
+
+    /// The operation chip's text; `None` while it is hidden.
+    pub fn operation(&self) -> Option<String> {
+        (!self.operation.isHidden()).then(|| self.operation_label.stringValue().to_string())
+    }
+
+    /// The operation chip, for layout checks.
+    pub fn operation_chip(&self) -> &NSBox {
+        &self.operation
+    }
+
+    pub fn state(&self) -> String {
+        self.state.stringValue().to_string()
+    }
+}
 
 #[derive(Debug)]
 pub struct IssuesIvars {

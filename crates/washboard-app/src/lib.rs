@@ -44,7 +44,7 @@ pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
 pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
-pub use panes::{IssuesBar, RESPONSE_TABS, ResponsePane};
+pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{
     ProjectWindowController, project_tabbing_id, sidebar_actions_menu, toolbar_identifiers,

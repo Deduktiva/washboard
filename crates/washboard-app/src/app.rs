@@ -378,6 +378,8 @@ impl AppDelegate {
             Event::SidebarChanged { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.sidebar().reload();
+                    // A rename changes the request bar's name.
+                    controller.show_request_bar();
                 }
             }
             Event::SelectionChanged { project } => {
@@ -402,8 +404,9 @@ impl AppDelegate {
             }
             Event::EditorReplaced { project } => {
                 if let Some(controller) = self.project(project) {
-                    // The response pane and history follow the editor's request.
+                    // The request bar, response pane and history follow the editor's request.
                     controller.editor().show_model_text();
+                    controller.show_request_bar();
                     controller.response().show_response();
                     controller.response().show_history();
                 }
@@ -483,6 +486,7 @@ impl AppDelegate {
         controller.sidebar().reload();
         controller.reload_servers();
         controller.editor().show_model_text();
+        controller.show_request_bar();
         controller.show_issues();
         controller.response().show_response();
         controller.response().show_history();
