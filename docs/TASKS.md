@@ -123,9 +123,13 @@ app's OPERATIONS group is shaped differently.
   the service (or under OPERATIONS, when the service row is gone too). Each service is judged on
   its own: in a WSDL with two services, one with a single port and one with two, the first
   shows its operations directly and the second keeps its port rows.
-- **Unsupported ports count.** A SOAP 1.2 port is a port: a service with a SOAP 1.1 and a
-  SOAP 1.2 port keeps both port rows, so the 1.2 operations stay visible and greyed (PLAN §1:
-  shown, never dropped). Only levels with exactly one row, supported or not, are flattened.
+- **Only supported ports count.** Many WSDLs have one SOAP 1.1 port next to a SOAP 1.2 or
+  rpc/encoded one (both fixtures do), and flattening would rarely apply if those counted. So
+  a service whose ports include exactly one supported port loses that port's row; the
+  unsupported ports' operations move into one collapsed "Unsupported" row after the supported
+  operations, each still greyed with its reason (PLAN §1: shown, never dropped). The row's
+  tooltip lists the ports it holds. A service with no supported port, or more than one, keeps
+  its port rows.
 - **What a left-out row said** moves into the operations' tooltips: "Service › Port" in front of
   what the tooltip says today (the unsupported reason, if any). WP-DRAFT-GAPS's port chip
   ("1.1", "1.2 · unsupported") is not shown for a left-out port; with only one port, its
@@ -133,14 +137,14 @@ app's OPERATIONS group is shaped differently.
 - **Setting** (per app): "Flatten single services and ports in the sidebar", on by default, in
   the user defaults as `SidebarFlatten` (bool) next to the format settings, and in the app
   section of the Settings window. Changing it reshapes every open project window's sidebar at
-  once, keeping the selection and the collapsed rows that still exist.
+  once, keeping the selection and the collapsed rows that still exist. The Unsupported row starts collapsed.
 - **Collapsed state** is kept by row path as today (`service:…`, `port:…/…`); a left-out row has
   no state to keep. Turning the setting off shows the restored rows expanded.
 - **Unchanged:** double-click on an operation creates a request; New Request picks the first
   supported operation in sidebar order; the REQUESTS group.
 - **Tests:** the tree shaping on Linux (`text.rs`): one service with a 1.1 and an unsupported
-  port (both fixtures: `customer` has SOAP 1.2, `legacy-rpc` rpc/encoded; only the service row
-  goes), and synthetic trees for one service with one port, two services with mixed port
+  port (both fixtures: `customer` has SOAP 1.2, `legacy-rpc` rpc/encoded; the operations sit
+  under OPERATIONS with an Unsupported row after them), and synthetic trees for one service with one port, two services with mixed port
   counts, and the setting off. In `tests/appkit.rs`: the fixture project's OPERATIONS rows
   with the setting on and off, an operation row's tooltip naming its service and port, and
   the selection surviving the toggle.
