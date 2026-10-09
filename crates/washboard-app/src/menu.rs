@@ -22,6 +22,7 @@ const OPT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Option.0);
 const CTRL_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Control.0);
+const CTRL: NSEventModifierFlags = NSEventModifierFlags::Control;
 const NONE: NSEventModifierFlags = NSEventModifierFlags(0);
 
 /// `NSFindPanelAction` values, sent as the item's tag with `performFindPanelAction:`.
@@ -94,14 +95,7 @@ const APP: &[Entry] = &[
         NONE,
     ),
     Entry::Separator,
-    // No action: disabled until there are settings.
-    Entry::Item {
-        title: "Settings…",
-        action: None,
-        key: ",",
-        modifiers: CMD,
-        tag: 0,
-    },
+    item("Settings…", c"showSettings:", ",", CMD),
     Entry::Separator,
     Entry::Submenu("Services", Special::Services, &[]),
     Entry::Separator,
@@ -145,6 +139,9 @@ const EDIT: &[Entry] = &[
             find("Use Selection for Find", "e", CMD, FIND_SET_FIND_STRING),
         ],
     ),
+    Entry::Separator,
+    // Answered by the project window, enabled while it has a request open.
+    item("Format XML", c"formatXML:", "i", CTRL),
 ];
 
 // `toggleSidebar:` reaches the project window's split view controller, which also retitles

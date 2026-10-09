@@ -26,6 +26,7 @@ fn main() {
         ("sidebar_commands", checks::sidebar_commands),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
+        ("format_xml", checks::format_xml),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
@@ -60,17 +61,17 @@ mod checks {
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::{AnyObject, Sel};
-    use objc2::{MainThreadMarker, Message, msg_send};
+    use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSEvent,
-        NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSControlStateValueOn,
+        NSEvent, NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
         NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
         NSToolbarDisplayMode, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
         NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString, NSUserDefaults,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -81,8 +82,10 @@ mod checks {
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
     use washboard_ui_model::{
-        Alert, Confirm, DialogAnswer, DialogId, Dialogs, ImportTarget, ProjectKey,
+        Alert, Confirm, DialogAnswer, DialogId, Dialogs, FormatSettings, ImportTarget, ProjectKey,
     };
+
+    const DEFAULTS_SUITE: &str = "at.deduktiva.washboard.appkit-checks";
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -234,10 +237,15 @@ mod checks {
 
             let dialogs = RecordingDialogs::default();
             let log = dialogs.0.clone();
+            // A scratch defaults domain, so the checks neither see nor change the user's
+            // settings; one left over from an aborted run is cleared first.
+            NSUserDefaults::standardUserDefaults()
+                .removePersistentDomainForName(&NSString::from_str(DEFAULTS_SUITE));
             let options = Options {
                 state_dir,
                 secrets: Arc::new(MemorySecretStore::default()),
                 dialogs: Some(Box::new(dialogs)),
+                defaults_suite: Some(DEFAULTS_SUITE.into()),
             };
             let delegate = washboard_app::install(options, mtm);
             let app = NSApplication::sharedApplication(mtm);
@@ -332,7 +340,7 @@ mod checks {
             &[
                 ("About Washboard", "", 0, "orderFrontStandardAboutPanel:"),
                 ("-", "", 0, ""),
-                ("Settings…", ",", C, ""),
+                ("Settings…", ",", C, "showSettings:"),
                 ("-", "", 0, ""),
                 ("Services", "", 0, ">"),
                 ("-", "", 0, ""),
@@ -366,6 +374,8 @@ mod checks {
                 ("Select All", "a", C, "selectAll:"),
                 ("-", "", 0, ""),
                 ("Find", "", 0, ">"),
+                ("-", "", 0, ""),
+                ("Format XML", "i", CTRL, "formatXML:"),
             ],
         ),
         ("View", &[("Show Sidebar", "s", CTRL | C, "toggleSidebar:")]),
@@ -461,7 +471,7 @@ mod checks {
             .expect("the Services menu is registered");
         assert_eq!(services.title().to_string(), "Services");
 
-        // Settings has no action yet, so AppKit disables it.
+        // Settings is answered by the app delegate, so it is enabled with no window open.
         let app_menu = items
             .firstObject()
             .and_then(|i| i.submenu())
@@ -469,8 +479,8 @@ mod checks {
         let settings = app_menu.itemWithTitle(&objc2_foundation::NSString::from_str("Settings…"));
         app_menu.update();
         assert!(
-            !settings.expect("Settings item").isEnabled(),
-            "Settings is disabled"
+            settings.expect("Settings item").isEnabled(),
+            "Settings is enabled"
         );
     }
 
@@ -1082,6 +1092,146 @@ mod checks {
         });
 
         autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// Format XML (⌃I) is one undo step that keeps the selection on the same text; the settings
+    /// window writes the user defaults and the model follows; Save All formats with format on
+    /// save, autosave never does.
+    pub fn format_xml(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            // SAFETY: `newRequest:` takes the sender.
+            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+        }
+        let editor = project.editor();
+        let text_view = editor.text_view();
+        let window = project.project_window();
+        window.makeFirstResponder(Some(text_view));
+        let file = selected_file(ctx, &project);
+        // Put back at the end: later checks expect the generated request.
+        let original = text_view.string().to_string();
+        let undo = text_view
+            .undoManager()
+            .expect("the text view has an undo manager");
+        // Without a run loop, AppKit's per-event undo groups never close, and closing them by
+        // hand leaves the undo manager refusing the next registration with an exception. So
+        // each step gets a group of its own, as one event would.
+        undo.setGroupsByEvent(false);
+        let grouped = |step: &dyn Fn()| {
+            undo.beginUndoGrouping();
+            step();
+            undo.endUndoGrouping();
+        };
+        let set_text = |text: &str| {
+            grouped(&|| {
+                let len = text_view.string().length();
+                // SAFETY: replacing the whole text, a valid range.
+                unsafe {
+                    text_view.insertText_replacementRange(
+                        &NSString::from_str(text),
+                        NSRange::new(0, len),
+                    )
+                };
+            })
+        };
+        let send =
+            |action: &std::ffi::CStr, target: Option<&AnyObject>, sender: Option<&AnyObject>| {
+                undo.beginUndoGrouping();
+                // SAFETY: every action used here takes the sender.
+                let sent = unsafe {
+                    ctx.app
+                        .sendAction_to_from(Sel::register(action), target, sender)
+                };
+                undo.endUndoGrouping();
+                sent
+            };
+        // Sent to the project's controller, as from its key window; headless runs have none.
+        let format = |sender: &AnyObject| send(c"formatXML:", Some(&*project), Some(sender));
+
+        let ugly = "<a><b>xy</b></a>";
+        set_text(ugly);
+        // Select the `y`.
+        text_view.setSelectedRange(NSRange::new(7, 1));
+        let edit_menu = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Edit")))
+            .and_then(|i| i.submenu())
+            .expect("Edit menu");
+        let item = edit_menu
+            .itemWithTitle(&NSString::from_str("Format XML"))
+            .expect("Format XML item");
+        // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+        let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*item] };
+        assert!(enabled, "Format XML with a request open");
+        assert!(format(&item), "the project window's controller answers ⌃I");
+        let formatted = "<a>\n  <b>xy</b>\n</a>\n";
+        assert_eq!(text_view.string().to_string(), formatted);
+        let selected = text_view.selectedRange();
+        assert_eq!(
+            (selected.location, selected.length),
+            (formatted.find('y').expect("y"), 1),
+            "the selection stays on the same text"
+        );
+        assert!(window.isDocumentEdited(), "formatting is an edit");
+        assert_eq!(undo.undoMenuItemTitle().to_string(), "Undo Format XML");
+        undo.undo();
+        assert_eq!(text_view.string().to_string(), ugly, "one undo step");
+
+        // A request that is not well-formed is left alone.
+        set_text("<a><b></a>");
+        format(&item);
+        assert_eq!(text_view.string().to_string(), "<a><b></a>");
+
+        // The settings window round trip: controls → defaults → model.
+        let settings = ctx.delegate.app_settings();
+        send(c"showSettings:", None, None);
+        assert!(settings.window().isVisible(), "Settings… opens the window");
+        assert_eq!(settings.shown(), FormatSettings::default());
+        settings.indent_popup().selectItemAtIndex(3);
+        settings.on_save_checkbox().setState(NSControlStateValueOn);
+        let target: &AnyObject = settings;
+        send(c"settingChanged:", Some(target), None);
+        let reread = NSUserDefaults::initWithSuiteName(
+            NSUserDefaults::alloc(),
+            Some(&NSString::from_str(DEFAULTS_SUITE)),
+        )
+        .expect("the scratch suite");
+        assert_eq!(
+            reread.integerForKey(&NSString::from_str(washboard_app::INDENT_KEY)),
+            4
+        );
+        assert!(reread.boolForKey(&NSString::from_str(washboard_app::ON_SAVE_KEY)));
+        let model = ctx.delegate.read(|app| app.format_settings());
+        assert_eq!(
+            model,
+            Some(FormatSettings {
+                indent: 4,
+                on_save: true
+            })
+        );
+        settings.window().orderOut(None);
+
+        // Autosave writes the text as typed, also with format on save.
+        window.makeFirstResponder(Some(text_view));
+        set_text(ugly);
+        wait_until("autosave", || {
+            std::fs::read_to_string(&file).is_ok_and(|t| t == ugly)
+        });
+        // Save All formats first, at the new width.
+        set_text(ugly);
+        send(c"saveAll:", None, None);
+        let wide = "<a>\n    <b>xy</b>\n</a>\n";
+        assert_eq!(text_view.string().to_string(), wide);
+        assert_eq!(std::fs::read_to_string(&file).ok().as_deref(), Some(wide));
+        assert!(!window.isDocumentEdited(), "saved");
+
+        ctx.delegate.set_format_settings(FormatSettings::default());
+        set_text(&original);
+        send(c"saveAll:", None, None);
+        assert_eq!(std::fs::read_to_string(&file).ok(), Some(original));
+        autoreleasepool(|_| window.performClose(None));
     }
 
     /// The file of the request selected in `project`.
