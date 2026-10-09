@@ -5,13 +5,14 @@
 use std::ops::Range;
 use std::time::Duration;
 
+use washboard_core::diag::DiagSource;
 use washboard_core::model::RequestId;
 use washboard_core::project::Project;
 use washboard_core::xml::utf16::{Utf16Cursor, utf16_len, utf16_to_byte};
 use washboard_core::xml::{TokenBuffer, TokenKind};
 
 use crate::app::{App, ModelError, ProjectKey};
-use crate::diagnostics::{Check, Issue, IssuesBasis};
+use crate::diagnostics::{Check, Issue, IssuesBasis, WellFormedness};
 use crate::event::Event;
 use crate::timers::TimerKind;
 
@@ -29,6 +30,8 @@ pub struct Editor {
     pub(crate) issues: Vec<Issue>,
     /// The version the last full check ran on, and whether it had the schema to check against.
     pub(crate) checked: Option<(u64, bool)>,
+    /// A check of any kind has finished since the request was opened.
+    pub(crate) well_formedness_checked: bool,
 }
 
 impl Editor {
@@ -46,6 +49,7 @@ impl Editor {
             dirty: false,
             issues: Vec::new(),
             checked: None,
+            well_formedness_checked: false,
         })
     }
 
@@ -75,6 +79,20 @@ impl Editor {
             Some((version, true)) if version == self.version => IssuesBasis::Validated,
             Some((version, false)) if version == self.version => IssuesBasis::WellFormedOnly,
             _ => IssuesBasis::Pending,
+        }
+    }
+
+    /// From the issues: an edit does not make it pending again, so the indicator does not
+    /// flicker while typing.
+    pub fn well_formedness(&self) -> WellFormedness {
+        let error = self
+            .issues
+            .iter()
+            .find(|i| i.source == DiagSource::WellFormedness && i.is_error());
+        match error {
+            Some(issue) => WellFormedness::Error { line: issue.line },
+            None if self.well_formedness_checked => WellFormedness::WellFormed,
+            None => WellFormedness::Pending,
         }
     }
 

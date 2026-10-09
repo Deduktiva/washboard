@@ -8,13 +8,14 @@ use tempfile::TempDir;
 use washboard_core::diag::DiagSource;
 use washboard_core::model::{Auth, RequestId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
+use washboard_core::wsdl::Protocol;
 use washboard_core::xml::TokenKind;
 
 use crate::fake::Fake;
 use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, ImportTarget, Issue,
-    IssuesBasis, ModelError, OperationNode, ProjectKey, SchemaState,
+    IssuesBasis, ModelError, OperationNode, ProjectKey, SchemaState, WellFormedness,
 };
 
 fn fixtures() -> PathBuf {
@@ -309,6 +310,12 @@ fn the_operation_tree_shows_unsupported_operations() {
     assert_eq!(rpc.name(), "Lookup");
     assert_eq!(rpc.unsupported, None);
     assert!(lookup(&app, key, "LegacyEncodedPort").unsupported.is_some());
+    let protocols: Vec<_> = services[0]
+        .ports
+        .iter()
+        .map(|p| p.protocol.clone())
+        .collect();
+    assert_eq!(protocols, [Some(Protocol::Soap11), Some(Protocol::Soap11)]);
 }
 
 #[test]
@@ -871,6 +878,42 @@ fn well_formedness_is_checked_150_ms_after_the_last_edit() {
     assert!(invalid_marker(&app, key, first));
 }
 
+fn well_formedness(app: &App, key: ProjectKey) -> WellFormedness {
+    let window = app.project(key).expect("open");
+    window.editor().expect("editor").well_formedness()
+}
+
+#[test]
+fn the_well_formedness_indicator_follows_the_checks() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    app.new_request(key, &op).expect("new");
+    assert_eq!(well_formedness(&app, key), WellFormedness::Pending);
+    next_check(&fake, &mut app, key);
+    assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
+
+    set_text(&mut app, key, "<!-- -->\n<a>");
+    assert_eq!(
+        well_formedness(&app, key),
+        WellFormedness::WellFormed,
+        "an edit keeps the last result until its own check, so typing does not flicker"
+    );
+    fake.advance(&mut app, ms(150));
+    next_check(&fake, &mut app, key);
+    assert_eq!(
+        well_formedness(&app, key),
+        WellFormedness::Error { line: Some(2) }
+    );
+
+    // A schema error is not a well-formedness error.
+    set_text(&mut app, key, "<a/>");
+    app.validate(key).expect("validate");
+    let issues = next_check(&fake, &mut app, key);
+    assert!(issues.iter().any(Issue::is_error), "{issues:?}");
+    assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
+}
+
 #[test]
 fn schema_errors_come_from_the_full_check_after_a_second() {
     let setup = Setup::new();
@@ -1316,6 +1359,17 @@ fn replace_wsdl_revalidates_every_request() {
     assert!(
         services.iter().any(|s| s.name != "LegacyService"),
         "{services:?}"
+    );
+    // A SOAP 1.2 port is listed with its protocol, for its "unsupported" chip.
+    let ports: Vec<_> = services
+        .iter()
+        .flat_map(|s| &s.ports)
+        .map(|p| (p.name.as_str(), p.protocol.clone()))
+        .collect();
+    assert!(
+        ports.contains(&("CustomerPort", Some(Protocol::Soap11)))
+            && ports.contains(&("CustomerPort12", Some(Protocol::Soap12))),
+        "{ports:?}"
     );
     // The open editor is checked against the new schema too.
     let issues = window.editor().expect("editor").issues();

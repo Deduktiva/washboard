@@ -9,7 +9,7 @@ use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, Serve
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
-use washboard_core::wsdl::{self, Sources, Wsdl};
+use washboard_core::wsdl::{self, Protocol, Sources, Wsdl};
 
 use crate::app::ModelError;
 use crate::editor::Editor;
@@ -120,6 +120,9 @@ pub struct ServiceNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortNode {
     pub name: String,
+    /// The binding's protocol, for the port's "1.1" or "1.2 · unsupported" chip; `None` when
+    /// the port names a binding the WSDL lacks.
+    pub protocol: Option<Protocol>,
     pub operations: Vec<OperationNode>,
 }
 
@@ -277,24 +280,26 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
             ports: service
                 .ports
                 .iter()
-                .map(|port| PortNode {
-                    name: port.name.clone(),
-                    operations: wsdl
-                        .definitions
-                        .binding(&port.binding)
-                        .map(|b| {
-                            b.operations
-                                .iter()
-                                .map(|op| OperationNode {
-                                    operation: OperationRef {
-                                        binding: b.name.clone(),
-                                        operation: op.name.clone(),
-                                    },
-                                    unsupported: op.support.reason().map(ToString::to_string),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                .map(|port| {
+                    let binding = wsdl.definitions.binding(&port.binding);
+                    PortNode {
+                        name: port.name.clone(),
+                        protocol: binding.map(|b| b.protocol.clone()),
+                        operations: binding
+                            .map(|b| {
+                                b.operations
+                                    .iter()
+                                    .map(|op| OperationNode {
+                                        operation: OperationRef {
+                                            binding: b.name.clone(),
+                                            operation: op.name.clone(),
+                                        },
+                                        unsupported: op.support.reason().map(ToString::to_string),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    }
                 })
                 .collect(),
         })
