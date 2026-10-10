@@ -50,7 +50,7 @@ pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
 pub use app_settings::{INDENT_KEY, ON_SAVE_KEY};
 #[cfg(target_os = "macos")]
-pub use editor::{EditorController, LineNumberRuler};
+pub use editor::{EditorController, LineNumberRuler, highlight_palette};
 #[cfg(target_os = "macos")]
 pub use form::{GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, ROW_INSET, TEXT_ID};
 #[cfg(target_os = "macos")]
