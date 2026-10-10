@@ -15,7 +15,9 @@ use objc2_app_kit::{
     NSBox, NSButton, NSControlStateValueOn, NSLayoutPriorityRequired, NSSecureTextField, NSSwitch,
     NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSSize, NSString, ns_string};
+use objc2_foundation::{
+    NSInteger, NSNumber, NSNumberFormatter, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
+};
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{ProjectKey, SuggestedServer};
 
@@ -44,6 +46,8 @@ struct ServerForm {
     /// The User and Password rows, shown with Basic auth only.
     user_row: Retained<NSView>,
     password_row: Retained<NSView>,
+    /// Clear Password, in a row of its own, shown while a stored password would be kept.
+    clear_row: Retained<NSView>,
     delete: Retained<NSButton>,
 }
 
@@ -62,6 +66,10 @@ pub struct ServersIvars {
     form: OnceCell<ServerForm>,
     /// What the sheet edits while it is open: `Some(None)` for a server not added yet.
     editing: Cell<Option<Option<ServerId>>>,
+    /// Whether the edited server has a password in the secret store, and whether Clear
+    /// Password was pressed since the sheet opened; Save clears it then.
+    stored_password: Cell<bool>,
+    clear_password: Cell<bool>,
 }
 
 define_class!(
@@ -104,6 +112,11 @@ define_class!(
             self.cancel();
         }
 
+        #[unsafe(method(clearPassword:))]
+        fn clear_password_action(&self, _sender: Option<&AnyObject>) {
+            self.clear_password();
+        }
+
         #[unsafe(method(deleteServer:))]
         fn delete_action(&self, _sender: Option<&AnyObject>) {
             self.delete();
@@ -129,6 +142,8 @@ impl ServersPane {
             body: OnceCell::new(),
             form: OnceCell::new(),
             editing: Cell::new(None),
+            stored_password: Cell::new(false),
+            clear_password: Cell::new(false),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -269,6 +284,12 @@ impl ServersPane {
         *self.ivars().suggested.borrow_mut() = suggested;
         *self.ivars().servers.borrow_mut() = servers;
         self.show_list();
+        // Deleted, from the sheet's Delete Server or elsewhere.
+        if let Some(Some(id)) = self.ivars().editing.get()
+            && self.row_of(id).is_none()
+        {
+            self.close_sheet();
+        }
     }
 
     /// Opens the sheet on server `row`.
@@ -277,6 +298,12 @@ impl ServersPane {
             return;
         };
         self.ivars().editing.set(Some(Some(server.id)));
+        let key = self.ivars().key;
+        let stored = self
+            .read(|app| app.server_password(key, server.id).ok().flatten().is_some())
+            .unwrap_or(false);
+        self.ivars().stored_password.set(stored);
+        self.ivars().clear_password.set(false);
         self.load(&server, &server.name);
         self.form().delete.setHidden(false);
         self.present();
@@ -293,6 +320,8 @@ impl ServersPane {
             timeout: DEFAULT_TIMEOUT,
         };
         self.ivars().editing.set(Some(None));
+        self.ivars().stored_password.set(false);
+        self.ivars().clear_password.set(false);
         self.load(&server, "New Server");
         self.form().delete.setHidden(true);
         self.present();
@@ -337,6 +366,18 @@ impl ServersPane {
                 return;
             }
         }
+        // A typed password replaces the stored one anyway; without auth it is already gone.
+        if self.ivars().clear_password.get()
+            && password.is_none()
+            && matches!(server.auth, Auth::Basic { .. })
+            && self
+                .command("Could not clear the password", |app| {
+                    app.clear_server_password(key, id)
+                })
+                .is_none()
+        {
+            return;
+        }
         self.close_sheet();
     }
 
@@ -345,16 +386,39 @@ impl ServersPane {
         self.close_sheet();
     }
 
-    /// Deletes the server the sheet edits and closes the sheet.
+    /// Asks to delete the server the sheet edits; the sheet closes once it is deleted.
     pub fn delete(&self) {
         let Some(Some(id)) = self.ivars().editing.get() else {
             return;
         };
         let key = self.ivars().key;
         self.command("Could not delete the server", |app| {
-            app.delete_server(key, id)
+            app.ask_delete_server(key, id)
         });
-        self.close_sheet();
+    }
+
+    /// Clear Password: Save removes the stored password.
+    pub fn clear_password(&self) {
+        self.ivars().clear_password.set(true);
+        self.show_auth_rows();
+    }
+
+    /// Whether the sheet offers Clear Password: a password is stored, Basic auth is on, and
+    /// it was not cleared yet.
+    pub fn offers_clear_password(&self) -> bool {
+        !self.form().clear_row.isHiddenOrHasHiddenAncestor()
+    }
+
+    pub fn password_placeholder(&self) -> String {
+        self.form()
+            .password
+            .placeholderString()
+            .map(|p| p.to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn timeout_field(&self) -> &NSTextField {
+        &self.form().timeout
     }
 
     /// Adds suggestion `row` as a server with its address as suggested.
@@ -448,8 +512,16 @@ impl ServersPane {
     fn show_auth_rows(&self) {
         let form = self.form();
         let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
+        let stored = self.ivars().stored_password.get() && !self.ivars().clear_password.get();
+        form.password
+            .setPlaceholderString(Some(&NSString::from_str(if stored {
+                "Stored in the Keychain"
+            } else {
+                "Not set"
+            })));
         form::set_row_shown(&form.user_row, basic_auth);
         form::set_row_shown(&form.password_row, basic_auth);
+        form::set_row_shown(&form.clear_row, basic_auth && stored);
         form::fit_window(self.sheet(), self.sheet_body());
     }
 
@@ -520,7 +592,11 @@ impl ServersPane {
         let user = text("User");
         let timeout = text("60");
         let password = NSSecureTextField::new(mtm);
-        password.setPlaceholderString(Some(ns_string!("Saved to the Keychain")));
+        // Whole seconds, at least one; the field refuses anything else.
+        let seconds = NSNumberFormatter::new();
+        seconds.setAllowsFloats(false);
+        seconds.setMinimum(Some(&NSNumber::new_u64(1)));
+        timeout.setFormatter(Some(&seconds));
         let ignore_tls = NSSwitch::new(mtm);
         let target: &AnyObject = self;
         // SAFETY: the pane owns the sheet and its controls, so it outlives their weak target
@@ -552,6 +628,8 @@ impl ServersPane {
         );
         let user_row = form::field_row("User", &user, mtm);
         let password_row = form::field_row("Password", &password, mtm);
+        let clear = target_button("Clear Password", self, sel!(clearPassword:), mtm);
+        let clear_row = form::control_row("Stored password", &clear, mtm);
         let group = form::group(
             vec![
                 form::field_row("Name", &name, mtm),
@@ -560,6 +638,7 @@ impl ServersPane {
                 form::control_row("Authentication", &auth, mtm),
                 user_row.clone(),
                 password_row.clone(),
+                clear_row.clone(),
                 form::control_row("Timeout", &timeout_row, mtm),
             ],
             mtm,
@@ -609,6 +688,7 @@ impl ServersPane {
             timeout,
             user_row,
             password_row,
+            clear_row,
             delete,
         };
         (sheet, body, form)
