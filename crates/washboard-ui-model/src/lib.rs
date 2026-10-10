@@ -18,6 +18,7 @@ mod event;
 mod format;
 mod front_end;
 mod import;
+mod picker;
 mod send;
 mod timers;
 mod window;
@@ -40,6 +41,7 @@ pub use front_end::{
     Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
 };
 pub use import::{CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome};
+pub use picker::{PickerSection, pick_operations};
 pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
 pub use window::{
     OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
