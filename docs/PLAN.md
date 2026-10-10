@@ -111,8 +111,8 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 **Owns (all toolkit-independent):**
 - App state: open projects, recent projects, restore on launch (`project::AppState`), the
   welcome-window condition, the HTTP log ring buffer (50).
-- Per project window: the sidebar tree (requests with dirty/invalid markers, operations
-  incl. unsupported ones), selection, the server popup's items and selection, the response
+- Per project window: the sidebar tree (folders, requests with dirty/invalid markers), the
+  operations incl. unsupported ones for the New picker, selection, the server popup's items and selection, the response
   pane's state, history list, issues list, project settings form state.
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
@@ -188,7 +188,8 @@ Customer API/
 │  └─ xsd/                      supporting XSDs, relative structure preserved
 │     └─ common/types.xsd
 ├─ requests/
-│  ├─ GetCustomer 1.xml         full SOAP envelope, exactly what is sent
+│  ├─ GetCustomer/              a folder: a plain subdirectory, any depth
+│  │  └─ GetCustomer 1.xml      full SOAP envelope, exactly what is sent
 │  └─ CreateOrder 1.xml
 └─ history/
    └─ <request-uuid>/
@@ -197,6 +198,8 @@ Customer API/
 ```
 
 - **Request name = file stem.** Rename = file rename. Names may not contain `/`, `:` or start with `.`.
+  Names are unique across the project (case-insensitive), not per folder. Folders follow the
+  same rules; they exist only on disk, not in the database, and an empty one stays until deleted.
 - **Request files contain the full envelope.** What you see is what is sent; SOAP headers are editable.
 - **History** is keyed by request UUID (not name) so renames don't orphan it. The sent request is
   stored too — without it a response is hard to interpret later. Retention: last 20 per request
@@ -219,7 +222,7 @@ CREATE TABLE server   (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NUL
                        timeout_secs INTEGER NOT NULL DEFAULT 60,
                        sort_order INTEGER NOT NULL);
 CREATE TABLE request  (id TEXT PRIMARY KEY,
-                       file_name TEXT NOT NULL UNIQUE,  -- relative to requests/
+                       file_name TEXT NOT NULL UNIQUE,  -- relative to requests/, `/`-separated
                        operation TEXT,                  -- "{ns}Port#Operation" hint, may go stale
                        last_server_id TEXT REFERENCES server(id) ON DELETE SET NULL,
                        created_at TEXT NOT NULL, sort_order INTEGER NOT NULL);
@@ -244,12 +247,18 @@ CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT);  -- split positions, s
 bookmark data, window frame autosave name, last selected request). Bookmark data is stored
 from day one so we can enable the App Sandbox later without a migration.
 
+App settings (not per project) live in the user defaults (`NSUserDefaults`, domain
+`at.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
+and `FormatOnSave` so far. The app reads them and passes them to the model at launch and on
+change; the model stores no settings of its own, and the CLI reads none. The Settings window's
+selected pane (`SettingsPane`) is kept there too.
+
 ---
 
 ## 4. Feature behaviour
 
 ### Create project (File ▸ New Project…, ⇧⌘N)
-1. Sheet: project name, parent location (`NSOpenPanel` with "Create Folder"), WSDL file,
+1. New Project window (its own window, not a sheet): project name, parent location (`NSOpenPanel` with "Create Folder"), WSDL file,
    additional XSD files or a folder.
 2. **Import check** runs immediately (validation thread): parse WSDL, walk every
    `wsdl:import`, `xs:import`, `xs:include`, `xs:redefine`. Each reference is shown as
@@ -269,12 +278,21 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 (operations added/removed, requests now invalid). Requests are never rewritten automatically.
 
 ### Requests
-- **New** (⌘N): pick an operation (searchable list grouped by service › port). Body is
-  generated from the schema (§5). Name: `<Operation> <n>` with the lowest free `n`
-  (`GetCustomer 1`, `GetCustomer 2`, …). The new row enters inline-rename immediately.
-- Double-clicking an operation in the sidebar's *Operations* section also creates a request.
-- **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`),
-  **Delete** (⌘⌫, confirms; history deleted with it).
+- **New** (⌘N): pick an operation (searchable list grouped by service › port; unsupported
+  operations greyed with their reason). Body is generated from the schema (§5). Name:
+  `<Operation> <n>` with the lowest free `n` (`GetCustomer 1`, `GetCustomer 2`, …). It goes into
+  the selected folder, else into its operation's folder (`GetCustomer`, or `Port/GetCustomer`
+  when the project has more than one supported port), created on first use. The new row enters
+  inline-rename immediately.
+- **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`, beside the
+  original), **Delete** (⌘⌫, confirms; history deleted with it). The same commands are in each
+  row's context menu, which acts on the clicked row.
+- **Folders** group requests: New Folder, rename, delete (with the requests inside, confirmed),
+  drag and drop to move requests and folders. There is no list of the WSDL's operations in the
+  sidebar; the New picker is where they are shown.
+- The sidebar lists folders first, then requests, each by name in Finder order
+  (case-insensitive, numbers by value); a new or renamed row moves to its place and stays
+  selected.
 - Each request remembers `last_server_id`; the toolbar server popup shows it. A new request
   uses the most recently used server of the project.
 
@@ -295,7 +313,10 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
   fed by the Rust schema model: element names allowed at the cursor path, attribute names,
   enumeration values. Triggered on `<`, space inside a tag, `="`, and ⌥⎋.
 - **Hover** on an element name: type name, cardinality, `xs:documentation` (tooltip).
-- Format XML (⌃I) — pretty-print preserving comments.
+- Format XML (⌃I, Edit menu): re-indents element-only content with the app's indent width
+  (1–8 spaces, default 2; also used for new requests and the response pane), keeping text,
+  comments, PIs and attribute values byte for byte. One undo step; a request that is not
+  well-formed is left alone.
 
 ### Validation semantics
 1. Must be well-formed.
@@ -367,11 +388,24 @@ status line, headers, body; timing; TLS info. Keeps the last 50 exchanges in mem
 above (small extension of "last request and response"; trivially dropped if unwanted). Not
 persisted. Bodies over 5 MB are truncated in the view.
 
+### Settings (Washboard ▸ Settings…, ⌘,)
+One ordinary window (not a sheet) for the app and every open project, laid out like System
+Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped forms. The
+"Washboard" section holds the app settings (General: indent width, format on save); below it,
+one section per open project with General (name, folder, WSDL files) and Servers (server list,
+the selected server's form, the WSDL's suggested servers). Project panes say that their
+settings belong to the project and are saved in its folder. Changes apply as they are made;
+there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
+the window on that project's Servers pane. A closed project's section leaves the window.
+
 ### Save / autosave
 - Each editor is a buffer with a dirty flag. Autosave 1 s after the last keystroke, and
   immediately on: switching requests, send, window losing key, app deactivate, quit.
 - ⌘S = **Save All** across every open project (menu only, no toolbar button). Since autosave
   is aggressive, it mostly acts as "flush now"; the window's edited dot reflects unsaved buffers.
+  With "Format on save" on (off by default), Save All first formats the open request, as the
+  same undo step as ⌃I. Autosave never formats (it would rewrite the text under the cursor),
+  and neither does Send: a request is sent as written.
 - Metadata changes (servers, renames, last server) go straight to SQLite.
 
 ### Multiple projects / restore
@@ -576,8 +610,8 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 
 Each milestone ends in something runnable.
 
-M0 (libxml2 and ureq spikes) and M1 (core library and the `washboard` CLI) are done; follow-up
-work is in `docs/TASKS.md`.
+M0 (libxml2 and ureq spikes), M1 (core library and the `washboard` CLI) and M2–M4 are done;
+M5 is under way. Follow-up work and what is left of M5 are in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
@@ -617,18 +651,18 @@ Interactive version: [`gui-draft.html`](gui-draft.html).
 │ ● ● ●  Customer API                                           [Staging ▾] [▶]           [≣]        │
 ├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
 │ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCustomer  ✓  │ 200 · 143 ms · 1.2 KB · Staging │
-│  ▸ GetCustomer 1     │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
-│    GetCustomer 2  •  │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
-│    CreateOrder 1  ⚠  │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
-│                      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
-│ OPERATIONS           │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
-│  ▾ CustomerService   │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
-│    ▾ CustomerPort    │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
-│        GetCustomer   │ │  …│                                   │ │                                 │
-│        CreateOrder   │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
-│        ListOrders    │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
+│  ▾ GetCustomer/      │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
+│   ▸ GetCustomer 1    │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
+│     GetCustomer 2  • │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
+│  ▾ CreateOrder/      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
+│     CreateOrder 1  ⚠ │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
+│    Smoke test        │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
+│                      │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
+│                      │ │  …│                                   │ │                                 │
+│                      │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
+│                      │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
-   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
+   / folder   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
 ```
 
 An older history entry selected (drawer open):
@@ -648,7 +682,7 @@ An older history entry selected (drawer open):
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
 ```
 
-### New project sheet
+### New project window
 ```
 ┌ New Project ─────────────────────────────────────────────┐
 │ Name:      [Customer API                          ]       │
@@ -665,17 +699,30 @@ An older history entry selected (drawer open):
 └───────────────────────────────────────────────────────────┘
 ```
 
-### Project settings → Servers
+### Settings window → a project's Servers
 ```
-┌ Customer API — Settings ──────────[ General | Servers ]──┐
-│ ┌──────────────┐  Name:  [Staging                    ]   │
-│ │ Production   │  URL:   [https://stg.example.com/ws/c ]  │
-│ │▸Staging      │  TLS:   [x] Ignore certificate errors    │
-│ │ Local        │  Auth:  (•) None  ( ) Basic              │
-│ └──────────────┘  User:  [                ]  (disabled)    │
-│  [+] [−]          Pass:  [                ]  (Keychain)    │
-│                   Timeout: [60] s                         │
-└───────────────────────────────────────────────────────────┘
+┌ Servers ────────────────────────────────────────────────────────┐
+│ WASHBOARD          │ These settings belong to Customer API      │
+│  ⚙ General         │ and are saved in its folder.               │
+│ CUSTOMER API       │ ╭────────────────────────────────────────╮ │
+│  ▤ General         │ │ Production                             │ │
+│ ▸▤ Servers         │ │ Staging                              ✓ │ │
+│                    │ │ Local                                  │ │
+│                    │ │ [+] [−]                                │ │
+│                    │ ╰────────────────────────────────────────╯ │
+│                    │ ╭────────────────────────────────────────╮ │
+│                    │ │ Name               [Staging          ] │ │
+│                    │ │ URL       [https://stg.example.com/ws] │ │
+│                    │ │ Ignore certificate errors         [ ○] │ │
+│                    │ │ Auth                          [None ▾] │ │
+│                    │ │ Password                 (in Keychain) │ │
+│                    │ │ Timeout                         [60] s │ │
+│                    │ ╰────────────────────────────────────────╯ │
+│                    │ Suggested by the WSDL                      │
+│                    │ ╭────────────────────────────────────────╮ │
+│                    │ │ https://api.example.com/ws       [Add] │ │
+│                    │ ╰────────────────────────────────────────╯ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### HTTP log panel
@@ -691,7 +738,7 @@ An older history entry selected (drawer open):
 │ Authorization: Basic ••••••  │ <soap:Envelope …>                 │
 │                              │                                   │
 │ <soapenv:Envelope …>         │                                   │
-│ TLS: verification SKIPPED    │                                   │
+│ TLS · certificate verificat… │                                   │
 └──────────────────────────────┴───────────────────────────────────┘
 ```
 Authorization values are masked in the log by default (click to reveal).

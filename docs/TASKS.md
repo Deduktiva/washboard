@@ -45,6 +45,10 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 | WP-APP-SHELL | `crates/washboard-app/**`, the macOS job in `.github/workflows/ci.yml` | AppKit skeleton in `objc2`: lifecycle, menus, welcome and project windows, TextKit 1 editor with ruler and highlighting, response pane, HTTP log, sheets; `tests/appkit.rs` runs headless on the macOS runner. Unsigned `Washboard.app` from `cargo-packager` (`make app`), uploaded by CI. |
 | WP-UI-MODEL | `crates/washboard-ui-model/**` | PLAN §2.1: app and window state, commands, editor buffers, autosave, background jobs, send, history, HTTP log, import sheet, completion and hover; tested on Linux with a fake front end. `block_path` moved into `schema`. |
 | WP-APP-INTEGRATION | `crates/washboard-app/**`, additive API in `washboard-ui-model` | The shell bound to the model, steps 1–7. Departures from the shell spec, agreed after screenshots: icon-only toolbar without Save All or a sidebar toggle (View menu instead), server picker beside Send, New Project as its own window, sidebar ⋯ menu (Rename, Duplicate, Validate). |
+| WP-FORMAT-XML | `indent` in `crates/washboard-core/src/xml/pretty.rs` and its callers; `crates/washboard-ui-model/src/format.rs`; `request format` in `crates/washboard-cli/src/commands/request.rs`; Format XML and `app_settings.rs` in `crates/washboard-app/**` | PLAN §4 "Format XML (⌃I)": one undo step through the widget, malformed requests untouched. Settings `FormatIndent` (1–8, default 2) and `FormatOnSave` (default off) in user defaults; format on save applies to Save All only, never to autosave or send. The CLI takes `--indent` and `--check` and reads no app settings. |
+| WP-DRAFT-GAPS | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | The request bar (name, "SOAP 1.1 · Operation" chip, well-formedness state), the sidebar's port chips, and the HTTP log's TLS line. native-tls does not report the TLS version, so the line says "TLS", not "TLS 1.3". |
+| WP-SIDEBAR-MENU | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs` (removed); request order in `crates/washboard-ui-model` | Context menus on sidebar rows instead of the +/−/⋯ footer: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request (disabled when unsupported); the REQUESTS header gets New Request. The menu acts on the clicked row; Rename and Validate select it first. Requests sort by name in Finder order; `sort_order` stays in the database, unused. |
+| WP-SETTINGS-WINDOW | `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (removed); the Settings… and Project Settings… items in `menu.rs` | One Settings window (⌘,) laid out like System Settings: a "Washboard" section for the app settings (user defaults) and one section per open project (General, Servers; stored in the project). Changes apply as made, no Done button. Project Settings… and New Project's server confirmation open it on the project's Servers pane. Selected pane in `SettingsPane`; the frame autosaves. Replaces the Project Settings sheet and WP-FORMAT-XML's small window; `app_settings.rs` keeps only the defaults keys. |
 
 ## Open
 
@@ -67,115 +71,136 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 |---|---|---|---|
 | WP-REPLACE-REPORT | VALIDATE, UI-MODEL (done) | new `crates/washboard-core/src/project/replace_report.rs`, `crates/washboard-cli/src/commands/project.rs`, the outcome code in `crates/washboard-ui-model/src/import.rs` | PLAN §4 "Replace WSDL". The report exists twice today: `ui-model`'s `ReplaceOutcome` (operations added/removed, requests that no longer validate) and the CLI's own diff, which only lists requests whose operation is gone. Move the computation into `core`, use it from both, and have `project replace-wsdl` print requests that no longer validate. Requests are never rewritten. |
 | WP-DIST | APP-SHELL (done) | `[package.metadata.packager]` and `icons/` in `crates/washboard-app/`, a release workflow in `.github/workflows/`, `Makefile` | The unsigned `.app` already builds (`make app`, CI artifact) with a placeholder icon. Left: the real icon, DMG via `cargo-packager`, codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
-| WP-FORMAT-XML | UI-MODEL (done) | `indent` parameter in `crates/washboard-core/src/xml/pretty.rs` and its callers; a format command and format settings in `crates/washboard-ui-model`; `request format` in `crates/washboard-cli/src/commands/request.rs`; the menu item, binding and Settings window in `crates/washboard-app/**` | PLAN §4 "Format XML (⌃I)": reformat the selected request. Below. |
 | WP-FSEVENTS | UI-MODEL (done) | file watching in `crates/washboard-ui-model`, `notify` in its `Cargo.toml`, the binding in `crates/washboard-app/**` | PLAN M5 and §2 (`notify`, FSEvents backend): notice request files edited outside the app. The PLAN does not say what happens to an open buffer; decide that first (proposal: reload a clean buffer, keep a dirty one and ask). |
 | WP-A11Y | APP-INTEGRATION (done) | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
 | WP-DARK-MODE | APP-INTEGRATION (done) | `crates/washboard-app/**` | PLAN M5 "Dark Mode check". The app already uses only semantic and `system*` colours, so the work is checking, not porting: the editor's highlighting palette and error underlines for contrast on a dark background, text views' background and text colours, and anything drawn by hand (the ruler). The look is judged by the person doing the manual checks, in both appearances. |
-| WP-DRAFT-GAPS | APP-INTEGRATION (done) | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` if a value is missing | What `docs/gui-draft.html` shows and no step built. A bar above the editor: request name, a "SOAP 1.1 · Operation" chip, and the well-formedness state ("Well-formed" / "XML error, line n") from the diagnostics the model already has. In the sidebar, a "1.1" chip on ports and "1.2 · unsupported" on SOAP 1.2 ones, beside today's greyed rows and tooltips. In the HTTP log, the TLS line ("TLS 1.3 · certificate verification SKIPPED (server setting)") from the exchange's `TlsInfo`, which `LogEntry` already carries. |
-| WP-RESPONSE-LAYOUT | APP-INTEGRATION (done); after WP-DRAFT-GAPS, which builds the request bar | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | PLAN §4 "Response pane and history" and `docs/gui-draft.html`: response beside the request, History tab replaced by a drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items. The model needs: which history entry is shown (none = latest), the sent request's text, Send refused while an older one is shown, Restore Request returning text for the app to apply as one undo step, drawer state in `ui_state`. Tests: model side on Linux (send refused, request switch and send return to latest); in `tests/appkit.rs`, selecting an older row shows the accessory and hides Send, Esc returns, ⌘Z after Restore Request brings back the editor's text. |
+| WP-RESPONSE-LAYOUT | APP-INTEGRATION, DRAFT-GAPS (done) | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | PLAN §4 "Response pane and history" and `docs/gui-draft.html`: response beside the request, History tab replaced by a drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items. The model needs: which history entry is shown (none = latest), the sent request's text, Send refused while an older one is shown, Restore Request returning text for the app to apply as one undo step, drawer state in `ui_state`. Tests: model side on Linux (send refused, request switch and send return to latest); in `tests/appkit.rs`, selecting an older row shows the accessory and hides Send, Esc returns, ⌘Z after Restore Request brings back the editor's text. |
 | WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
 | WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
-| WP-SIDEBAR-MENU | APP-INTEGRATION (done) | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs`; request order in `crates/washboard-ui-model` | Replace the +/−/⋯ buttons under the sidebar with a context menu per row: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request; the REQUESTS header gets New Request. The Project menu and its shortcuts (⌘N, ⌘D, ⌘⌫, ⌘B) stay. Requests sort by name (Finder order: case-insensitive, numbers by value), not by creation; a renamed or new request moves to its place and stays selected. The `sort_order` column stays in the database, unused. |
-| WP-SIDEBAR-FLATTEN | WP-FORMAT-XML (adds the app settings and their window); coordinate with WP-SIDEBAR-MENU, which also changes `sidebar.rs` | the OPERATIONS tree in `crates/washboard-app/src/sidebar.rs`, a pure tree-shaping function in `crates/washboard-app/src/text.rs`, one setting in the app settings (`app_settings.rs`, or `settings_window.rs` once WP-SETTINGS-WINDOW has replaced it) | Most WSDLs have one service, and many have one port, so the OPERATIONS group spends two levels on rows with nothing to choose. Leave out a level that has only one row, behind a setting that is on by default. Below. |
-| WP-SETTINGS-WINDOW | APP-INTEGRATION (done); coordinate with WP-FORMAT-XML, which adds the first app setting | new `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (replaced); the Settings… and Project Settings… items in `menu.rs` | One Settings window for the app and the open projects, replacing the Project Settings sheet. Below. |
+| WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
+| WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
+| WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 
-### WP-FORMAT-XML in detail
+### WP-OPERATION-PICKER in detail
 
-Reformats a request with `xml::pretty_print`, which the response pane already uses: element-only
-content is re-indented; text content, comments, PIs, attribute values and the XML declaration
-are kept byte for byte. A request that is not well-formed is not touched; the well-formedness
-error is shown as usual. Spaces only, no tabs.
+Today Project ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
+else the first supported one (`App::default_operation`), so creating a request for any other
+operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
+scrolling, not typing. The picker becomes the only way to create a request for an operation:
+WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
 
-- **Settings** (per app, not per project), in the app's user defaults (`NSUserDefaults`, domain
-  `at.deduktiva.washboard`), so they live where macOS keeps app settings and `defaults` can read
-  them: `FormatIndent` (integer, default 2, allowed 1–8) and `FormatOnSave` (bool, default off).
-  The app passes them to the model at launch and on change; the model stores no settings of its
-  own. `pretty_print` takes the indent as a parameter instead of its hard-coded two spaces, and
-  `TemplateOptions::indent` and the response pane use the same value, so new requests, formatted
-  requests and responses look alike.
-- **App:** Format XML (⌃I) in the Edit menu, enabled with a request selected. The model computes
-  the new text; the app replaces the whole text through the widget so it is one undo step
-  (PLAN §2.1 "Not undo/redo") and the selection stays on the same element where practical.
-  The indent width and "Format on save" go in the app section of the Settings window
-  (WP-SETTINGS-WINDOW; if that is not built yet, Washboard ▸ Settings…, today disabled, opens a
-  small window with the two); changing them reformats nothing by itself.
-- **Format on save:** applies to File ▸ Save All (⌘S) only, to the open request, as the same
-  undo step as ⌃I. Not to autosave: autosave runs a second after typing stops and would rewrite
-  the text under the cursor. Never on send; a request is sent as written.
-- **CLI:** `washboard request format <name> [--indent N] [--check]`, default indent 2. It does not
-  read the app's settings: the CLI builds and runs on Linux, and reading `NSUserDefaults` would
-  need CoreFoundation and `unsafe` outside the crates allowed to have it. Rewrites the request
-  file in place (taking the project lock like other writing commands) and prints nothing;
-  `--check` writes nothing and exits non-zero if the file would change.
-- **Tests:** `pretty_print` with indents 1, 4 and 8, including attributes aligned on their own
-  lines and `\r\n` input; the model command (refused on a malformed request, no-op on formatted
-  text, editor marked dirty and autosaved); format on save on Save All and not on autosave; the
-  CLI's exit codes; in `tests/appkit.rs`, ⌃I then ⌘Z restores the text, and the settings round
-  trip through a scratch defaults domain.
+- **Where.** Project ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
+  both titles gain the ellipsis, since they now ask something first. Until WP-REQUEST-FOLDERS-APP
+  removes the OPERATIONS list, an operation row's New Request and a double-click on an
+  operation still create directly.
+- **Window.** A sheet on the project window, like the import sheet: a search field on top,
+  focused, and a list below. Return (default button "Create") creates the request for the
+  highlighted row; Esc or Cancel closes the sheet and creates nothing; a double-click on a row
+  creates. ↑/↓ move the highlight while the focus stays in the search field, as in Xcode's
+  Open Quickly, so the hands never leave the keyboard. The sheet's size is remembered (user
+  defaults), not its search text.
+- **Rows.** One per operation: its name, and in secondary text the input element's QName
+  (`cus:GetCustomer`) or, for rpc/literal, "rpc". Grouped under "Service › Port" section headers
+  in WSDL order. A header is left out when the project has only one supported port, and then
+  the list is just the operations. Only supported ports count: many WSDLs have one SOAP 1.1
+  port next to a SOAP 1.2 or rpc/encoded one (both fixtures do), and those should get the
+  flat list. Unsupported operations sit in an "Unsupported" section at the end,
+  greyed, with their reason as the tooltip (PLAN §1: shown, never dropped); they can be
+  highlighted but not created, so Create is disabled on them.
+- **Search.** Case-insensitive; a row matches when every space-separated word of the query is a
+  substring of the operation name, the input element's local name, or its service or port name.
+  Rows whose operation name starts with the query come first, then the rest, each in WSDL order.
+  An empty query shows everything. Sections with no match disappear; with no match at all, the
+  list says "No operation matches" and Create is disabled.
+- **Initial highlight.** The operation selected in the sidebar (while the OPERATIONS list
+  exists); else the operation of the selected request (another request for the same operation
+  is the common case); else the first supported operation. The search field starts empty.
+- **When there is nothing to pick.** New Request is disabled while the WSDL loads or when it
+  failed to load, in the menu and in the context menu, rather than opening a sheet that cannot
+  do anything. A WSDL with no supported operation opens the sheet with only the Unsupported
+  section, so the user sees why.
+- **After Create.** As today: the request is created with the template, selected, and enters
+  inline rename (`Event::BeginRename`).
+- **Model.** The filtering and ordering is a pure function in `washboard-ui-model` over the
+  sidebar's `ServiceNode`s and the query, returning the sections and rows to show, so it is
+  tested on Linux; the app only draws it. The first supported row of its unfiltered result is
+  the initial highlight's fallback, so `App::default_operation` and its call in
+  `sidebar.rs`'s `new_request` are removed.
+- **Tests:** on Linux, the filter: words in any order, matching on service, port and element
+  names, prefix matches first, unsupported operations kept in their section, headers left out
+  with one supported port (both fixtures) and kept with two (a synthetic tree). In
+  `tests/appkit.rs`: ⌘N opens the sheet with the sidebar's operation highlighted; typing
+  filters; ↓ then Return creates a request for that operation and starts rename; Esc creates
+  nothing; Create is disabled on an unsupported row; New Request is disabled while the schema
+  loads.
 
-### WP-SIDEBAR-FLATTEN in detail
+### WP-REQUEST-FOLDERS in detail
 
-The model's tree stays service › port › operation (`Sidebar::services` is unchanged); only the
-app's OPERATIONS group is shaped differently.
+The sidebar's OPERATIONS list goes (WP-REQUEST-FOLDERS-APP); creating a request is the
+operation picker's job, and grouping requests becomes the user's, with folders. Folders are
+created when they are first needed, not for every operation up front: a WSDL with 200
+operations would get 200 empty folders, git does not keep empty directories, and Replace WSDL
+would leave folders for removed operations behind.
 
-- **Rule.** With one service, its row is left out and its ports sit directly under OPERATIONS.
-  With one port in a service, that port's row is left out and its operations sit directly under
-  the service (or under OPERATIONS, when the service row is gone too). Each service is judged on
-  its own: in a WSDL with two services, one with a single port and one with two, the first
-  shows its operations directly and the second keeps its port rows.
-- **Only supported ports count.** Many WSDLs have one SOAP 1.1 port next to a SOAP 1.2 or
-  rpc/encoded one (both fixtures do), and flattening would rarely apply if those counted. So
-  a service whose ports include exactly one supported port loses that port's row; the
-  unsupported ports' operations move into one collapsed "Unsupported" row after the supported
-  operations, each still greyed with its reason (PLAN §1: shown, never dropped). The row's
-  tooltip lists the ports it holds. A service with no supported port, or more than one, keeps
-  its port rows.
-- **What a left-out row said** moves into the operations' tooltips: "Service › Port" in front of
-  what the tooltip says today (the unsupported reason, if any). WP-DRAFT-GAPS's port chip
-  ("1.1", "1.2 · unsupported") is not shown for a left-out port; with only one port, its
-  operations' greyed state already tells.
-- **Setting** (per app): "Flatten single services and ports in the sidebar", on by default, in
-  the user defaults as `SidebarFlatten` (bool) next to the format settings, and in the app
-  section of the Settings window. Changing it reshapes every open project window's sidebar at
-  once, keeping the selection and the collapsed rows that still exist. The Unsupported row starts collapsed.
-- **Collapsed state** is kept by row path as today (`service:…`, `port:…/…`); a left-out row has
-  no state to keep. Turning the setting off shows the restored rows expanded.
-- **Unchanged:** double-click on an operation creates a request; New Request picks the first
-  supported operation in sidebar order; the REQUESTS group.
-- **Tests:** the tree shaping on Linux (`text.rs`): one service with a 1.1 and an unsupported
-  port (both fixtures: `customer` has SOAP 1.2, `legacy-rpc` rpc/encoded; the operations sit
-  under OPERATIONS with an Unsupported row after them), and synthetic trees for one service with one port, two services with mixed port
-  counts, and the setting off. In `tests/appkit.rs`: the fixture project's OPERATIONS rows
-  with the setting on and off, an operation row's tooltip naming its service and port, and
-  the selection surviving the toggle.
+- **On disk.** A folder is a subdirectory of `requests/`, nested to any depth, so the project
+  stays browsable in Finder and git (PLAN §3). Folder names follow the request name rules
+  (`names::validate_request_name`). Folders and files starting with `.` are ignored. The disk is
+  the truth for folders: they are not in the database, and an empty folder stays until it is
+  deleted.
+- **Database.** `request.file_name` already holds a path relative to `requests/`; it now may
+  contain `/` (always `/`, whatever the platform). No migration. `RequestMeta` gains
+  `folder: String` (`""` for the top level), additively.
+- **Names stay unique across the project** (case-insensitive, as now), not per folder, so
+  `<Operation> <n>` numbering and the CLI's `<name>` arguments keep working. Rename, Duplicate
+  and New Request check against every folder. Two files with the same name in different folders
+  can still arrive from Finder or git; reconciliation accepts both, the app shows both, and the
+  CLI asks for the path (below).
+- **Reconciliation** walks `requests/` recursively. A row whose file is gone is matched to a new
+  file with the same name elsewhere, when exactly one such file appeared, and treated as a move:
+  same id, same history. That covers a move in Finder; anything else stays as today (removed and
+  added).
+- **New Request placement.** The model's `new_request` takes the target folder. The app passes
+  the folder selected in the sidebar when a folder row is selected; otherwise the request goes
+  into its operation's folder, created if missing. That folder is named after the operation
+  (`GetCustomer`), or `Port/GetCustomer` when the project has more than one supported port, so
+  a typical WSDL with one SOAP 1.1 port gets one level. Only supported ports count, so a SOAP
+  1.1 port next to a SOAP 1.2 or rpc/encoded one still gives the flat layout. An existing folder
+  is matched case-insensitively; if the user renamed the operation's folder, a new one is
+  created. Duplicate puts the copy beside the original.
+- **Commands** (core, model): create folder, rename folder, delete folder (with every request in
+  it and their history; the model reports the count for the confirmation), move a request to a
+  folder, move a folder (refused into itself or its descendants, and when the move would put two
+  rows of the same name in one folder). All are renames on disk, atomic like other writes.
+  Collapsed folders are kept per project in `ui_state`.
+- **Sidebar model.** `Sidebar` gains the folder tree next to today's flat `requests`, sorted
+  folders first, then requests, each in Finder order (WP-SIDEBAR-MENU). `Sidebar::services`
+  stays: the picker uses it.
+- **CLI.** `request list` prints paths (`GetCustomer/GetCustomer 1`). Every `<name>` argument
+  also takes a path; a bare name that matches two requests fails and lists their paths.
+  `request mv <name> <folder>` moves a request (creating the folder; `/` for the top level).
+  `request new` places like New Request.
+- **Also affected:** WP-FSEVENTS must watch `requests/` recursively.
+- **Tests** (Linux): reconciliation of nested files, a move in Finder keeping history, the
+  duplicate-name case; placement with one and with several supported ports (both fixtures and a
+  synthetic two-port WSDL), the folder reused across case, a selected folder winning; folder
+  rename, move and delete with history; the CLI's paths and ambiguity error.
 
-### WP-SETTINGS-WINDOW in detail
+### WP-REQUEST-FOLDERS-APP in detail
 
-One window, opened by Washboard ▸ Settings… (⌘,), the standard place for settings on macOS.
-Project ▸ Project Settings… opens the same window on that project's pane. It is an ordinary
-window, not a sheet: it stays open beside the project window and changes apply as they are made,
-so there is no Done button.
-
-- **Layout, macOS 26 style:** a sidebar split view (`NSSplitViewItem` sidebar behaviour, so it
-  gets the Liquid Glass sidebar) with a unified, title-only toolbar whose title is the selected
-  pane, like System Settings. Panes are grouped forms: rounded inset sections on the window
-  background, one setting per row, label on the leading edge, control on the trailing edge, a
-  hairline between rows, an explanation in secondary text under a section where needed. No
-  `NSTabView`, no bezeled boxes. Built from AppKit views (no SwiftUI).
-- **App and project, clearly separated:** the sidebar has two sections. "Washboard" holds the
-  app settings (General: indent width and format on save from WP-FORMAT-XML; later ones join
-  here), stored in user defaults. Below it, one section per open project, titled with the
-  project's name and folder icon, with General (name, folder, WSDL files) and Servers. Project
-  settings stay in the project's database as today. Each project pane repeats in its header that
-  its settings belong to that project and are saved in its folder, so nobody mistakes them for
-  app-wide ones. A closed project's section disappears; with no project open there is only the
-  app section.
-- **Servers pane:** the server list as a grouped section with the +/− buttons inside it, the
-  selected server's form as a second section below (Name, URL, Ignore certificate errors, Auth,
-  User, Password, Timeout), and the WSDL's suggested servers as a third section with an Add
-  button per row. Same model API and Keychain handling as the sheet.
-- **State:** the selected pane is remembered (user defaults); the window's frame autosaves.
-- **Tests:** in `tests/appkit.rs`: ⌘, opens the window on the app section; Project Settings…
-  selects that project's Servers pane; closing a project removes its section; editing a server
-  in the window is saved without a Done button; the existing settings sheet checks move to the
-  window. The manual checks on a Mac judge the look against System Settings.
+- **Sidebar.** One section, REQUESTS: the folder tree, folders with a folder icon and a
+  disclosure triangle, requests as today. The OPERATIONS section is removed; unsupported
+  operations are still shown in the picker (PLAN §1).
+- **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
+  The REQUESTS header: New Request…, New Folder. Project ▸ New Folder (⌥⌘N) creates one in the
+  selected folder, or the selected request's folder, and starts inline rename.
+- **Rename** by Return or double-click on a request or folder (PLAN §4); a double-click on a
+  folder's triangle still only toggles it.
+- **Delete** of a folder confirms with what goes: "Delete “GetCustomer” and its 3 requests?
+  Their history is deleted too." An empty folder goes without asking.
+- **Drag and drop** moves requests and folders between folders and to the top level (an
+  internal pasteboard type, `NSDragOperation::Move` only). Drops the model refuses do not
+  highlight.
+- **Tests** (`tests/appkit.rs`): no OPERATIONS rows; New Request from the picker lands in the
+  operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
+  move by the model's command shows in the tree; collapsed folders survive reopening the
+  project.
