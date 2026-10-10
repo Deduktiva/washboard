@@ -44,6 +44,6 @@ pub use import::{
 };
 pub use send::{LOG_CAPACITY, LogEntry, ResponseView};
 pub use window::{
-    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, SchemaState, ServiceNode,
-    Sidebar,
+    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
+    ServiceNode, Sidebar,
 };

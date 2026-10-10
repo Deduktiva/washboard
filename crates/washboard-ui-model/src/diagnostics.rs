@@ -162,11 +162,7 @@ impl App {
                         "The WSDL could not be loaded ({m}); only well-formedness is checked."
                     )),
                 };
-                let hint = window
-                    .project
-                    .request(request)
-                    .ok()
-                    .and_then(|r| r.operation);
+                let hint = window.request_operation(request);
                 self.spawn(
                     move || full_check(&text, &against, hint.as_ref()),
                     move |app, issues| app.check_done(key, request, version, check, issues),
@@ -212,9 +208,7 @@ impl App {
         let invalid = editor.issues.iter().any(Issue::is_error);
         let marker_changed = window
             .sidebar
-            .requests
-            .iter_mut()
-            .find(|r| r.id == request)
+            .request_mut(request)
             .is_some_and(|row| std::mem::replace(&mut row.invalid, invalid) != invalid);
         self.events.push(Event::DiagnosticsChanged { project: key });
         if marker_changed {

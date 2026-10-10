@@ -16,8 +16,10 @@ use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
     ns_string,
 };
-use washboard_core::model::{HistoryId, OperationRef};
-use washboard_ui_model::{Issue, IssuesBasis, ProjectKey, ResponseView, WellFormedness};
+use washboard_core::model::HistoryId;
+use washboard_ui_model::{
+    Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
+};
 
 use crate::app::ModelAccess;
 use crate::editor::EditorController;
@@ -67,18 +69,17 @@ impl RequestBar {
     }
 
     /// Shows the open request; `None` with no request open.
-    pub fn show(&self, request: Option<(&str, Option<&OperationRef>, WellFormedness)>) {
-        let (name, operation, state) = match request {
-            Some((name, operation, state)) => (name, operation, state),
-            None => ("", None, WellFormedness::Pending),
-        };
+    pub fn show(&self, request: Option<&RequestSummary>) {
+        let name = request.map_or("", |r| r.name.as_str());
         self.name.setStringValue(&NSString::from_str(name));
         // A request made before its operation was recorded, or from a file, has no hint.
-        let chip = operation.map(operation_chip);
+        let chip = request
+            .and_then(|r| r.operation.as_ref())
+            .map(operation_chip);
         self.operation_label
             .setStringValue(&NSString::from_str(chip.as_deref().unwrap_or_default()));
         self.operation.setHidden(chip.is_none());
-        self.set_state(state);
+        self.set_state(request.map_or(WellFormedness::Pending, |r| r.well_formedness));
     }
 
     /// The well-formedness state alone, which changes with every check.

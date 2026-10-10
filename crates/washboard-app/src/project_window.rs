@@ -458,28 +458,10 @@ impl ProjectWindowController {
     /// (`EditorReplaced`, and `SidebarChanged` for a rename).
     pub fn show_request_bar(&self) {
         let key = self.key();
-        let request = self
-            .read(|app| {
-                let window = app.project(key)?;
-                let editor = window.editor()?;
-                let id = editor.request();
-                let name = window
-                    .sidebar()
-                    .requests
-                    .iter()
-                    .find(|r| r.id == id)?
-                    .name
-                    .clone();
-                // The operation the request was made for: a hint, kept in the database.
-                let operation = window.project().request(id).ok().and_then(|r| r.operation);
-                Some((name, operation, editor.well_formedness()))
-            })
+        let summary = self
+            .read(|app| app.project(key)?.request_summary())
             .flatten();
-        self.ivars().request_bar.show(
-            request
-                .as_ref()
-                .map(|(name, operation, state)| (name.as_str(), operation.as_ref(), *state)),
-        );
+        self.ivars().request_bar.show(summary.as_ref());
     }
 
     pub fn request_bar(&self) -> &RequestBar {

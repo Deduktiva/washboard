@@ -885,12 +885,17 @@ fn well_formedness(app: &App, key: ProjectKey) -> WellFormedness {
 }
 
 #[test]
-fn the_well_formedness_indicator_follows_the_checks() {
+fn the_request_summary_follows_checks_and_renames() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
     app.new_request(key, &op).expect("new");
     assert_eq!(well_formedness(&app, key), WellFormedness::Pending);
+    let window = app.project(key).expect("open");
+    let summary = window.request_summary().expect("a request is open");
+    assert_eq!(summary.name, names(&app, key)[0]);
+    assert_eq!(summary.operation.as_ref(), Some(&op));
+    assert_eq!(summary.well_formedness, WellFormedness::Pending);
     next_check(&fake, &mut app, key);
     assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
 
@@ -913,6 +918,15 @@ fn the_well_formedness_indicator_follows_the_checks() {
     let issues = next_check(&fake, &mut app, key);
     assert!(issues.iter().any(Issue::is_error), "{issues:?}");
     assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
+
+    let id = app
+        .project(key)
+        .expect("open")
+        .selected_request()
+        .expect("selected");
+    app.rename_request(key, id, "Renamed").expect("rename");
+    let window = app.project(key).expect("open");
+    assert_eq!(window.request_summary().expect("open").name, "Renamed");
 }
 
 #[test]
