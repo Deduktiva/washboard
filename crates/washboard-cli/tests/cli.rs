@@ -186,6 +186,7 @@ fn new_project_copies_files_and_lists_unsupported_operations() {
 #[test]
 fn new_project_refuses_unresolved_imports() {
     let e = env("customer");
+    fs::remove_file(e.src.join("xsd/ext/audit.xsd")).expect("remove");
     let wsdl = e.src.join("CustomerService.wsdl");
     let o = run(&[
         "project",
@@ -195,7 +196,32 @@ fn new_project_refuses_unresolved_imports() {
         wsdl.to_str().expect("utf-8"),
     ]);
     fails(&o, 2, "import check found errors");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        stderr.contains("\"ext/audit.xsd\" was not supplied"),
+        "{stderr}"
+    );
     assert!(!e.project.exists());
+}
+
+#[test]
+fn new_project_finds_imports_next_to_the_wsdl() {
+    let e = env("customer");
+    let wsdl = e.src.join("CustomerService.wsdl");
+    let o = run(&[
+        "project",
+        "new",
+        e.project.to_str().expect("utf-8"),
+        "--wsdl",
+        wsdl.to_str().expect("utf-8"),
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{o:?}");
+    let stderr = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        stderr.contains("found ") && stderr.contains("audit.xsd"),
+        "{stderr}"
+    );
+    assert!(e.project.join("wsdl/xsd/ext/audit.xsd").is_file());
 }
 
 #[test]

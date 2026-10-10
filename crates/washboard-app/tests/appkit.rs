@@ -39,6 +39,7 @@ fn main() {
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_window", checks::settings_window),
+        ("wrapped_table", checks::wrapped_table),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -69,8 +70,8 @@ mod checks {
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor, NSColorSpace,
-        NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
+        NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSScrollView, NSSplitViewItemBehavior, NSStackView,
         NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode,
         NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
@@ -2578,6 +2579,13 @@ mod checks {
         );
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
+        let first = window
+            .initialFirstResponder()
+            .expect("an initial first responder");
+        assert!(
+            std::ptr::eq(&*first, &**sheet.name_field() as &NSView),
+            "New Project starts with the name"
+        );
 
         // A long location is shortened in the form instead of widening it past the window.
         let deep = (0..12).fold(tmp.path().to_path_buf(), |p, i| {
@@ -2616,8 +2624,6 @@ mod checks {
         assert!(references.size.height >= 119.5, "{references:?}");
         inside("the findings", in_window(sheet.messages().view()));
 
-        sheet.set_name("Customers");
-        sheet.choose_location(projects.clone());
         sheet.choose_wsdl(files.join("CustomerService.wsdl"));
         sheet.add_files(vec![files.clone()]);
         wait_checked(&sheet);
@@ -2631,9 +2637,18 @@ mod checks {
         }
         let missing: Vec<&Vec<String>> = rows.iter().filter(|r| r[0] == "✗").collect();
         assert_eq!(missing.len(), 1, "{rows:?}");
-        assert_eq!(missing[0][1], "xs:include party-ids.xsd");
-        assert_eq!(missing[0][2], "not supplied");
+        assert!(
+            missing[0][1].ends_with("party.xsd"),
+            "the importer: {rows:?}"
+        );
+        assert_eq!(missing[0][2], "xs:include party-ids.xsd");
+        assert_eq!(missing[0][3], "not found");
         assert!(!sheet.messages().rows().is_empty(), "the finding is listed");
+        let messages = sheet.messages().table();
+        assert!(
+            messages.rectOfRow(0).size.height >= messages.rowHeight(),
+            "a message row is at least one line high"
+        );
         assert!(!sheet.finish_button().isEnabled(), "disabled while ✗");
         let open = ctx.delegate.projects().len();
         sheet.finish();
@@ -2650,6 +2665,10 @@ mod checks {
             "{:?}",
             sheet.references().rows()
         );
+        assert!(!sheet.finish_button().isEnabled(), "no name yet");
+        assert_eq!(sheet.status(), "Name the project.");
+        sheet.set_name("Customers");
+        sheet.choose_location(projects.clone());
         assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
         sheet.finish();
@@ -2708,6 +2727,42 @@ mod checks {
         );
     }
 
+    /// A wrapped column shows a long text on several lines in a taller row, and rewraps when
+    /// the column changes width.
+    pub fn wrapped_table(_ctx: &Ctx) {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let table = washboard_app::TextTable::new(&["", "Message"], mtm);
+        table.wrap_column(1);
+        table.view().setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(300.0, 400.0),
+        ));
+        let long = "file.xsd: xs:include \"a-rather-long-name.xsd\" was not found; ".repeat(4);
+        table.set_rows(vec![
+            vec!["✗".into(), "short".into()],
+            vec!["✗".into(), long],
+        ]);
+        let tv = table.table();
+        let column = tv.tableColumns().iter().nth(1).expect("two columns");
+        column.setWidth(200.0);
+        tv.tile();
+        let short = tv.rectOfRow(0).size.height;
+        let tall = tv.rectOfRow(1).size.height;
+        assert!((short - tv.rowHeight()).abs() < 0.5, "{short}");
+        assert!(tall > 3.0 * short, "the long text wraps: {tall} vs {short}");
+        column.setWidth(600.0);
+        tv.tile();
+        let wider = tv.rectOfRow(1).size.height;
+        assert!(
+            wider < tall,
+            "a wider column needs fewer lines: {wider} vs {tall}"
+        );
+        let cell = tv
+            .viewAtColumn_row_makeIfNecessary(1, 1, true)
+            .expect("a cell");
+        assert_fits(&cell, "a wrapped message");
+    }
+
     /// Replace WSDL, from the project's General settings, checks the new files like New
     /// Project, swaps the WSDL and says what changed; the pane then lists the new files.
     pub fn replace_wsdl(ctx: &Ctx) {
@@ -2738,6 +2793,12 @@ mod checks {
         assert!(window.attachedSheet().is_none(), "on the Settings window");
         let sheet = project.replace_sheet().expect("created by replaceWsdl:");
         assert_eq!(sheet.finish_button().title().to_string(), "Replace");
+        let first = sheet
+            .window()
+            .initialFirstResponder()
+            .and_then(|v| v.downcast::<NSButton>().ok())
+            .expect("a button first");
+        assert_eq!(first.title().to_string(), "Choose…", "not the path control");
         assert!(!sheet.finish_button().isEnabled());
 
         let customer = fixtures().join("customer");

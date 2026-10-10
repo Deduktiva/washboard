@@ -9,7 +9,7 @@ Decisions taken so far:
 |---|---|
 | UI binding | `objc2` + `objc2-app-kit` / `objc2-foundation`, UI built in code (no nibs) |
 | Schema validation | libxml2 XSD validation via FFI, **vendored and statically linked** (system copy is 2.9.13 from 2022, see §5) |
-| WSDL/XSD imports | User supplies all referenced files; they are copied into the project. Unresolved imports are errors. Never fetched. |
+| WSDL/XSD imports | User supplies the referenced files; local files named by a relative path next to the importing file are picked up automatically. All are copied into the project. Unresolved imports are errors. Never fetched. |
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
 | Minimum OS | macOS 26 (the GitHub macOS runners run 26, so CI can launch the app) |
 | Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
@@ -267,6 +267,11 @@ selected pane (`SettingsPane`) is kept there too.
    supplied folder structure is preserved on copy. Remote `http(s)://` locations are never fetched;
    they are matched against supplied files by the longest matching path suffix, and an ambiguous
    match (two `common.xsd` in different folders) is reported, not guessed.
+   A relative location that is not among the supplied files but exists on disk relative to the
+   importing file is read and added, transitively, and listed as found rather than supplied:
+   real WSDLs ship with their XSDs beside them. Absolute paths are not followed this way.
+   Each reference row names the file it comes from, since the same file is often imported from
+   several places.
    The check also reports the facts from §5.1 (namespaces split across files, XSD 1.1 constructs,
    unsupported bindings) as warnings.
 3. *Create* is enabled when nothing is unresolved and the schema set compiles.

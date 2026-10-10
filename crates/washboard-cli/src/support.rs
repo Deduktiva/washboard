@@ -64,8 +64,17 @@ pub struct CheckedImport {
 /// Runs the import check and the schema compile; prints every finding to stderr. Fails when
 /// anything is unresolved or the schema set does not compile (PLAN §4 "Create project").
 pub fn check_import(entry: &Path, extra: &[PathBuf]) -> anyhow::Result<CheckedImport> {
-    let sources = Sources::from_disk(entry, extra)?;
-    let w = wsdl::load(&sources);
+    let wsdl::Loaded {
+        sources,
+        wsdl: w,
+        found,
+    } = wsdl::load_from_disk(entry, extra)?;
+    for path in &found {
+        eprintln!(
+            "found {} next to the file that references it",
+            path.display()
+        );
+    }
     for d in &w.check.diagnostics {
         eprintln!("{d}");
     }
