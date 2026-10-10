@@ -130,21 +130,12 @@ pub struct LogEntry {
 impl LogEntry {
     /// The request headers with the `Authorization` value masked unless `reveal`.
     pub fn request_headers(&self, reveal: bool) -> Vec<(String, String)> {
-        self.exchange
-            .request
-            .headers
-            .iter()
-            .map(|(name, value)| {
-                if reveal || !name.eq_ignore_ascii_case("authorization") {
-                    return (name.clone(), value.clone());
-                }
-                let scheme = value.split_whitespace().next().unwrap_or_default();
-                (
-                    name.clone(),
-                    format!("{scheme} ••••••••").trim_start().to_owned(),
-                )
-            })
-            .collect()
+        let request = &self.exchange.request;
+        if reveal {
+            request.headers.clone()
+        } else {
+            request.masked_headers()
+        }
     }
 }
 
