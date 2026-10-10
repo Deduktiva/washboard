@@ -7,6 +7,7 @@
 //! name its project.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::ops::Range;
 use std::path::Path;
 
 use objc2::rc::Retained;
@@ -455,7 +456,7 @@ impl ProjectWindowController {
     pub fn format_request(&self, beep: bool) {
         let key = self.key();
         let selected = self.editor().text_view().selectedRange();
-        let selection = selected.location..selected.location + selected.length;
+        let selection = Range::from(selected);
         let Some(result) = self.read(|app| app.format_request(key, selection)) else {
             return;
         };

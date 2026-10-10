@@ -125,9 +125,7 @@ impl LineNumberRuler {
         let chars = visible_chars(&text_view);
         let starts = self.ivars().line_starts.borrow();
         let first = starts.partition_point(|&s| s <= chars.location).max(1);
-        let last = starts
-            .partition_point(|&s| s <= chars.location + chars.length)
-            .max(first);
+        let last = starts.partition_point(|&s| s <= chars.end()).max(first);
         first..last + 1
     }
 
@@ -312,7 +310,7 @@ define_class!(
                 && self.ivars().key.get().is_some()
                 && !self.ivars().applying.get()
             {
-                let range = range.location..range.location + range.length;
+                let range = Range::from(range);
                 self.ivars()
                     .pending
                     .borrow_mut()
@@ -452,7 +450,7 @@ impl EditorController {
     /// What `rangeForUserCompletion` answers: the model's range, or none to complete.
     fn completion_range(&self) -> NSRange {
         match self.completions_at_cursor() {
-            Some(c) => NSRange::new(c.replace.start, c.replace.len()),
+            Some(c) => NSRange::from(c.replace),
             None => NSRange::new(NSNotFound as usize, 0),
         }
     }
@@ -492,7 +490,7 @@ impl EditorController {
         let rect = unsafe {
             let container = text_view.textContainer()?;
             let glyphs = layout.glyphRangeForCharacterRange_actualCharacterRange(
-                NSRange::new(range.start, range.len()),
+                NSRange::from(range.clone()),
                 std::ptr::null_mut(),
             );
             layout.boundingRectForGlyphRange_inTextContainer(glyphs, &container)
@@ -548,8 +546,7 @@ impl EditorController {
         let len = string.length();
         let start = range.start.min(len);
         let end = range.end.clamp(start, len);
-        let lines = string.lineRangeForRange(NSRange::new(start, end - start));
-        let lines = lines.location..lines.location + lines.length;
+        let lines = Range::from(string.lineRangeForRange(NSRange::from(start..end)));
         let tokens = self
             .read(|app| {
                 app.project(key)
@@ -622,7 +619,7 @@ impl EditorController {
     pub fn select_range(&self, range: Range<usize>) {
         let len = self.text_view().string().length();
         let start = range.start.min(len);
-        let range = NSRange::new(start, range.end.clamp(start, len) - start);
+        let range = NSRange::from(start..range.end.clamp(start, len));
         self.text_view().setSelectedRange(range);
         self.text_view().scrollRangeToVisible(range);
     }
@@ -646,7 +643,7 @@ impl EditorController {
             if end <= start {
                 continue;
             }
-            let range = NSRange::new(start, end - start);
+            let range = NSRange::from(start..end);
             // SAFETY: the underline style is an `NSNumber`, the underline colour an `NSColor`.
             unsafe {
                 layout.addTemporaryAttribute_value_forCharacterRange(style, &single, range);
@@ -665,7 +662,7 @@ impl EditorController {
             .get(line)
             .copied()
             .unwrap_or_else(|| self.text_view().string().length());
-        let range = NSRange::new(start, end - start);
+        let range = NSRange::from(start..end);
         self.text_view().setSelectedRange(range);
         self.text_view().scrollRangeToVisible(range);
     }
@@ -785,10 +782,7 @@ impl EditorController {
         let layout = self.layout_manager();
         // SAFETY: an immutable AppKit constant.
         let key = unsafe { NSForegroundColorAttributeName };
-        layout.removeTemporaryAttribute_forCharacterRange(
-            key,
-            NSRange::new(lines.start, lines.end - lines.start),
-        );
+        layout.removeTemporaryAttribute_forCharacterRange(key, NSRange::from(lines));
         for (span, kind) in tokens {
             let Some(color) = color(kind) else {
                 continue;
@@ -799,7 +793,7 @@ impl EditorController {
                 layout.addTemporaryAttribute_value_forCharacterRange(
                     key,
                     value,
-                    NSRange::new(span.start, span.end - span.start),
+                    NSRange::from(span),
                 )
             };
         }
