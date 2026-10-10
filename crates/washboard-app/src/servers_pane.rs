@@ -227,7 +227,8 @@ impl ServersPane {
 
     /// Whether the sheet shows the User and Password rows, which Basic auth needs.
     pub fn shows_credentials(&self) -> bool {
-        !self.form().user_row.isHidden()
+        // `form::set_row_shown` hides the row's wrapper, not the row itself.
+        !self.form().user_row.isHiddenOrHasHiddenAncestor()
     }
 
     pub fn name_field(&self) -> &NSTextField {
