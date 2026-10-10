@@ -254,7 +254,7 @@ impl AppDelegate {
             .get_or_init(|| SettingsWindowController::new(self.mtm()))
     }
 
-    /// Washboard ▸ Settings… (`None`: the pane last shown) and Project ▸ Project Settings….
+    /// Washboard ▸ Settings… (`None`: the pane last shown).
     pub fn show_settings(&self, pane: Option<Pane>) -> &SettingsWindowController {
         let window = self.settings_window();
         window.show(pane);

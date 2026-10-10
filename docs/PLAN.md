@@ -406,8 +406,7 @@ folder. Layout follows System Settings, decided once in `crates/washboard-app/sr
 groups 20 pt from the content edges and at most 640 pt wide, every header, footnote and row
 label on one leading line inside the group, controls on the trailing edge, text fields one width.
 Changes apply as they are made;
-there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
-the window on that project's Servers pane. A closed project's section leaves the window.
+there is no Done button. New Project's server confirmation opens the window on that project's Servers pane. A closed project's section leaves the window.
 
 ### Save / autosave
 - Each editor is a buffer with a dirty flag. Autosave 1 s after the last keystroke, and
