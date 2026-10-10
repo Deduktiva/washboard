@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use washboard_core::diag::{self, Diagnostic};
-use washboard_core::model::{OperationRef, RequestId};
-use washboard_core::project::{OpenProject, Project, WsdlSet};
-use washboard_core::validate::validate_request;
+use washboard_core::project::{OpenProject, Project, ReplaceReport, WsdlSet, request_texts};
 use washboard_core::validate::xsd::CompiledSchema;
 use washboard_core::wsdl::{self, ImportCheck, StructuralReport};
 
@@ -64,7 +62,6 @@ pub struct CheckedImport {
     /// importing file; the user did not add them.
     pub found: Vec<PathBuf>,
     set: WsdlSet,
-    operations: Vec<OperationRef>,
 }
 
 impl CheckedImport {
@@ -85,14 +82,9 @@ impl ImportSheet {
     }
 }
 
-/// What replacing the WSDL changed, for the report (WP-REPLACE-REPORT shows it).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ReplaceOutcome {
-    pub added: Vec<OperationRef>,
-    pub removed: Vec<OperationRef>,
-    /// Requests that fail validation against the new WSDL.
-    pub invalid: Vec<RequestId>,
-}
+/// What replacing the WSDL changed, for the report; computed by the core so the CLI's
+/// `project replace-wsdl` says the same.
+pub type ReplaceOutcome = ReplaceReport;
 
 impl App {
     /// Opens the sheet (or keeps the open one).
@@ -203,7 +195,6 @@ impl App {
             return Err(ModelError::ImportNotReady);
         };
         let set = checked.set.clone();
-        let new_operations = checked.operations.clone();
         self.flush(key)?;
         let window = self.window(key)?;
         let old_operations = match &window.schema {
@@ -213,13 +204,7 @@ impl App {
         window.project.replace_wsdl(&set)?;
         let entry = window.project.entry_wsdl()?;
         let wsdl_dir = window.project.wsdl_dir();
-        let mut requests = Vec::new();
-        for meta in window.project.requests()? {
-            // A request that can't be read now can't be checked; it is left out.
-            if let Ok(text) = window.project.read_request(meta.id) {
-                requests.push((meta.id, meta.operation, text));
-            }
-        }
+        let requests = request_texts(&window.project)?;
         window.schema = crate::window::SchemaState::Loading;
         self.imports.remove(&target);
         self.events.push(Event::ImportChanged { target });
@@ -228,16 +213,20 @@ impl App {
         self.spawn(
             move || {
                 let schema = ProjectSchema::load(&entry, wsdl_dir)?;
-                let invalid = invalid_requests(&schema, &requests);
-                Ok((schema, invalid))
+                let report = ReplaceReport::new(
+                    &old_operations,
+                    &schema.wsdl,
+                    schema.request_schema().as_deref(),
+                    &requests,
+                );
+                Ok((schema, report))
             },
-            move |app, loaded: Result<(ProjectSchema, Vec<RequestId>), String>| {
-                let outcome = loaded.as_ref().ok().map(|(_, invalid)| ReplaceOutcome {
-                    added: missing_from(&new_operations, &old_operations),
-                    removed: missing_from(&old_operations, &new_operations),
-                    invalid: invalid.clone(),
-                });
-                app.schema_loaded(key, loaded.map(|(schema, _)| schema));
+            move |app, loaded: Result<(ProjectSchema, ReplaceOutcome), String>| {
+                let (loaded, outcome) = match loaded {
+                    Ok((schema, report)) => (Ok(schema), Some(report)),
+                    Err(e) => (Err(e), None),
+                };
+                app.schema_loaded(key, loaded);
                 let Some(window) = app.window_mut(key) else {
                     return;
                 };
@@ -273,35 +262,12 @@ fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String
     let set = WsdlSet::from_import(&sources, &w);
     Ok(CheckedImport {
         addresses: w.soap11_addresses(),
-        operations: w.supported_operations(),
         check: w.check,
         report: w.report,
         compile,
         found,
         set,
     })
-}
-
-/// The operations of `a` that `b` lacks, in `a`'s order.
-fn missing_from(a: &[OperationRef], b: &[OperationRef]) -> Vec<OperationRef> {
-    a.iter().filter(|op| !b.contains(op)).cloned().collect()
-}
-
-/// Validates every request against the new schema; without a usable one, every request
-/// counts as invalid only if it isn't well-formed.
-fn invalid_requests(
-    schema: &ProjectSchema,
-    requests: &[(RequestId, Option<OperationRef>, String)],
-) -> Vec<RequestId> {
-    let request_schema = schema.request_schema();
-    requests
-        .iter()
-        .filter(|(_, hint, text)| match &request_schema {
-            Some(rs) => validate_request(&schema.wsdl, rs, text, hint.as_ref()).has_errors(),
-            None => washboard_core::xml::check_well_formed(text).is_err(),
-        })
-        .map(|(id, _, _)| *id)
-        .collect()
 }
 
 /// Sheets keyed by target; lives in [`App`].
