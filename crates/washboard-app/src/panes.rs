@@ -274,7 +274,7 @@ impl IssuesBar {
             issues
                 .iter()
                 .filter(|i| i.is_error())
-                .filter_map(|i| i.range.clone())
+                .filter_map(|i| Some((i.range.clone()?, i.message.clone())))
                 .collect(),
         );
         *self.ivars().issues.borrow_mut() = issues;

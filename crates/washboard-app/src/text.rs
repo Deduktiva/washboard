@@ -1,6 +1,7 @@
 //! Text helpers of the app that need no AppKit, so their tests run on Linux too.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::Path;
 
 use washboard_core::diag::{Diagnostic, Severity};
@@ -205,6 +206,40 @@ pub(crate) fn line_markers(issues: &[Issue]) -> Vec<LineMarker> {
         .collect()
 }
 
+/// The text's tool tip at UTF-16 offset `at`, where the mouse rests: the messages of the
+/// underlined issues there, then the element hover after a blank line, and the range the tool
+/// tip covers. The first underline at `at` sets the range; with a hover it narrows to where
+/// both apply, so moving onto another name asks again. `underlines` are the ranges as drawn,
+/// never empty; `at` on a range's end counts, as an insertion point right after its last
+/// character.
+pub(crate) fn text_tool_tip(
+    underlines: &[(Range<usize>, String)],
+    hover: Option<(Range<usize>, String)>,
+    at: usize,
+) -> Option<(Range<usize>, String)> {
+    let mut covering = underlines
+        .iter()
+        .filter(|(range, _)| range.start <= at && at <= range.end);
+    let Some((first, _)) = covering.clone().next() else {
+        return hover;
+    };
+    let mut text = covering
+        .by_ref()
+        .map(|(_, message)| message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut range = first.clone();
+    if let Some((hover_range, hover_text)) = hover {
+        let both = range.start.max(hover_range.start)..range.end.min(hover_range.end);
+        if !both.is_empty() {
+            range = both;
+            text.push_str("\n\n");
+            text.push_str(&hover_text);
+        }
+    }
+    Some((range, text))
+}
+
 /// The request bar's operation chip. Always SOAP 1.1: that is the only envelope Washboard
 /// sends, whatever else the WSDL offers.
 pub(crate) fn operation_chip(operation: &OperationRef) -> String {
@@ -258,7 +293,8 @@ mod tests {
 
     use super::{
         LineMarker, completion_kinds, hover_text, import_files, import_status, line_markers,
-        operation_chip, port_chip, reference_row, replace_summary, tls_line, well_formedness_text,
+        operation_chip, port_chip, reference_row, replace_summary, text_tool_tip, tls_line,
+        well_formedness_text,
     };
 
     #[test]
@@ -491,6 +527,34 @@ mod tests {
                 marker(3, false, "w3"),
                 marker(5, true, "e5\ne5b\nw5"),
             ]
+        );
+    }
+
+    #[test]
+    fn the_text_tool_tip_puts_issues_before_the_hover() {
+        let underlines = [
+            (5..9, "bad date".to_owned()),
+            (7..20, "too long".to_owned()),
+        ];
+        let hover = |range: std::ops::Range<usize>| Some((range, "asOf\ntype xs:date".to_owned()));
+        assert_eq!(text_tool_tip(&underlines, None, 2), None);
+        assert_eq!(
+            text_tool_tip(&underlines, hover(0..4), 2),
+            Some((0..4, "asOf\ntype xs:date".into()))
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, None, 9),
+            Some((5..9, "bad date\ntoo long".into())),
+            "the end of an underline counts"
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, hover(6..12), 8),
+            Some((6..9, "bad date\ntoo long\n\nasOf\ntype xs:date".into()))
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, hover(9..12), 9),
+            Some((5..9, "bad date\ntoo long".into())),
+            "a hover that only touches the underline stays out"
         );
     }
 }

@@ -1662,6 +1662,16 @@ mod checks {
             "{:?}",
             ruler.tool_tip_lines()
         );
+        // So does hovering the underline in the text, before the element's hover.
+        let message = issues.rows()[0][1].clone();
+        let row = text[..start].rfind('\n').map_or(0, |i| i + 1)
+            ..start + "someday".len() + "</asOf>".len();
+        assert!(
+            row.clone().any(|at| editor
+                .show_tool_tip_at(at)
+                .is_some_and(|tip| tip.starts_with(&message))),
+            "no tool tip in {row:?} starts with {message:?}"
+        );
         wait_until("the invalid marker", || selected_markers(&project).1);
 
         issues.click(0);

@@ -13,7 +13,8 @@
 //!
 //! A bound editor also completes and explains from the model's schema: `complete:` (⌥⎋, or
 //! typing `<`, a space in a tag or `="`) asks `App::completions` for the range and the
-//! items, and resting the mouse on an element name shows `App::hover` as a tool tip.
+//! items, and resting the mouse on an element name shows `App::hover` as a tool tip. On an
+//! underlined error the tool tip starts with the error's message.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::ffi::c_void;
@@ -43,7 +44,7 @@ use washboard_ui_model::{Completions, Issue, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::colors;
-use crate::text::{LineMarker, completion_kinds, hover_text, line_markers};
+use crate::text::{LineMarker, completion_kinds, hover_text, line_markers, text_tool_tip};
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
@@ -331,8 +332,10 @@ pub struct EditorIvars {
     scroll: OnceCell<Retained<NSScrollView>>,
     text_view: OnceCell<Retained<NSTextView>>,
     ruler: OnceCell<Retained<LineNumberRuler>>,
-    /// The element name the tool tip rect covers, and its text.
+    /// The range the text's tool tip rect covers, and its text.
     tool_tip: RefCell<Option<(Range<usize>, String)>>,
+    /// The underlined UTF-16 ranges as drawn, and their issues' messages.
+    underlines: RefCell<Vec<(Range<usize>, String)>>,
 }
 
 define_class!(
@@ -571,8 +574,9 @@ impl EditorController {
             .flatten()
     }
 
-    /// Puts the tool tip on the element name at `at` (what the mouse rests on) and returns its
-    /// text. One rect per name: AppKit asks for a rect's text once while the mouse is in it.
+    /// Puts the tool tip at `at` (what the mouse rests on) and returns its text: the messages
+    /// of the underlined issues there, then the element name's hover. One rect per range:
+    /// AppKit asks for a rect's text once while the mouse is in it.
     pub fn show_tool_tip_at(&self, at: usize) -> Option<String> {
         let key = self.ivars().key.get()?;
         let hover = self
@@ -581,19 +585,14 @@ impl EditorController {
                     .map(|h| (h.range.clone(), hover_text(&h)))
             })
             .flatten();
-        let shown = self
-            .ivars()
-            .tool_tip
-            .borrow()
-            .as_ref()
-            .map(|(r, _)| r.clone());
-        if hover.as_ref().map(|(r, _)| r) == shown.as_ref() {
-            return hover.map(|(_, text)| text);
+        let tip = text_tool_tip(&self.ivars().underlines.borrow(), hover, at);
+        if *self.ivars().tool_tip.borrow() == tip {
+            return tip.map(|(_, text)| text);
         }
         let text_view = self.text_view();
         text_view.removeAllToolTips();
-        *self.ivars().tool_tip.borrow_mut() = hover.clone();
-        let (range, text) = hover?;
+        *self.ivars().tool_tip.borrow_mut() = tip.clone();
+        let (range, text) = tip?;
         let layout = self.layout_manager();
         // SAFETY: plain getters on a TextKit 1 stack; a null actual range is allowed.
         let rect = unsafe {
@@ -733,9 +732,10 @@ impl EditorController {
         self.text_view().scrollRangeToVisible(range);
     }
 
-    /// Underlines the UTF-16 ranges `ranges` as errors, replacing the previous underlines. An
-    /// empty range marks the character it points at. Temporary attributes, like the colours.
-    pub fn set_underlines(&self, ranges: Vec<Range<usize>>) {
+    /// Underlines the UTF-16 ranges of `issues` as errors, replacing the previous underlines,
+    /// and keeps their messages for the tool tip. An empty range marks the character it points
+    /// at. Temporary attributes, like the colours.
+    pub fn set_underlines(&self, issues: Vec<(Range<usize>, String)>) {
         let layout = self.layout_manager();
         let len = self.text_view().string().length();
         // SAFETY: immutable AppKit constants.
@@ -746,12 +746,14 @@ impl EditorController {
         }
         let single = NSNumber::new_isize(NSUnderlineStyle::Single.0);
         let error = colors::error();
-        for range in ranges {
+        let mut drawn = Vec::new();
+        for (range, message) in issues {
             let start = range.start.min(len);
             let end = range.end.max(start + 1).min(len);
             if end <= start {
                 continue;
             }
+            drawn.push((start..end, message));
             let range = NSRange::from(start..end);
             // SAFETY: the underline style is an `NSNumber`, the underline colour an `NSColor`.
             unsafe {
@@ -759,6 +761,10 @@ impl EditorController {
                 layout.addTemporaryAttribute_value_forCharacterRange(color, &error, range);
             }
         }
+        *self.ivars().underlines.borrow_mut() = drawn;
+        // The next mouse move puts up a tool tip with the new messages.
+        self.text_view().removeAllToolTips();
+        *self.ivars().tool_tip.borrow_mut() = None;
     }
 
     /// Selects line `line` (1-based) and scrolls to it; used by the issues bar.
