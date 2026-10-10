@@ -1,22 +1,63 @@
-//! A text-only table: rows of strings, one label per cell, and a click callback. Shared by
-//! the issues bar, the response history and the HTTP log.
+//! A text-only table: rows of strings, one label per cell, and a callback for the row the user
+//! picks, by clicking it or by moving the selection with the keyboard. Shared by the issues
+//! bar, the response history, the HTTP log, the import sheet and the Servers pane.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSLineBreakMode, NSScrollView,
-    NSTableColumn, NSTableColumnResizingOptions, NSTableView, NSTableViewDataSource,
-    NSTableViewDelegate, NSTextAlignment, NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSControl, NSControlTextEditingDelegate, NSEvent, NSLineBreakMode,
+    NSResponder, NSScrollView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
+    NSTableViewDataSource, NSTableViewDelegate, NSTextAlignment, NSTextField, NSView,
 };
-use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString};
 
 use crate::layout;
 
 type OnClick = Box<dyn Fn(usize)>;
+
+#[derive(Debug, Default)]
+pub struct KeyTableIvars {
+    /// Set while the table handles a key press.
+    in_key_down: Cell<bool>,
+}
+
+define_class!(
+    // SAFETY:
+    // - NSTableView has no subclassing requirements beyond its designated initializers, which
+    //   we inherit.
+    // - `KeyTableView` does not implement `Drop`.
+    #[unsafe(super(NSTableView, NSControl, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = KeyTableIvars]
+    #[derive(Debug)]
+    pub struct KeyTableView;
+
+    impl KeyTableView {
+        // SAFETY: the signature matches `keyDown:`.
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            // A selection change during a key press (↑/↓, Home, End, type-select) is the
+            // user's; one made by code or by a mouse down is not, and a click is reported by
+            // the table's action.
+            let was = self.ivars().in_key_down.replace(true);
+            // SAFETY: `keyDown:` takes the event.
+            let _: () = unsafe { msg_send![super(self), keyDown: event] };
+            self.ivars().in_key_down.set(was);
+        }
+    }
+);
+
+impl KeyTableView {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(KeyTableIvars::default());
+        // SAFETY: `init` is NSTableView's designated initializer for code-built views.
+        unsafe { msg_send![super(this), init] }
+    }
+}
 
 pub struct TableIvars {
     columns: usize,
@@ -24,7 +65,7 @@ pub struct TableIvars {
     /// Columns fixed by `fix_column_width`, whose text is centred.
     fixed: RefCell<Vec<usize>>,
     on_click: RefCell<Option<OnClick>>,
-    table: OnceCell<Retained<NSTableView>>,
+    table: OnceCell<Retained<KeyTableView>>,
     scroll: OnceCell<Retained<NSScrollView>>,
 }
 
@@ -87,6 +128,17 @@ define_class!(
                 Retained::into_super(cell)
             })
         }
+
+        // SAFETY: the signature matches `tableViewSelectionDidChange:`.
+        #[unsafe(method(tableViewSelectionDidChange:))]
+        fn selection_did_change(&self, _notification: &NSNotification) {
+            let table = self.ivars().table.get();
+            let by_key = table.is_some_and(|t| t.ivars().in_key_down.get());
+            let row = table.map_or(-1, |t| t.selectedRow());
+            if let (true, Ok(row)) = (by_key, usize::try_from(row)) {
+                self.click(row);
+            }
+        }
     }
 
     impl TextTable {
@@ -114,7 +166,7 @@ impl TextTable {
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
-        let table = NSTableView::new(mtm);
+        let table = KeyTableView::new(mtm);
         for i in 0..this.ivars().columns {
             let id = NSString::from_str(&i.to_string());
             let column = NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), &id);
@@ -175,11 +227,13 @@ impl TextTable {
         self.ivars().rows.borrow().clone()
     }
 
+    /// What happens when the user picks a row: clicks it (also when it was already selected),
+    /// or moves the selection to it with the keyboard.
     pub fn on_click(&self, f: impl Fn(usize) + 'static) {
         *self.ivars().on_click.borrow_mut() = Some(Box::new(f));
     }
 
-    /// What a click on `row` does; also called by tests.
+    /// What picking `row` does; also called by tests.
     pub fn click(&self, row: usize) {
         if let Some(f) = &*self.ivars().on_click.borrow() {
             f(row);

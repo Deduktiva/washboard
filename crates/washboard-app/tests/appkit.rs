@@ -31,6 +31,7 @@ fn main() {
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
+        ("table_keys", checks::table_keys),
         ("completion_and_hover", checks::completion_and_hover),
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
@@ -77,7 +78,7 @@ mod checks {
     use tempfile::TempDir;
     use washboard_app::{
         AppDelegate, EditorController, ImportSheetController, NodeKind, Options,
-        ProjectWindowController, SidebarNode,
+        ProjectWindowController, SidebarNode, TextTable,
     };
     use washboard_app::{Pane, ServersPane};
     use washboard_core::model::{Auth, Server, ServerId};
@@ -1900,6 +1901,46 @@ mod checks {
         // The send went to a plain-HTTP local server; the TLS wording is tested on Linux.
         assert_eq!(log.tls_text(), "No TLS (plain HTTP)");
         log.panel().close();
+    }
+
+    /// A table reports the row the user picks with ↑/↓ as it does a click, so a detail view
+    /// (the Servers form, the HTTP log, history) follows the highlight. Selection made by
+    /// code is not reported.
+    pub fn table_keys(_ctx: &Ctx) {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let table = TextTable::new(&["Name"], mtm);
+        let picked = Rc::new(RefCell::new(Vec::new()));
+        let log = picked.clone();
+        table.on_click(move |row| log.borrow_mut().push(row));
+        table.set_rows(vec![vec!["a".into()], vec!["b".into()], vec!["c".into()]]);
+        let view = table.table();
+        view.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        assert!(
+            picked.borrow().is_empty(),
+            "selection by code is not reported"
+        );
+        let down = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            NSEventType::KeyDown,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function,
+            0.0,
+            0,
+            None,
+            &NSString::from_str("\u{F701}"),
+            &NSString::from_str("\u{F701}"),
+            false,
+            125,
+        )
+        .expect("a ↓ key event");
+        view.keyDown(&down);
+        assert_eq!(view.selectedRow(), 1, "↓ moved the selection");
+        assert_eq!(*picked.borrow(), [1], "and reported it");
+        table.click(1);
+        assert_eq!(
+            *picked.borrow(),
+            [1, 1],
+            "a click on the selected row still counts"
+        );
     }
 
     /// Pumps the main run loop until `done` holds; sheets attach and detach asynchronously.
