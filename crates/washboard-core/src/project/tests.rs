@@ -825,6 +825,43 @@ fn record_list_load_history() {
 }
 
 #[test]
+fn history_keeps_the_request_head_masked() {
+    let (_tmp, folder, mut p) = new_project();
+    let dev = server("dev");
+    p.add_server(&dev).expect("add");
+    let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
+    let mut sent = exchange(1_791_295_392, Some("HTTP/1.1 200 OK"));
+    sent.request
+        .headers
+        .push(("authorization".into(), "Basic YWxpY2U6c2VjcmV0".into()));
+    let old = p.record_exchange(a.id, &dev, &sent, false).expect("record");
+    let head = p.load_history(old.id).expect("load").request_head;
+    assert_eq!(
+        head,
+        Some(RequestHead {
+            start_line: "POST /soap HTTP/1.1".into(),
+            headers: vec![
+                ("Content-Type".into(), "text/xml; charset=utf-8".into()),
+                ("authorization".into(), "Basic ••••••••".into()),
+            ],
+        })
+    );
+    drop(p);
+
+    // A v1 database: the column is added on open, and rows from before show no head.
+    let conn = rusqlite::Connection::open(folder.join(DB_FILE)).expect("conn");
+    conn.execute_batch("ALTER TABLE history DROP COLUMN request_headers; PRAGMA user_version = 1;")
+        .expect("downgrade");
+    drop(conn);
+    let mut p = Project::open(&folder).expect("open");
+    assert_eq!(p.load_history(old.id).expect("load").request_head, None);
+    let new = p
+        .record_exchange(a.id, &dev, &exchange(1_791_295_400, None), false)
+        .expect("record");
+    assert!(p.load_history(new.id).expect("load").request_head.is_some());
+}
+
+#[test]
 fn same_second_sends_get_distinct_files() {
     let (_tmp, _folder, mut p) = new_project();
     let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");

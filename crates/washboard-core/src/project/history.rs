@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use super::fsutil::{IoContext, atomic_write, remove_dir_if_exists, remove_file_if_exists};
 use super::{
@@ -19,12 +20,31 @@ use crate::model::{HistoryEntry, HistoryId, RequestId, Server, ServerId};
 const REQUEST_SUFFIX: &str = ".request.xml";
 const RESPONSE_SUFFIX: &str = ".response.xml";
 
+/// A request's start line and headers as sent, with `Authorization` masked
+/// ([`RawMessage::masked_headers`]): credentials stay out of the project folder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestHead {
+    pub start_line: String,
+    pub headers: Vec<(String, String)>,
+}
+
+impl RequestHead {
+    pub fn of(request: &RawMessage) -> RequestHead {
+        RequestHead {
+            start_line: request.start_line.clone(),
+            headers: request.masked_headers(),
+        }
+    }
+}
+
 /// A history entry with its stored messages, for the History tab and "Restore request".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryRecord {
     pub entry: HistoryEntry,
     /// The request body exactly as sent.
     pub request_body: Vec<u8>,
+    /// `None` for entries recorded before schema v2, which did not keep it.
+    pub request_head: Option<RequestHead>,
     /// `None` when no response was received (transport error) or its file is gone.
     pub response_body: Option<Vec<u8>>,
     /// In received order. Empty when no response was received.
@@ -32,7 +52,7 @@ pub struct HistoryRecord {
 }
 
 const COLUMNS: &str = "id, request_id, server_id, url, sent_at, duration_ms, http_status, \
-                       soap_fault, error, response_headers, file_stem";
+                       soap_fault, error, response_headers, file_stem, request_headers";
 
 struct RawRow {
     id: String,
@@ -46,6 +66,7 @@ struct RawRow {
     error: Option<String>,
     response_headers: Option<String>,
     file_stem: String,
+    request_headers: Option<String>,
 }
 
 fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRow> {
@@ -61,6 +82,7 @@ fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRow> {
         error: r.get(8)?,
         response_headers: r.get(9)?,
         file_stem: r.get(10)?,
+        request_headers: r.get(11)?,
     })
 }
 
@@ -165,16 +187,19 @@ impl Project {
             soap_fault,
             error: exchange.error.clone(),
         };
+        let encode = |e| ProjectError::Corrupt(format!("cannot encode headers: {e}"));
         let headers = exchange
             .response
             .as_ref()
             .map(|r| serde_json::to_string(&r.headers))
             .transpose()
-            .map_err(|e| ProjectError::Corrupt(format!("cannot encode headers: {e}")))?;
+            .map_err(encode)?;
+        let request_head =
+            serde_json::to_string(&RequestHead::of(&exchange.request)).map_err(encode)?;
         let inserted = (|| -> Result<()> {
             let tx = self.conn.transaction()?;
             tx.execute(
-                &format!("INSERT INTO history ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"),
+                &format!("INSERT INTO history ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
                 params![
                     entry.id.to_string(),
                     request.to_string(),
@@ -186,7 +211,8 @@ impl Project {
                     soap_fault,
                     entry.error,
                     headers,
-                    stem
+                    stem,
+                    request_head
                 ],
             )?;
             // Only servers that are (still) part of the project become "last server".
@@ -260,9 +286,14 @@ impl Project {
             .as_deref()
             .and_then(|j| serde_json::from_str(j).ok())
             .unwrap_or_default();
+        let request_head = row
+            .request_headers
+            .as_deref()
+            .and_then(|j| serde_json::from_str(j).ok());
         Ok(HistoryRecord {
             entry,
             request_body,
+            request_head,
             response_body,
             response_headers,
         })
