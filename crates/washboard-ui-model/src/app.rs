@@ -34,9 +34,6 @@ pub enum ModelError {
     SchemaNotReady,
     #[error("the WSDL could not be loaded: {0}")]
     SchemaFailed(String),
-    /// Every operation in the WSDL is unsupported (SOAP 1.2, rpc/encoded, …).
-    #[error("the WSDL has no operation Washboard can call")]
-    NoSupportedOperation,
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
     /// Send needs a server; the project has none.
