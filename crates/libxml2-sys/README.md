@@ -1,6 +1,6 @@
 # libxml2-sys
 
-Hand-written FFI to the parts of libxml2 that `washboard_core::validate` uses: the parser,
+LLM-written FFI to the parts of libxml2 that `washboard_core::validate` uses: the parser,
 XML Schema compilation and validation, structured errors and resource loaders. The safe
 wrapper is `crates/washboard-core/src/validate/xsd.rs`.
 
@@ -10,28 +10,7 @@ wrapper is `crates/washboard-core/src/validate/xsd.rs`.
 <https://gitlab.gnome.org/GNOME/libxml2>) checked out at tag `v2.15.4`
 (commit `96498992efa48d52b0e8b83058bd88dbdaf153c1`, released 2026-09-01).
 
-Why this one:
-
-- It is the newest stable release; there is no 2.16 yet. The 2.15 branch gets security
-  releases (2.15.3 and 2.15.4 both contain security fixes, e.g. out-of-bounds reads in the
-  regexp engine that XSD patterns use).
-- 2.15 **removed the built-in HTTP client** (and LZMA). Combined with our build options, the
-  library we link has no network code at all, so "the schema loader never touches the network"
-  is a property of the binary (`docs/PLAN.md` §5, §6).
-- 2.14+ has per-context resource loaders (`xmlSchemaSetResourceLoader`,
-  `xmlCtxtSetResourceLoader`), which lets compiles run on several threads. See the caveat below.
-- macOS ships 2.9.13 (2022); see PLAN §5 "libxml2: vendored, not system".
-
-Maintenance status (checked 2026-10): upstream describes libxml2 as maintained by volunteers
-on a best-effort basis, and the original long-time maintainer stepped back in 2025; releases
-still appear (2.15.3 in April, 2.15.4 in September 2026). Upstream plans to drop the Python
-bindings and Schematron in 2.16; neither affects us.
-
-How we watch for advisories: subscribe to releases of the GitLab project (or the GitHub
-mirror's tags) and read the "Security" section of `NEWS` for each 2.15.x; also watch
-oss-security for "libxml2". Updating is `git -C vendor/libxml2 checkout v2.15.N`, then run the
-full test suite (Linux and macOS CI) and update this file. Re-check the upstream bug and the
-behaviour we depend on (both below) on every update.
+This was the newest stable release at the time.
 
 ## Upstream issue we work around
 
