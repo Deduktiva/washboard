@@ -234,7 +234,12 @@ impl App {
             Some(Err(e)) => Some(e),
             None => None,
         };
+        let leaves_older = window.older.is_some();
         App::load_history(window, indent);
+        if leaves_older {
+            self.events
+                .push(Event::ShownExchangeChanged { project: key });
+        }
         self.stop_timers(key);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);

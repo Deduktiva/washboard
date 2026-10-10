@@ -504,6 +504,11 @@ impl AppDelegate {
                     controller.response().show_response();
                 }
             }
+            Event::ShownExchangeChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_exchange();
+                }
+            }
             Event::HistoryChanged { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.response().show_history();
@@ -561,6 +566,7 @@ impl AppDelegate {
         controller.show_issues();
         controller.response().show_response();
         controller.response().show_history();
+        controller.response().show_model_drawer();
         controller.show_edited();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };

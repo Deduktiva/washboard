@@ -18,6 +18,30 @@ use crate::window::ProjectWindow;
 /// The HTTP log keeps this many exchanges, across all projects.
 pub const LOG_CAPACITY: usize = 50;
 
+/// An older exchange of the selected request, shown whole in place of the latest one (PLAN §4
+/// "Response pane and history"): its response in the response pane, its request as sent
+/// beside it, read-only. While one is shown, Send is refused.
+#[derive(Debug, Clone)]
+pub struct OlderExchange {
+    pub entry: HistoryId,
+    /// The request as it was sent, decoded for display.
+    pub request: String,
+    /// What the response pane showed before, shown again by Show Latest. Kept rather than
+    /// re-read, since the latest send may not have made it into the history.
+    latest: Option<ResponseView>,
+}
+
+/// The History drawer under the response, kept per project in `ui_state`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct HistoryDrawer {
+    pub open: bool,
+    /// The table's height while open, in points; `None` until the user has resized it.
+    pub height: Option<f64>,
+}
+
+const DRAWER_OPEN_KEY: &str = "history_drawer.open";
+const DRAWER_HEIGHT_KEY: &str = "history_drawer.height";
+
 /// What the response pane shows: the last send of the selected request, or a history entry.
 #[derive(Debug, Clone)]
 pub struct ResponseView {
@@ -142,8 +166,13 @@ pub(crate) struct Sending {
 
 impl App {
     /// Send (⌘↩): saves, validates on a worker and, if there are no errors, sends to the
-    /// selected server. Errors show the issues list instead ([`Event::ShowIssues`]).
+    /// selected server. Errors show the issues list instead ([`Event::ShowIssues`]). Refused
+    /// while an older exchange is shown.
     pub fn send(&mut self, key: ProjectKey) -> Result<(), ModelError> {
+        // Checked before anything else, so a shortcut can never send an old exchange.
+        if self.window(key)?.older.is_some() {
+            return Err(ModelError::OlderExchangeShown);
+        }
         self.flush(key)?;
         let id = self.next();
         let secrets = self.front.secrets.clone();
@@ -266,6 +295,11 @@ impl App {
                 history, &server, &exchange, fault, indent,
             ));
             window.reload_history();
+            // A send that finishes while an older exchange is shown returns to the latest.
+            if window.older.take().is_some() {
+                self.events
+                    .push(Event::ShownExchangeChanged { project: key });
+            }
             self.events.push(Event::ResponseChanged { project: key });
             self.events.push(Event::HistoryChanged { project: key });
         }
@@ -283,32 +317,81 @@ impl App {
         self.events.push(Event::LogAppended);
     }
 
-    /// Shows a history entry in the response pane.
+    /// Shows a history entry of the selected request: the newest returns to the latest
+    /// exchange, any other is shown whole as an [`OlderExchange`].
     pub fn show_history(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
         let indent = self.format.indent;
         let window = self.window(key)?;
+        if window.history.first().map(|e| e.id) == Some(entry) {
+            return self.show_latest(key);
+        }
         let record = window.project.load_history(entry)?;
+        if Some(record.entry.request_id) != window.selected_request() {
+            return Err(ModelError::NoRequestSelected);
+        }
+        let request = xml::decode_lossy(&record.request_body);
+        let latest = match window.older.take() {
+            Some(older) => older.latest,
+            None => window.response.take(),
+        };
         window.response = Some(ResponseView::from_record(record, indent));
+        window.older = Some(OlderExchange {
+            entry,
+            request,
+            latest,
+        });
         self.events.push(Event::ResponseChanged { project: key });
+        self.events
+            .push(Event::ShownExchangeChanged { project: key });
         Ok(())
     }
 
-    /// History ▸ Restore request: puts the request as it was sent into the editor (an edit,
-    /// so autosave and checks follow; the widget's undo does not cover it).
-    pub fn restore_request(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
+    /// Show Latest (Esc): back to the latest exchange and the editor. Nothing happens if it is
+    /// already shown.
+    pub fn show_latest(&mut self, key: ProjectKey) -> Result<(), ModelError> {
         let window = self.window(key)?;
-        let record = window.project.load_history(entry)?;
-        let text = xml::decode_lossy(&record.request_body);
-        let editor = window
-            .editor
-            .as_ref()
-            .ok_or(ModelError::NoRequestSelected)?;
-        if editor.request() != record.entry.request_id {
+        let Some(older) = window.older.take() else {
+            return Ok(());
+        };
+        window.response = older.latest;
+        self.events.push(Event::ResponseChanged { project: key });
+        self.events
+            .push(Event::ShownExchangeChanged { project: key });
+        Ok(())
+    }
+
+    /// Restore Request: returns to the latest exchange and hands back the older exchange's
+    /// request as sent. The front end puts it into the editor through the widget, as one undo
+    /// step, so the editor's previous text is one Undo away; the edit reaches the model as any
+    /// other.
+    pub fn restore_request(&mut self, key: ProjectKey) -> Result<String, ModelError> {
+        let window = self.window(key)?;
+        if window.editor.is_none() {
             return Err(ModelError::NoRequestSelected);
         }
-        let len = editor.utf16_len();
-        self.edit(key, 0..len, &text)?;
-        self.events.push(Event::EditorReplaced { project: key });
+        let text = window
+            .older
+            .as_ref()
+            .ok_or(ModelError::NoOlderExchange)?
+            .request
+            .clone();
+        self.show_latest(key)?;
+        Ok(text)
+    }
+
+    /// Opens, closes or resizes the History drawer, remembered for the project.
+    pub fn set_history_drawer(
+        &mut self,
+        key: ProjectKey,
+        drawer: HistoryDrawer,
+    ) -> Result<(), ModelError> {
+        let project = &mut self.window(key)?.project;
+        project.set_ui_state(DRAWER_OPEN_KEY, Some(if drawer.open { "1" } else { "0" }))?;
+        let height = drawer
+            .height
+            .filter(|h| h.is_finite() && *h > 0.0)
+            .map(|h| format!("{h:.0}"));
+        project.set_ui_state(DRAWER_HEIGHT_KEY, height.as_deref())?;
         Ok(())
     }
 
@@ -319,6 +402,7 @@ impl App {
 
     /// Loads the selected request's history and shows its latest entry.
     pub(crate) fn load_history(window: &mut ProjectWindow, indent: usize) {
+        window.older = None;
         window.reload_history();
         window.response = window
             .history
@@ -336,6 +420,23 @@ impl ProjectWindow {
 
     pub fn response(&self) -> Option<&ResponseView> {
         self.response.as_ref()
+    }
+
+    /// The older exchange shown in place of the latest; `None` while the latest is shown.
+    pub fn older_exchange(&self) -> Option<&OlderExchange> {
+        self.older.as_ref()
+    }
+
+    /// Whether the History drawer is open and how tall, as last set. A database that can't
+    /// be read gives the default, a closed drawer.
+    pub fn history_drawer(&self) -> HistoryDrawer {
+        let read = |key| self.project.ui_state(key).ok().flatten();
+        HistoryDrawer {
+            open: read(DRAWER_OPEN_KEY).as_deref() == Some("1"),
+            height: read(DRAWER_HEIGHT_KEY)
+                .and_then(|h| h.parse::<f64>().ok())
+                .filter(|h| h.is_finite() && *h > 0.0),
+        }
     }
 
     /// A send is in flight (the Send button becomes Cancel).

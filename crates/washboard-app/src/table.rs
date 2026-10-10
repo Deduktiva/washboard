@@ -251,9 +251,12 @@ impl TextTable {
         label
     }
 
+    /// A selection the reload drops or moves is the code's doing, not the user's pick.
     pub fn set_rows(&self, rows: Vec<Vec<String>>) {
         *self.ivars().rows.borrow_mut() = rows;
+        let was = self.ivars().applying.replace(true);
         self.table().reloadData();
+        self.ivars().applying.set(was);
     }
 
     pub fn rows(&self) -> Vec<Vec<String>> {

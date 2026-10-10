@@ -15,8 +15,8 @@ use crate::fake::Fake;
 use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
-    ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey, Reformat, SchemaState,
-    WellFormedness,
+    HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
+    Reformat, SchemaState, WellFormedness,
 };
 
 fn fixtures() -> PathBuf {
@@ -1328,23 +1328,129 @@ fn a_cancelled_send_is_ignored() {
     assert!(app.http_log().is_empty());
 }
 
-#[test]
-fn history_entries_can_be_shown_and_restored() {
-    let setup = Setup::new();
+/// Two sends of the first request: an answered one, then a failed one (the newest).
+fn sent_twice(setup: &Setup) -> (Fake, App, ProjectKey, RequestId, String) {
     let (url, _server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
-    let (fake, mut app, key, first) = ready_to_send(&setup, &url);
+    let (fake, mut app, key, first) = ready_to_send(setup, &url);
     let sent = editor_text(&app, key);
     send_and_wait(&fake, &mut app, key);
-    let entry = app.project(key).expect("open").history()[0].id;
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    server.url = server::closed_port_url();
+    app.update_server(key, &server, None).expect("update");
+    set_text(&mut app, key, &sent.replace("2026-01-01", "2027-01-01"));
+    send_and_wait(&fake, &mut app, key);
+    assert_eq!(app.project(key).expect("open").history().len(), 2);
+    (fake, app, key, first, sent)
+}
 
-    set_text(&mut app, key, "<changed/>");
-    app.restore_request(key, entry).expect("restore");
+#[test]
+fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, _, sent) = sent_twice(&setup);
+    let window = app.project(key).expect("open");
+    let (newest, older) = (window.history()[0].id, window.history()[1].id);
+    assert!(window.older_exchange().is_none(), "the latest is shown");
+    assert!(window.response().expect("response").error.is_some());
+
+    app.take_events();
+    app.show_history(key, older).expect("show");
+    let events = app.take_events();
+    for e in [
+        Event::ResponseChanged { project: key },
+        Event::ShownExchangeChanged { project: key },
+    ] {
+        assert!(events.contains(&e), "{e:?} in {events:?}");
+    }
+    let window = app.project(key).expect("open");
+    let shown = window.older_exchange().expect("an older exchange");
+    assert_eq!(shown.entry, older);
+    assert_eq!(shown.request, sent, "the request as sent");
+    assert_eq!(window.response().expect("response").status, Some(200));
+    assert!(
+        editor_text(&app, key).contains("2027-01-01"),
+        "the editor keeps its text"
+    );
+
+    assert!(matches!(app.send(key), Err(ModelError::OlderExchangeShown)));
+    assert!(!app.project(key).expect("open").sending());
+    assert_eq!(app.jobs_running(), 0, "nothing started");
+
+    // Show Latest, and picking the newest row, both return to the latest exchange.
+    app.show_latest(key).expect("latest");
+    let window = app.project(key).expect("open");
+    assert!(window.older_exchange().is_none());
+    assert!(window.response().expect("response").error.is_some());
+    app.show_history(key, older).expect("show");
+    app.show_history(key, newest).expect("show newest");
+    assert!(app.project(key).expect("open").older_exchange().is_none());
+    assert!(matches!(
+        app.restore_request(key),
+        Err(ModelError::NoOlderExchange)
+    ));
+}
+
+#[test]
+fn switching_requests_and_a_finished_send_return_to_the_latest() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = sent_twice(&setup);
+    let older = app.project(key).expect("open").history()[1].id;
+    let second = app
+        .project(key)
+        .expect("open")
+        .sidebar()
+        .requests
+        .iter()
+        .map(|r| r.id)
+        .find(|id| *id != first)
+        .expect("a second request");
+
+    app.show_history(key, older).expect("show");
+    app.take_events();
+    app.select_request(key, Some(second)).expect("select");
     assert!(
         app.take_events()
-            .contains(&Event::EditorReplaced { project: key })
+            .contains(&Event::ShownExchangeChanged { project: key })
     );
-    assert_eq!(editor_text(&app, key), sent);
-    assert!(app.project(key).expect("open").edited());
+    assert!(app.project(key).expect("open").older_exchange().is_none());
+    app.select_request(key, Some(first)).expect("select");
+    assert!(app.project(key).expect("open").older_exchange().is_none());
+
+    // A send started from the latest finishes after an older exchange was picked.
+    let (url, _server) = server::serve_once("200 OK", OK_BODY, ms(200));
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    server.url = url;
+    app.update_server(key, &server, None).expect("update");
+    app.send(key).expect("send");
+    app.show_history(key, older).expect("show");
+    fake.pump_until(&mut app, |app| app.jobs_running() == 0);
+    let events = app.take_events();
+    assert!(
+        events.contains(&Event::ShownExchangeChanged { project: key }),
+        "{events:?}"
+    );
+    let window = app.project(key).expect("open");
+    assert!(window.older_exchange().is_none());
+    assert_eq!(window.history().len(), 3);
+    assert_eq!(
+        window.response().expect("response").history,
+        Some(window.history()[0].id)
+    );
+}
+
+#[test]
+fn restore_request_hands_back_the_sent_text() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, first, sent) = sent_twice(&setup);
+    let older = app.project(key).expect("open").history()[1].id;
+    app.show_history(key, older).expect("show");
+    let text = app.restore_request(key).expect("restore");
+    assert_eq!(text, sent);
+    let window = app.project(key).expect("open");
+    assert!(window.older_exchange().is_none(), "back to the latest");
+    assert!(
+        editor_text(&app, key).contains("2027-01-01"),
+        "the front end applies it, as one undo step"
+    );
 
     // Another request has no history; coming back shows the last response again.
     let op = lookup(&app, key, "LegacyPort").operation;
@@ -1352,12 +1458,45 @@ fn history_entries_can_be_shown_and_restored() {
     assert!(app.project(key).expect("open").response().is_none());
     app.select_request(key, Some(first)).expect("select");
     let window = app.project(key).expect("open");
-    assert_eq!(window.response().expect("response").history, Some(entry));
+    assert_eq!(
+        window.response().expect("response").history,
+        Some(window.history()[0].id)
+    );
+}
 
-    app.show_history(key, entry).expect("show");
-    assert!(
-        app.take_events()
-            .contains(&Event::ResponseChanged { project: key })
+#[test]
+fn the_history_drawer_is_remembered_per_project() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    let drawer = app.project(key).expect("open").history_drawer();
+    assert_eq!(drawer, HistoryDrawer::default(), "closed at first");
+    let open = HistoryDrawer {
+        open: true,
+        height: Some(168.4),
+    };
+    app.set_history_drawer(key, open).expect("set");
+    let path = app.project(key).expect("open").path().to_owned();
+    assert!(app.close_project(key));
+    let key = app.open_project(&path).expect("reopen");
+    let drawer = app.project(key).expect("open").history_drawer();
+    assert_eq!(
+        drawer,
+        HistoryDrawer {
+            open: true,
+            height: Some(168.0)
+        }
+    );
+    app.set_history_drawer(
+        key,
+        HistoryDrawer {
+            open: false,
+            height: Some(f64::NAN),
+        },
+    )
+    .expect("set");
+    assert_eq!(
+        app.project(key).expect("open").history_drawer(),
+        HistoryDrawer::default()
     );
 }
 
@@ -1739,7 +1878,7 @@ fn format_on_save_is_for_save_all_with_edits_only() {
 fn new_requests_and_responses_use_the_indent() {
     let setup = Setup::new();
     let (url, server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
-    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    let (fake, mut app, key, first) = ready_to_send(&setup, &url);
     app.set_format_settings(FormatSettings {
         indent: 4,
         on_save: false,
@@ -1747,11 +1886,12 @@ fn new_requests_and_responses_use_the_indent() {
     send_and_wait(&fake, &mut app, key);
     server.join().expect("server");
     let window = app.project(key).expect("open");
-    let entry = window.history()[0].id;
     let body = window.response().expect("response").body.clone();
     assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 4).ok());
+    // Coming back to the request shows its history entry at the new width.
     app.set_format_settings(FormatSettings::default());
-    app.show_history(key, entry).expect("show");
+    app.select_request(key, None).expect("deselect");
+    app.select_request(key, Some(first)).expect("select");
     let window = app.project(key).expect("open");
     let body = window.response().expect("response").body.clone();
     assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 2).ok());

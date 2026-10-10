@@ -18,7 +18,7 @@ use crate::app::ModelError;
 use crate::diagnostics::WellFormedness;
 use crate::editor::Editor;
 use crate::import::{ReplaceOutcome, SuggestedServer};
-use crate::send::{ResponseView, Sending};
+use crate::send::{OlderExchange, ResponseView, Sending};
 
 /// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
 /// off the main thread and then shared read-only with the main thread and workers.
@@ -176,6 +176,7 @@ pub struct ProjectWindow {
     pub(crate) editor: Option<Editor>,
     pub(crate) history: Vec<HistoryEntry>,
     pub(crate) response: Option<ResponseView>,
+    pub(crate) older: Option<OlderExchange>,
     pub(crate) sending: Option<Sending>,
     pub(crate) suggested_servers: Vec<SuggestedServer>,
     pub(crate) replace_outcome: Option<ReplaceOutcome>,

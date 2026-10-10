@@ -1,5 +1,7 @@
-//! One window per open project (PLAN §8): unified toolbar, sidebar, and a content split of
-//! request bar, editor, issues bar and response pane.
+//! One window per open project (PLAN §8): unified toolbar, sidebar, and a content split of the
+//! request (request bar, editor, issues bar) beside the response pane (PLAN §4 "Response pane
+//! and history"). An older exchange from the history replaces the editor with its request as
+//! sent and the toolbar's items with a titlebar accessory.
 //!
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
 //! answers the Project menu while its window is key. One per project open in the model; the
@@ -14,9 +16,11 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder,
-    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
-    NSStackView, NSTextView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSAlert, NSBeep, NSBox, NSBoxType, NSButton, NSColor, NSImage, NSLayoutAttribute,
+    NSLineBreakMode, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView,
+    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
+    NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
@@ -24,7 +28,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString, ns_string,
+    NSSize, NSString, NSUserDefaults, ns_string,
 };
 
 use washboard_core::model::{RequestId, ServerId};
@@ -33,7 +37,7 @@ use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, SchemaState, Well
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
-use crate::panes::{IssuesBar, RequestBar, ResponsePane};
+use crate::panes::{IssuesBar, RequestBar, ResponsePane, date_text, sent_formatter};
 use crate::servers_pane::ServersPane;
 use crate::settings_window::Pane;
 use crate::sheets::ImportSheetController;
@@ -87,9 +91,16 @@ pub struct ProjectIvars {
     server_ids: RefCell<Vec<ServerId>>,
     request_bar: RequestBar,
     editor: Retained<EditorController>,
+    /// An older exchange's request as sent, read-only, in the editor's place.
+    sent: Retained<EditorController>,
     issues: OnceCell<Retained<IssuesBar>>,
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
+    /// Request beside response.
+    content_split: OnceCell<Retained<NSSplitView>>,
+    /// "Older exchange · …" under the toolbar, hidden while the latest is shown.
+    accessory: OnceCell<Retained<NSTitlebarAccessoryViewController>>,
+    older_label: OnceCell<Retained<NSTextField>>,
     replace: RefCell<Option<Retained<ImportSheetController>>>,
     /// The window the Replace WSDL sheet was attached to, for the alert after it.
     replace_parent: RefCell<Option<Weak<NSWindow>>>,
@@ -174,6 +185,12 @@ define_class!(
         // SAFETY: the signature matches `validateMenuItem:`.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            // An older exchange is never sent or checked by a shortcut, and the editor those
+            // act on is out of sight.
+            let on_editor = [sel!(sendRequest:), sel!(validateRequest:), sel!(formatXML:)];
+            if item.action().is_some_and(|a| on_editor.contains(&a)) && self.older_shown() {
+                return false.into();
+            }
             // The menu's Send only sends and Cancel Send only cancels; the toolbar item, which
             // AppKit does not validate here, toggles.
             item.action().is_none_or(|action| self.validates(action))
@@ -252,6 +269,24 @@ define_class!(
                 self.cancel_send();
             }
         }
+
+        #[unsafe(method(showLatest:))]
+        fn show_latest(&self, _sender: Option<&AnyObject>) {
+            self.show_latest_exchange();
+        }
+
+        /// Esc from a view that passes it up the responder chain (the History table).
+        #[unsafe(method(cancelOperation:))]
+        fn cancel_operation(&self, _sender: Option<&AnyObject>) {
+            if self.older_shown() {
+                self.show_latest_exchange();
+            }
+        }
+
+        #[unsafe(method(restoreRequest:))]
+        fn restore_request(&self, _sender: Option<&AnyObject>) {
+            self.restore_sent_request();
+        }
     }
 );
 
@@ -273,9 +308,13 @@ impl ProjectWindowController {
             server_ids: RefCell::new(Vec::new()),
             request_bar: RequestBar::new(mtm),
             editor: EditorController::for_project(key, mtm),
+            sent: sent_request_view(mtm),
             issues: OnceCell::new(),
             response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
+            content_split: OnceCell::new(),
+            accessory: OnceCell::new(),
+            older_label: OnceCell::new(),
             replace: RefCell::new(None),
             replace_parent: RefCell::new(None),
             replace_summary: RefCell::new(None),
@@ -314,6 +353,17 @@ impl ProjectWindowController {
             window.center();
         }
         window.setFrameAutosaveName(&frame_name);
+        this.add_accessory(&window, mtm);
+        // Request and response start with half each, unless the project remembers them.
+        window.layoutIfNeeded();
+        if let Some(content) = this.ivars().content_split.get() {
+            let name = autosave_name("ProjectContent", folder);
+            if !has_split_frames(&name) {
+                let width = content.frame().size.width;
+                content.setPosition_ofDividerAtIndex((width - content.dividerThickness()) / 2.0, 0);
+            }
+            content.setAutosaveName(Some(&name));
+        }
         // The window holds its delegate weakly; this controller owns the window.
         window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         let _ = this.ivars().split.set(split);
@@ -481,6 +531,16 @@ impl ProjectWindowController {
         }
     }
 
+    /// An older exchange is shown in place of the latest.
+    fn older_shown(&self) -> bool {
+        let key = self.key();
+        self.read(|app| {
+            app.project(key)
+                .is_some_and(|w| w.older_exchange().is_some())
+        })
+        .unwrap_or(false)
+    }
+
     /// Whether the menu item sending `action` is enabled while this window is key.
     fn validates(&self, action: Sel) -> bool {
         if action == sel!(formatXML:) {
@@ -527,6 +587,157 @@ impl ProjectWindowController {
                 .is_some_and(|w| matches!(w.schema(), SchemaState::Ready(_)))
         })
         .unwrap_or(false)
+    }
+
+    /// Shows the latest exchange and the editor, or an older exchange whole: its request as
+    /// sent in the editor's place and the accessory instead of the toolbar's items
+    /// (`ShownExchangeChanged`). The editor keeps its text, selection and undo stack.
+    pub fn show_exchange(&self) {
+        let key = self.key();
+        let older = self
+            .read(|app| {
+                let window = app.project(key)?;
+                let older = window.older_exchange()?;
+                let response = window.response()?;
+                let server = window.server_label(response.server, &response.url);
+                Some((older.request.clone(), response.sent_at, server))
+            })
+            .flatten();
+        let shown = older.is_some();
+        let window = self.project_window();
+        if let Some((request, sent_at, server)) = &older {
+            let when = date_text(&sent_formatter(), *sent_at);
+            self.ivars().sent.set_text(request);
+            self.ivars()
+                .request_bar
+                .show_sent(Some(&format!("Sent {when} · read-only")));
+            if let Some(label) = self.ivars().older_label.get() {
+                label.setStringValue(&NSString::from_str(&format!(
+                    "Older exchange · {when} · {server}"
+                )));
+            }
+        } else {
+            self.ivars().request_bar.show_sent(None);
+        }
+        let leaving_sent = !shown
+            && window
+                .firstResponder()
+                .is_some_and(|r| &*r == self.ivars().sent.text_view().as_ref() as &NSResponder);
+        self.editor().view().setHidden(shown);
+        self.issues().view().setHidden(shown);
+        self.ivars().sent.view().setHidden(!shown);
+        if let Some(accessory) = self.ivars().accessory.get() {
+            accessory.setHidden(!shown);
+        }
+        if let Some(toolbar) = window.toolbar() {
+            for item in toolbar.items().iter() {
+                let id = item.itemIdentifier().to_string();
+                if [SERVER_ITEM, "send", "httpLog"].contains(&id.as_str()) {
+                    item.setHidden(shown);
+                }
+            }
+        }
+        if shown {
+            window.makeFirstResponder(Some(self.ivars().sent.text_view()));
+        } else if leaving_sent {
+            window.makeFirstResponder(Some(self.editor().text_view()));
+        }
+        self.response().show_history();
+    }
+
+    /// Show Latest (Esc): back to the latest exchange and the editor.
+    pub fn show_latest_exchange(&self) {
+        let key = self.key();
+        self.command("Could not show the latest exchange", |app| {
+            app.show_latest(key)
+        });
+    }
+
+    /// Restore Request: puts the older exchange's request into the editor as one undo step,
+    /// back on the latest exchange.
+    pub fn restore_sent_request(&self) {
+        let key = self.key();
+        let Some(text) = self.command("Could not restore the request", |app| {
+            app.restore_request(key)
+        }) else {
+            return;
+        };
+        let editor = self.editor();
+        let len = editor.text_view().string().length();
+        editor.apply_edit(0..len, &text, 0..0, "Restore Request");
+    }
+
+    /// The read-only view of an older exchange's request.
+    pub fn sent_request(&self) -> &EditorController {
+        &self.ivars().sent
+    }
+
+    /// The titlebar accessory shown with an older exchange.
+    pub fn older_accessory(&self) -> &NSTitlebarAccessoryViewController {
+        self.ivars().accessory.get().expect("set in new()")
+    }
+
+    /// The accessory's "Older exchange · <time> · <server>".
+    pub fn older_text(&self) -> String {
+        self.ivars()
+            .older_label
+            .get()
+            .map(|l| l.stringValue().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Request beside response.
+    pub fn content_split(&self) -> &NSSplitView {
+        self.ivars().content_split.get().expect("set in new()")
+    }
+
+    /// The bar under the toolbar for an older exchange (PLAN §4): a yellow tint that works in
+    /// both appearances, the exchange, Restore Request, and Show Latest on Esc. A unified
+    /// toolbar cannot be coloured itself; an accessory is AppKit's way to attach a bar to it.
+    fn add_accessory(&self, window: &NSWindow, mtm: MainThreadMarker) {
+        let label = layout::small_label("", mtm);
+        layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+        let button = |title: &str, action| {
+            // SAFETY: this controller owns the window and so the button, which holds its
+            // target weakly; both actions take the sender.
+            unsafe {
+                NSButton::buttonWithTitle_target_action(
+                    &NSString::from_str(title),
+                    Some(self),
+                    Some(action),
+                    mtm,
+                )
+            }
+        };
+        let restore = button("Restore Request", sel!(restoreRequest:));
+        restore.setToolTip(Some(ns_string!("Copy the sent request into the editor")));
+        let latest = button("Show Latest", sel!(showLatest:));
+        latest.setKeyEquivalent(ns_string!("\u{1b}"));
+        latest.setBezelColor(Some(&NSColor::controlAccentColor()));
+        latest.setToolTip(Some(ns_string!("Show Latest (Esc)")));
+        let bar = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        bar.addView_inGravity(&label, NSStackViewGravity::Leading);
+        bar.addView_inGravity(&restore, NSStackViewGravity::Trailing);
+        bar.addView_inGravity(&latest, NSStackViewGravity::Trailing);
+        bar.setSpacing(10.0);
+        bar.setEdgeInsets(layout::insets(4.0, 12.0, 4.0, 12.0));
+
+        let tint = NSBox::new(mtm);
+        tint.setBoxType(NSBoxType::Custom);
+        tint.setTitlePosition(NSTitlePosition::NoTitle);
+        tint.setBorderWidth(0.0);
+        tint.setContentViewMargins(NSSize::new(0.0, 0.0));
+        tint.setFillColor(&NSColor::systemYellowColor().colorWithAlphaComponent(0.22));
+        tint.setContentView(Some(&bar));
+        tint.setFrameSize(NSSize::new(window.frame().size.width, ACCESSORY_HEIGHT));
+
+        let accessory = NSTitlebarAccessoryViewController::new(mtm);
+        accessory.setView(&tint);
+        accessory.setLayoutAttribute(NSLayoutAttribute::Bottom);
+        window.addTitlebarAccessoryViewController(&accessory);
+        accessory.setHidden(true);
+        let _ = self.ivars().accessory.set(accessory);
+        let _ = self.ivars().older_label.set(label);
     }
 
     /// Whether this window's request is being sent.
@@ -678,20 +889,24 @@ impl ProjectWindowController {
         let sidebar_vc = NSViewController::new(mtm);
         sidebar_vc.setView(&self.sidebar_pane(mtm));
         let sidebar_item = NSSplitViewItem::sidebarWithViewController(&sidebar_vc);
-        sidebar_item.setMinimumThickness(180.0);
+        sidebar_item.setMinimumThickness(SIDEBAR_MIN_WIDTH);
         split.addSplitViewItem(&sidebar_item);
 
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
         let issues = IssuesBar::new(editor, mtm);
-        content_vc.setView(&content_pane(
+        let content = content_pane(
             self.ivars().request_bar.view(),
-            editor.view(),
+            &[editor.view(), self.ivars().sent.view()],
             issues.view(),
             self.response().view(),
             mtm,
-        ));
+        );
+        content_vc.setView(&below_toolbar(&content, mtm));
+        // The drawer's split controller manages its items through the view controller tree.
+        content_vc.addChildViewController(self.response().drawer());
         let _ = self.ivars().issues.set(issues);
+        let _ = self.ivars().content_split.set(content);
         let content_item = NSSplitViewItem::splitViewItemWithViewController(&content_vc);
         split.addSplitViewItem(&content_item);
         split
@@ -712,6 +927,15 @@ fn autosave_name(kind: &str, folder: &Path) -> Retained<NSString> {
     NSString::from_str(&format!("{kind} {}", folder.display()))
 }
 
+/// A split view with autosave name `name` has saved its subviews' frames before.
+fn has_split_frames(name: &NSString) -> bool {
+    // AppKit's own key for `NSSplitView.autosaveName`.
+    let key = NSString::from_str(&format!("NSSplitView Subview Frames {name}"));
+    NSUserDefaults::standardUserDefaults()
+        .objectForKey(&key)
+        .is_some()
+}
+
 /// Shared by every project window, so they group into one window's tabs.
 pub fn project_tabbing_id() -> &'static NSString {
     ns_string!("WashboardProject")
@@ -729,7 +953,11 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
         style,
         mtm,
     );
-    window.setContentMinSize(NSSize::new(720.0, 560.0));
+    // Room for the sidebar and both halves of the content split at their minimum widths.
+    window.setContentMinSize(NSSize::new(
+        SIDEBAR_MIN_WIDTH + 2.0 * MIN_HALF_WIDTH + 2.0,
+        560.0,
+    ));
     // Project windows tab with each other (Window ▸ Merge All Windows, or always when the
     // user prefers tabs in System Settings), never with the welcome or New Project window.
     window.setTabbingIdentifier(project_tabbing_id());
@@ -779,46 +1007,86 @@ fn server_popup(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
 const SERVER_POPUP_MIN_WIDTH: f64 = 120.0;
 const SERVER_POPUP_MAX_WIDTH: f64 = 220.0;
 
-/// The editor (with its issues bar) and the response pane each keep at least this much of the
-/// content split; the window's minimum size leaves room for both.
-const MIN_EDITOR_HEIGHT: f64 = 260.0;
-const MIN_RESPONSE_HEIGHT: f64 = 200.0;
+const SIDEBAR_MIN_WIDTH: f64 = 180.0;
+/// The request and the response each keep at least this much of the content split.
+const MIN_HALF_WIDTH: f64 = 320.0;
+const ACCESSORY_HEIGHT: f64 = 32.0;
 
-/// Editor with the request bar over it and the issues bar under it, above the response pane.
+/// The request side's text views: the editor and the sent-request view, one of them shown.
+type RequestViews<'a> = [&'a NSScrollView; 2];
+
+/// The request (bar, text, issues bar) on the left, the response pane on the right.
 fn content_pane(
     bar: &NSStackView,
-    editor: &NSScrollView,
+    texts: &RequestViews<'_>,
     issues: &NSStackView,
     response: &NSStackView,
     mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let top = layout::fill_column(
-        &[
-            Retained::into_super(bar.retain()),
-            Retained::into_super(editor.retain()),
-            Retained::into_super(issues.retain()),
-        ],
-        mtm,
-    );
+) -> Retained<NSSplitView> {
+    let mut views = vec![Retained::into_super(bar.retain())];
+    views.extend(texts.iter().map(|t| Retained::into_super(t.retain())));
+    views.push(Retained::into_super(issues.retain()));
+    // A hidden view leaves the stack (`detachesHiddenViews`), so the shown text takes the
+    // height.
+    let request = layout::fill_column(&views, mtm);
 
     let split = NSSplitView::new(mtm);
-    // Horizontal dividers: editor above, response below.
-    split.setVertical(false);
+    // Vertical dividers: request on the left, response on the right.
+    split.setVertical(true);
     // A hairline, not the thick divider with its dimple.
     split.setDividerStyle(NSSplitViewDividerStyle::Thin);
-    split.addSubview(&top);
+    split.addSubview(&request);
     split.addSubview(response);
-    // The split starts at zero size, so without minimums the editor keeps all the height
-    // once the window lays out and the response pane is a sliver.
-    top.heightAnchor()
-        .constraintGreaterThanOrEqualToConstant(MIN_EDITOR_HEIGHT)
-        .setActive(true);
-    response
-        .heightAnchor()
-        .constraintGreaterThanOrEqualToConstant(MIN_RESPONSE_HEIGHT)
-        .setActive(true);
+    // The split starts at zero size, so without minimums one half keeps all the width once
+    // the window lays out.
+    let halves: [&NSView; 2] = [&request, response];
+    for half in halves {
+        half.widthAnchor()
+            .constraintGreaterThanOrEqualToConstant(MIN_HALF_WIDTH)
+            .setActive(true);
+    }
     split.adjustSubviews();
-    Retained::into_super(split)
+    split
+}
+
+/// `content` in a view of its own, its top pinned to the safe area. The window's content runs
+/// under the toolbar (`FullSizeContentView`); scroll views inset their documents by
+/// themselves, but the request bar, the status line and the response tabs would be drawn
+/// under the toolbar's title and items. The safe area also grows with the older-exchange
+/// accessory.
+fn below_toolbar(content: &NSView, mtm: MainThreadMarker) -> Retained<NSView> {
+    let container = NSView::new(mtm);
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    container.addSubview(content);
+    let safe = container.safeAreaLayoutGuide();
+    for constraint in [
+        content
+            .topAnchor()
+            .constraintEqualToAnchor(&safe.topAnchor()),
+        content
+            .bottomAnchor()
+            .constraintEqualToAnchor(&container.bottomAnchor()),
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor(&container.leadingAnchor()),
+        content
+            .trailingAnchor()
+            .constraintEqualToAnchor(&container.trailingAnchor()),
+    ] {
+        constraint.setActive(true);
+    }
+    container
+}
+
+/// A read-only, highlighted text view with line numbers on the window background colour, so
+/// it does not read as the editor.
+fn sent_request_view(mtm: MainThreadMarker) -> Retained<EditorController> {
+    let sent = EditorController::new(mtm);
+    let text_view = sent.text_view();
+    text_view.setEditable(false);
+    text_view.setBackgroundColor(&NSColor::windowBackgroundColor());
+    sent.view().setHidden(true);
+    sent
 }
 
 impl ModelAccess for ProjectWindowController {}

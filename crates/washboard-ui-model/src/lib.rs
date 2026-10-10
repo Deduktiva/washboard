@@ -42,7 +42,7 @@ pub use front_end::{
 pub use import::{
     CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome, SuggestedServer,
 };
-pub use send::{LOG_CAPACITY, LogEntry, ResponseView};
+pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
 pub use window::{
     OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
     ServiceNode, Sidebar,

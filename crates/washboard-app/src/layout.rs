@@ -154,6 +154,10 @@ const SMALL_FONT_SIZE: f64 = 11.0;
 /// line): a step above [`small_label`], still below the body size.
 pub const STATUS_FONT_SIZE: f64 = 12.0;
 
+/// The request bar's and the response status line's height, so the two halves of the content
+/// split start on one band.
+pub const BAR_HEIGHT: f64 = 30.0;
+
 /// A chip, as `docs/gui-draft.html` draws them: small secondary text in a rounded outline. For
 /// facts beside a name (a port's SOAP version, a request's operation). Returns the chip and
 /// its label, whose text the caller may change; the chip follows the label's size.

@@ -44,6 +44,12 @@ pub enum ModelError {
     NoServer,
     #[error("a request is already being sent")]
     AlreadySending,
+    /// Send while an older exchange is shown; Show Latest first.
+    #[error("an older exchange is shown")]
+    OlderExchangeShown,
+    /// Restore Request with the latest exchange shown.
+    #[error("no older exchange is shown")]
+    NoOlderExchange,
     /// The import sheet was closed while the front end still referred to it.
     #[error("the import sheet is not open")]
     NoImport,
@@ -348,6 +354,7 @@ impl App {
             editor: None,
             history: Vec::new(),
             response: None,
+            older: None,
             sending: None,
             suggested_servers: Vec::new(),
             replace_outcome: None,
