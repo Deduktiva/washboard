@@ -2052,7 +2052,11 @@ mod checks {
         let _: () = unsafe { msg_send![&*ctx.delegate, showHttpLog: None::<&AnyObject>] };
         let log = ctx.delegate.http_log();
         assert!(log.panel().isVisible(), "log panel shown");
-        assert_eq!(log.table().rows().len(), 1, "the send check's exchange");
+        assert_eq!(
+            log.table().rows().len(),
+            2,
+            "the send check's two exchanges"
+        );
 
         // The panel shows the model's request headers, masked or revealed; which header is
         // masked and how is the model's business, tested in washboard-ui-model.
