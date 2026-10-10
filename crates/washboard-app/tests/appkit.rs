@@ -34,7 +34,7 @@ fn main() {
         ("completion_and_hover", checks::completion_and_hover),
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
-        ("settings_sheet", checks::settings_sheet),
+        ("settings_window", checks::settings_window),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -79,6 +79,7 @@ mod checks {
         AppDelegate, EditorController, ImportSheetController, NodeKind, Options,
         ProjectWindowController, SidebarNode,
     };
+    use washboard_app::{Pane, ServersPane};
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
@@ -1427,12 +1428,17 @@ mod checks {
         assert_eq!(text_view.string().to_string(), "<a><b></a>");
 
         // The settings window round trip: controls → defaults → model.
-        let settings = ctx.delegate.app_settings();
+        let settings = ctx.delegate.settings_window();
         send(c"showSettings:", None, None);
         assert!(settings.window().isVisible(), "Settings… opens the window");
+        assert_eq!(
+            settings.selected(),
+            Some(Pane::App),
+            "on the app's settings"
+        );
         assert_eq!(settings.shown(), FormatSettings::default());
         settings.indent_popup().selectItemAtIndex(3);
-        settings.on_save_checkbox().setState(NSControlStateValueOn);
+        settings.on_save_switch().setState(NSControlStateValueOn);
         let target: &AnyObject = settings;
         send(c"settingChanged:", Some(target), None);
         let reread = NSUserDefaults::initWithSuiteName(
@@ -2024,15 +2030,14 @@ mod checks {
         );
     }
 
-    /// The form's rows sit together at the top of the Servers tab, and the suggestions table
-    /// has room for its rows.
-    fn assert_settings_layout(settings: &washboard_app::SettingsSheet) {
-        settings
-            .window()
+    /// The Servers pane's form rows sit together, and its sections fit the window.
+    fn assert_settings_layout(settings: &ServersPane) {
+        let window = settings.view().window().expect("the pane is shown");
+        window
             .contentView()
             .expect("content")
             .layoutSubtreeIfNeeded();
-        let top = |v: &NSView| v.convertRect_toView(v.bounds(), None).origin.y;
+        let frame = |v: &NSView| v.convertRect_toView(v.bounds(), None);
         let fields: [&NSView; 4] = [
             settings.name_field(),
             settings.url_field(),
@@ -2041,23 +2046,26 @@ mod checks {
         ];
         // Name, URL, then TLS and Auth, then User, Password: never more than three rows apart.
         for pair in fields.windows(2) {
-            let gap = top(pair[0]) - top(pair[1]);
+            let gap = frame(pair[0]).origin.y - frame(pair[1]).origin.y;
             assert!(
-                gap > 0.0 && gap < 3.0 * 40.0,
+                gap > 0.0 && gap < 3.0 * 50.0,
                 "form rows stay together: {gap} between {:?} and {:?}",
                 pair[0].frame(),
                 pair[1].frame()
             );
         }
-        let table = settings.suggestions().view();
-        let frame = table.frame();
+        let width = window.contentLayoutRect().size.width;
+        for field in fields {
+            let f = frame(field);
+            assert!(
+                f.origin.x > 0.0 && f.origin.x + f.size.width < width,
+                "a field inside the window: {f:?} in width {width}"
+            );
+        }
+        let list = settings.table().view().frame();
         assert!(
-            frame.size.height >= 80.0,
-            "suggestions table height: {frame:?}"
-        );
-        assert!(
-            frame.size.width >= 170.0,
-            "suggestions table width: {frame:?}"
+            list.size.height >= 100.0,
+            "the server list has room: {list:?}"
         );
     }
 
@@ -2211,16 +2219,22 @@ mod checks {
         assert!(projects.join("Customers/wsdl").is_dir());
 
         let window = project.project_window();
-        let settings = project
-            .settings()
-            .expect("opened to confirm the suggested server");
-        assert!(window.attachedSheet().is_some());
+        // Opened on the project's Servers, to confirm the suggested server.
+        let settings_window = ctx.delegate.settings_window();
+        assert!(settings_window.window().isVisible());
+        assert_eq!(
+            settings_window.selected(),
+            Some(Pane::Servers(project.key()))
+        );
+        let settings = settings_window.servers(project.key());
         assert!(settings.servers().is_empty(), "nothing before confirming");
-        let suggested = settings.suggestions().rows();
+        let suggested = settings.suggestion_rows();
         assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
-        assert_settings_layout(settings);
+        assert!(settings.shows_suggestions());
+        assert_settings_layout(&settings);
         settings.confirm_suggestion(0);
-        assert!(settings.suggestions().rows().is_empty());
+        assert!(settings.suggestion_rows().is_empty());
+        assert!(!settings.shows_suggestions(), "nothing left to suggest");
         assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
         assert_eq!(settings.selected(), Some(0));
         assert_eq!(
@@ -2228,10 +2242,14 @@ mod checks {
             suggested[0][1]
         );
 
-        // SAFETY: `done:` takes the sender.
-        let _: () = unsafe { msg_send![settings, done: None::<&AnyObject>] };
-        wait_until("the sheet to end", || window.attachedSheet().is_none());
         autoreleasepool(|_| window.performClose(None));
+        assert!(
+            !settings_window
+                .sidebar_titles()
+                .contains(&"Customers".to_string()),
+            "the closed project's section is gone"
+        );
+        settings_window.window().orderOut(None);
 
         // The close button cancels, like Cancel.
         let sheet = ctx.delegate.show_new_project_sheet();
@@ -2289,43 +2307,47 @@ mod checks {
         autoreleasepool(|_| window.performClose(None));
     }
 
-    /// Project Settings opens on Servers and edits the model's servers: rename, Basic auth with
-    /// a password in the secret store, + and −. The edits survive closing and reopening the
-    /// project.
-    pub fn settings_sheet(ctx: &Ctx) {
+    /// Settings… opens the window on the app's settings; Project Settings… on the project's
+    /// Servers, which edits the model's servers without a Done button: rename, Basic auth with
+    /// a password in the secret store, + and −. Closing the project removes its section; the
+    /// edits survive reopening it.
+    pub fn settings_window(ctx: &Ctx) {
         let project = ctx.open();
         let key = project.key();
         let window = project.project_window();
+        // Nothing remembered: Settings… opens on the app's settings.
+        ctx.delegate
+            .defaults()
+            .removeObjectForKey(&NSString::from_str(washboard_app::PANE_KEY));
+        // SAFETY: `showSettings:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, showSettings: None::<&AnyObject>] };
+        let settings = ctx.delegate.settings_window();
+        let settings_window = settings.window().retain();
+        assert!(settings_window.isVisible(), "Settings… opens the window");
+        assert!(settings_window.attachedSheet().is_none() && window.attachedSheet().is_none());
+        assert_eq!(settings.selected(), Some(Pane::App));
+        assert_eq!(settings_window.title().to_string(), "General");
+        assert_eq!(
+            settings.sidebar_titles(),
+            ["Washboard", "General", "Customer API", "General", "Servers"],
+            "the app's section, then one per open project"
+        );
+
         // SAFETY: `projectSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };
-        wait_until("the sheet to attach", || window.attachedSheet().is_some());
-        let sheet = project.settings().expect("created by projectSettings:");
-        let selected_tab = sheet
-            .tabs()
-            .selectedTabViewItem()
-            .map(|t| t.label().to_string());
-        assert_eq!(selected_tab.as_deref(), Some("Servers"));
-        sheet.window().layoutIfNeeded();
-        let content = sheet.window().contentLayoutRect().size;
-        // Auto Layout places the alignment rect; a tab view's frame reaches past it.
-        let tabs = sheet
-            .tabs()
-            .alignmentRectForFrame(sheet.tabs().frame())
-            .size;
-        assert!(
-            (tabs.width - (content.width - 40.0)).abs() < 1.0,
-            "the tabs fill the sheet inside its margins: {tabs:?} in {content:?}"
+        assert_eq!(settings.selected(), Some(Pane::Servers(key)));
+        assert_eq!(
+            settings_window.title().to_string(),
+            "Customer API — Servers"
         );
-        let list = sheet.table().view().frame().size;
-        assert!(
-            (list.width - 180.0).abs() < 1.0 && list.height > 100.0,
-            "the server list keeps its column: {list:?}"
-        );
+        let sheet = settings.servers(key);
+        assert_settings_layout(&sheet);
 
         let names = table_column(sheet.table(), 0);
         assert_eq!(names, server_names(ctx, key));
         assert_eq!(names[1], "Production");
-        assert!(sheet.suggestions().rows().is_empty());
+        assert!(sheet.suggestion_rows().is_empty());
+        assert!(!sheet.shows_suggestions());
 
         sheet.table().click(1);
         assert_eq!(sheet.selected(), Some(1));
@@ -2381,23 +2403,51 @@ mod checks {
         assert_eq!(table_column(sheet.table(), 0), server_names(ctx, key));
         assert_eq!(server_names(ctx, key).len(), names.len());
 
-        // SAFETY: `done:` takes the sender.
-        let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
-        wait_until("the sheet to end", || window.attachedSheet().is_none());
+        // A field being edited is saved when the window closes; no Done button.
+        sheet.table().click(0);
+        assert!(settings_window.makeFirstResponder(Some(sheet.name_field())));
+        let editor = sheet
+            .name_field()
+            .currentEditor()
+            .expect("editing the name");
+        editor.setString(&NSString::from_str("Staging EU"));
+        autoreleasepool(|_| settings_window.performClose(None));
+        assert!(!settings_window.isVisible());
+        assert_eq!(server_names(ctx, key)[0], "Staging EU");
+
+        // The project's General pane, then the remembered pane on the next Settings….
+        settings.select(Pane::ProjectGeneral(key));
+        assert_eq!(
+            settings_window.title().to_string(),
+            "Customer API — General"
+        );
+        settings.select(Pane::Servers(key));
+        // SAFETY: `showSettings:` takes the sender.
+        let _: () = unsafe { msg_send![&*ctx.delegate, showSettings: None::<&AnyObject>] };
+        assert_eq!(settings.selected(), Some(Pane::Servers(key)), "remembered");
+
+        // Closing the project removes its section, and its pane gives way to the app's.
         autoreleasepool(|_| window.performClose(None));
         assert!(ctx.delegate.project(key).is_none(), "closed");
+        assert_eq!(settings.sidebar_titles(), ["Washboard", "General"]);
+        assert_eq!(settings.selected(), Some(Pane::App));
+        autoreleasepool(|_| settings_window.performClose(None));
 
         let project = ctx.open();
         let window = project.project_window();
-        let sheet = project.show_settings();
+        let sheet = project.show_settings().expect("the Servers pane");
         assert_eq!(table_column(sheet.table(), 0)[1], "Production EU");
         sheet.select(1);
         assert_eq!(sheet.servers()[1].auth, basic);
         assert_eq!(sheet.user_field().stringValue().to_string(), "bob");
         assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
-        // SAFETY: `done:` takes the sender.
-        let _: () = unsafe { msg_send![sheet, done: None::<&AnyObject>] };
-        wait_until("the sheet to end", || window.attachedSheet().is_none());
+        // Put the first server's name back for later checks.
+        sheet.select(0);
+        sheet
+            .name_field()
+            .setStringValue(&NSString::from_str("Staging"));
+        sheet.commit_form();
+        autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
 }
