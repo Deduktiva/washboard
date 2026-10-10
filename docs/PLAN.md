@@ -395,7 +395,10 @@ Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped form
 one section per open project with General (name, folder, WSDL files with Show in Finder and
 Replace WSDL…) and Servers (server list, the selected server's form, the WSDL's suggested
 servers). Project panes say that their settings belong to the project and are saved in its
-folder. Changes apply as they are made;
+folder. Layout follows System Settings, decided once in `crates/washboard-app/src/form.rs`:
+groups 20 pt from the content edges and at most 640 pt wide, every header, footnote and row
+label on one leading line inside the group, controls on the trailing edge, text fields one width.
+The selected server's form is hidden while no server is selected. Changes apply as they are made;
 there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
 the window on that project's Servers pane. A closed project's section leaves the window.
 
