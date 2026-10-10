@@ -456,7 +456,7 @@ libxml2 cannot compile a WSDL directly. Steps:
    split namespace that `xs:include`s all its files, with every import of that namespace pointed
    at it (also used for `rpc/literal`, §5.4).
 
-### libxml2: vendored, not system
+### libxml2 vendored
 The system library on current macOS is 2.9.13 (Feb 2022), built with HTTP and FTP support.
 Reasons to vendor a pinned current release instead:
 - Several years of XSD validator fixes and security fixes are missing from 2.9.13, and we cannot
@@ -466,10 +466,6 @@ Reasons to vendor a pinned current release instead:
 - Newer releases have per-context resource loaders; with them (plus the thread-local global
   loader, §5 step 3) schema compiles need no global lock.
 - Same version in CI (Linux) and in the app, so test results carry over.
-
-For faster local builds, `WASHBOARD_LIBXML2=pkg-config` links a Homebrew/distro copy instead;
-release builds and CI always use the vendored one (a Homebrew dylib would not exist on users'
-Macs, and a static Homebrew copy makes releases depend on the build machine).
 
 Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static linking
 is fine). Pinned release and how we watch for advisories: `crates/libxml2-sys/README.md`.

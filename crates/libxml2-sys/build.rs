@@ -1,41 +1,14 @@
-//! Builds the vendored libxml2 (`vendor/libxml2`, a git submodule) as a static library, or with
-//! `WASHBOARD_LIBXML2=pkg-config` links a system/Homebrew copy instead (development only).
+//! Builds the vendored libxml2 as a static library.
 //!
-//! Everything we do not need is compiled out. In particular there is no network code (libxml2
-//! 2.15 removed its HTTP client; FTP went earlier), no catalogs (they would let a system catalog
-//! redirect schema lookups), no compression and no external libraries at all: the only link
-//! dependencies are libc and libm, so the static archive behaves the same on every machine.
+//! Everything we do not need is compiled out. In particular there is no network code, no
+//! catalogs (they would let a system catalog redirect schema lookups), no compression.
 
 use std::env;
 use std::path::PathBuf;
 
-/// The oldest system libxml2 the wrapper works with: `xmlSchemaSetResourceLoader`,
-/// `xmlCtxtSetResourceLoader` and `xmlNewInputFromMemory` appeared in 2.14.0.
-const MIN_SYSTEM_VERSION: &str = "2.14.0";
-
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=WASHBOARD_LIBXML2");
 
-    let mode = env::var("WASHBOARD_LIBXML2").unwrap_or_default();
-    match mode.as_str() {
-        "" | "vendored" => vendored(),
-        "pkg-config" => system(),
-        other => panic!("WASHBOARD_LIBXML2={other:?}: expected `pkg-config` or unset"),
-    }
-}
-
-fn system() {
-    if let Err(e) = pkg_config::Config::new()
-        .atleast_version(MIN_SYSTEM_VERSION)
-        .statik(false)
-        .probe("libxml-2.0")
-    {
-        panic!("WASHBOARD_LIBXML2=pkg-config: libxml2 >= {MIN_SYSTEM_VERSION} not found: {e}");
-    }
-}
-
-fn vendored() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let src = manifest.join("../../vendor/libxml2");
     println!("cargo:rerun-if-changed={}", src.join("NEWS").display());
@@ -59,10 +32,7 @@ fn vendored() {
     }
 
     if !src.join("CMakeLists.txt").exists() {
-        panic!(
-            "vendor/libxml2 is missing; run `git submodule update --init` \
-             (or set WASHBOARD_LIBXML2=pkg-config for a local dev build)"
-        );
+        panic!("vendor/libxml2 is missing; run `git submodule update --init`");
     }
 
     let mut cfg = cmake::Config::new(&src);

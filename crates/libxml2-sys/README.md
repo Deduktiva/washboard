@@ -59,11 +59,3 @@ passes the target architecture and sysroot; `CMAKE_OSX_DEPLOYMENT_TARGET` follow
 `MACOSX_DEPLOYMENT_TARGET` (default 11.0, rustc's minimum for `aarch64-apple-darwin`).
 
 `git submodule update --init` is needed after cloning; CI checks out submodules.
-
-### `WASHBOARD_LIBXML2=pkg-config`
-
-Links a system or Homebrew libxml2 (≥ 2.14, for the resource loader API) found via
-pkg-config instead of building the submodule. For faster local builds only: release builds
-and CI always use the vendored copy. A system copy may have catalogs or HTTP enabled; the
-wrapper's loaders still refuse everything outside the bundle, but the "no network code"
-property only holds for the vendored build.
