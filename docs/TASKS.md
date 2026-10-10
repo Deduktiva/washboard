@@ -123,8 +123,9 @@ WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
   inline rename (`Event::BeginRename`).
 - **Model.** The filtering and ordering is a pure function in `washboard-ui-model` over the
   sidebar's `ServiceNode`s and the query, returning the sections and rows to show, so it is
-  tested on Linux; the app only draws it. `App::default_operation` stays for the initial
-  highlight.
+  tested on Linux; the app only draws it. The first supported row of its unfiltered result is
+  the initial highlight's fallback, so `App::default_operation` and its call in
+  `sidebar.rs`'s `new_request` are removed.
 - **Tests:** on Linux, the filter: words in any order, matching on service, port and element
   names, prefix matches first, unsupported operations kept in their section, headers left out
   with one supported port (both fixtures) and kept with two (a synthetic tree). In
