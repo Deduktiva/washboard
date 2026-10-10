@@ -1820,12 +1820,20 @@ mod checks {
         let end = start + text[start..].find("</asOf>").expect("asOf is closed");
         let date = text[start..end].to_owned();
         assert!(text[..end].is_ascii());
+        let undo = text_view
+            .undoManager()
+            .expect("the text view has an undo manager");
+        // Without a run loop, AppKit's per-event undo groups never close (see `format_xml`),
+        // so each edit gets a group of its own, as one event would.
+        undo.setGroupsByEvent(false);
         let replace = |at: usize, len: usize, with: &str| {
+            undo.beginUndoGrouping();
             // SAFETY: replacing a range inside the text, as typing over a selection does.
             unsafe {
                 text_view
                     .insertText_replacementRange(&NSString::from_str(with), NSRange::new(at, len))
             };
+            undo.endUndoGrouping();
         };
         let history = response.history().rows().len();
         project.issues().table().view().setHidden(true);
@@ -1992,13 +2000,6 @@ mod checks {
         assert!(enabled, "Send is enabled again");
 
         // Restore Request puts the sent request into the editor as one undo step.
-        let undo = text_view
-            .undoManager()
-            .expect("the text view has an undo manager");
-        wait_until("the typing's undo group to close", || {
-            undo.groupingLevel() == 0
-        });
-        undo.setGroupsByEvent(false);
         response.history().click(1);
         undo.beginUndoGrouping();
         // SAFETY: `restoreRequest:` takes the sender.
@@ -2008,7 +2009,6 @@ mod checks {
         assert_eq!(text_view.string().to_string(), text, "restored");
         assert_eq!(undo.undoMenuItemTitle().to_string(), "Undo Restore Request");
         undo.undo();
-        undo.setGroupsByEvent(true);
         assert_eq!(
             text_view.string().to_string(),
             edited,
