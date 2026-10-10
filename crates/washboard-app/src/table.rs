@@ -135,11 +135,7 @@ impl TextTable {
             table.setAction(Some(sel!(rowClicked:)));
         }
 
-        let scroll = NSScrollView::new(mtm);
-        scroll.setDocumentView(Some(&table));
-        scroll.setHasVerticalScroller(true);
-        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
-        scroll.setAutohidesScrollers(true);
+        let scroll = layout::vertical_scroll(&table, mtm);
         scroll.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,

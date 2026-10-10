@@ -630,11 +630,7 @@ impl ProjectWindowController {
 
     fn sidebar_pane(&self, mtm: MainThreadMarker) -> Retained<NSView> {
         let outline = self.ivars().sidebar.outline_view(mtm);
-        let scroll = NSScrollView::new(mtm);
-        scroll.setDocumentView(Some(&outline));
-        scroll.setHasVerticalScroller(true);
-        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
-        scroll.setAutohidesScrollers(true);
+        let scroll = layout::vertical_scroll(&outline, mtm);
         scroll.setDrawsBackground(false);
         // No buttons under the list: each row has a context menu, and the Project menu has
         // the same commands with shortcuts.

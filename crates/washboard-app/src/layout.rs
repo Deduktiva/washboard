@@ -9,9 +9,9 @@ use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSFont,
     NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
-    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSStackView, NSStackViewDistribution,
-    NSTableCellView, NSTextField, NSTitlePosition, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView,
+    NSStackViewDistribution, NSTableCellView, NSTextField, NSTitlePosition,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
 
@@ -193,6 +193,16 @@ pub fn chip(text: &str, mtm: MainThreadMarker) -> (Retained<NSBox>, Retained<NST
 }
 
 const CHIP_PADDING: f64 = 5.0;
+
+/// A scroll view around `document` that scrolls vertically.
+pub fn vertical_scroll(document: &NSView, mtm: MainThreadMarker) -> Retained<NSScrollView> {
+    let scroll = NSScrollView::new(mtm);
+    scroll.setDocumentView(Some(document));
+    scroll.setHasVerticalScroller(true);
+    // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+    scroll.setAutohidesScrollers(true);
+    scroll
+}
 
 /// A titled window of content size `size`, for a controller that keeps it in a `Retained`:
 /// closing it only hides it, and the controller decides when it goes.

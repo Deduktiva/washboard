@@ -19,11 +19,10 @@ use objc2_app_kit::{
     NSControlStateValueOn, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView,
     NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLineBreakMode,
     NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton, NSResponder,
-    NSScrollView, NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView,
-    NSStackViewGravity, NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField,
-    NSTextFieldDelegate, NSTitlePosition, NSToolbar, NSToolbarDisplayMode,
-    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowDelegate,
-    NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
+    NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView, NSStackViewGravity,
+    NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTitlePosition,
+    NSToolbar, NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
+    NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
@@ -312,10 +311,7 @@ impl SettingsWindowController {
             outline.setDataSource(Some(ProtocolObject::from_ref(&*this)));
             outline.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         }
-        let sidebar_scroll = NSScrollView::new(mtm);
-        sidebar_scroll.setDocumentView(Some(&outline));
-        sidebar_scroll.setHasVerticalScroller(true);
-        sidebar_scroll.setAutohidesScrollers(true);
+        let sidebar_scroll = layout::vertical_scroll(&outline, mtm);
         sidebar_scroll.setDrawsBackground(false);
 
         let split = NSSplitViewController::new(mtm);
@@ -1359,11 +1355,8 @@ fn page(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView>
     let document: Retained<FlippedView> = unsafe { msg_send![FlippedView::alloc(mtm), init] };
     document.setTranslatesAutoresizingMaskIntoConstraints(false);
     fill(&document, &stack);
-    let scroll = NSScrollView::new(mtm);
+    let scroll = layout::vertical_scroll(&document, mtm);
     scroll.setDrawsBackground(false);
-    scroll.setHasVerticalScroller(true);
-    scroll.setAutohidesScrollers(true);
-    scroll.setDocumentView(Some(&document));
     let clip = scroll.contentView();
     for constraint in [
         document
