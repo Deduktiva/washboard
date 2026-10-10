@@ -33,7 +33,8 @@ use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
 use crate::panes::{IssuesBar, RequestBar, ResponsePane};
-use crate::sheets::{ImportSheetController, SettingsSheet};
+use crate::settings_window::{Pane, ServersPane};
+use crate::sheets::ImportSheetController;
 use crate::sidebar::SidebarController;
 use crate::text::replace_summary;
 
@@ -87,7 +88,6 @@ pub struct ProjectIvars {
     issues: OnceCell<Retained<IssuesBar>>,
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
-    settings: OnceCell<Retained<SettingsSheet>>,
     replace: RefCell<Option<Retained<ImportSheetController>>>,
     /// What the last Replace WSDL changed, as shown in its alert.
     replace_summary: RefCell<Option<String>>,
@@ -287,7 +287,6 @@ impl ProjectWindowController {
             issues: OnceCell::new(),
             response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
-            settings: OnceCell::new(),
             replace: RefCell::new(None),
             replace_summary: RefCell::new(None),
         });
@@ -347,12 +346,8 @@ impl ProjectWindowController {
         &self.ivars().servers
     }
 
-    /// Fills the server popup, and the settings sheet if shown, from the model
-    /// (`ServersChanged`).
+    /// Fills the server popup from the model (`ServersChanged`).
     pub fn reload_servers(&self) {
-        if let Some(settings) = self.settings() {
-            settings.reload();
-        }
         let key = self.key();
         let servers = self
             .read(|app| {
@@ -546,23 +541,12 @@ impl ProjectWindowController {
             .find(|i| i.itemIdentifier().to_string() == "send")
     }
 
-    /// Shows the project's settings sheet on its window, on the Servers tab.
-    pub fn show_settings(&self) -> &SettingsSheet {
-        let sheet = self
-            .ivars()
-            .settings
-            .get_or_init(|| SettingsSheet::new(self.key(), self.name(), self.mtm()));
-        let window = self.project_window();
-        if window.attachedSheet().is_none() {
-            sheet.reload();
-            sheet.present(&window);
-        }
-        sheet
-    }
-
-    /// The settings sheet, once shown.
-    pub fn settings(&self) -> Option<&SettingsSheet> {
-        self.ivars().settings.get().map(|s| &**s)
+    /// Project ▸ Project Settings…: the Settings window on this project's Servers pane.
+    pub fn show_settings(&self) -> Option<Retained<ServersPane>> {
+        let key = self.key();
+        with_delegate(self.mtm(), |d| {
+            d.show_settings(Some(Pane::Servers(key))).servers(key)
+        })
     }
 
     /// Shows the Replace WSDL sheet, unless the window already has a sheet.

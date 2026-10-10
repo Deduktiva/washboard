@@ -28,6 +28,8 @@ mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
 #[cfg(target_os = "macos")]
+mod settings_window;
+#[cfg(target_os = "macos")]
 mod sheets;
 #[cfg(target_os = "macos")]
 mod sidebar;
@@ -42,7 +44,7 @@ mod text;
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
-pub use app_settings::{AppSettings, INDENT_KEY, ON_SAVE_KEY};
+pub use app_settings::{INDENT_KEY, ON_SAVE_KEY};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]
@@ -52,7 +54,9 @@ pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, project_tabbing_id, toolbar_identifiers};
 #[cfg(target_os = "macos")]
-pub use sheets::{ImportSheetController, SettingsSheet};
+pub use settings_window::{PANE_KEY, Pane, PaneItem, ServersPane, SettingsWindowController};
+#[cfg(target_os = "macos")]
+pub use sheets::ImportSheetController;
 #[cfg(target_os = "macos")]
 pub use sidebar::{NodeKind, SidebarController, SidebarNode};
 #[cfg(target_os = "macos")]

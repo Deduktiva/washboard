@@ -28,11 +28,12 @@ use washboard_ui_model::{
     ModelError, ProjectKey, TimerId,
 };
 
-use crate::app_settings::{self, AppSettings};
+use crate::app_settings;
 use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
 use crate::http_log::HttpLog;
 use crate::menu;
 use crate::project_window::ProjectWindowController;
+use crate::settings_window::{Pane, SettingsWindowController};
 use crate::sheets::ImportSheetController;
 use crate::welcome::{RecentProject, WelcomeController};
 
@@ -80,7 +81,7 @@ pub struct AppDelegateIvars {
     http_log: OnceCell<Retained<HttpLog>>,
     new_project: RefCell<Option<Retained<ImportSheetController>>>,
     defaults: OnceCell<Retained<NSUserDefaults>>,
-    settings: OnceCell<Retained<AppSettings>>,
+    settings: OnceCell<Retained<SettingsWindowController>>,
 }
 
 define_class!(
@@ -191,9 +192,8 @@ define_class!(
         }
 
         #[unsafe(method(showSettings:))]
-        fn show_settings(&self, _sender: Option<&AnyObject>) {
-            let settings = self.read(App::format_settings).unwrap_or_default();
-            self.app_settings().show(settings);
+        fn show_settings_action(&self, _sender: Option<&AnyObject>) {
+            self.show_settings(None);
         }
 
         #[unsafe(method(showHttpLog:))]
@@ -247,11 +247,18 @@ impl AppDelegate {
         app_settings::store(self.defaults(), stored);
     }
 
-    /// The app's settings window, created on first use.
-    pub fn app_settings(&self) -> &AppSettings {
+    /// The Settings window, created on first use.
+    pub fn settings_window(&self) -> &SettingsWindowController {
         self.ivars()
             .settings
-            .get_or_init(|| AppSettings::new(self.mtm()))
+            .get_or_init(|| SettingsWindowController::new(self.mtm()))
+    }
+
+    /// Washboard ▸ Settings… (`None`: the pane last shown) and Project ▸ Project Settings….
+    pub fn show_settings(&self, pane: Option<Pane>) -> &SettingsWindowController {
+        let window = self.settings_window();
+        window.show(pane);
+        window
     }
 
     /// File ▸ Save All: with format on save, formats each project's edited request first (one
@@ -454,6 +461,9 @@ impl AppDelegate {
                 if let Some(controller) = self.project(project) {
                     controller.reload_servers();
                 }
+                if let Some(settings) = self.ivars().settings.get() {
+                    settings.reload_servers(project);
+                }
             }
             Event::ServerSelectionChanged { project } => {
                 if let Some(controller) = self.project(project) {
@@ -551,6 +561,9 @@ impl AppDelegate {
         controller.show_edited();
         // SAFETY: `showWindow:` takes any sender.
         unsafe { controller.showWindow(None) };
+        if let Some(settings) = self.ivars().settings.get() {
+            settings.projects_changed();
+        }
     }
 
     fn project_closed(&self, key: ProjectKey) {
@@ -568,6 +581,10 @@ impl AppDelegate {
             // Keep the controller alive until AppKit is done closing its window; the run
             // loop's autorelease pool releases it afterwards.
             let _ = Retained::autorelease_ptr(controller);
+        }
+        // The project's section leaves the Settings window.
+        if let Some(settings) = self.ivars().settings.get() {
+            settings.projects_changed();
         }
     }
 
