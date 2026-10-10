@@ -8,7 +8,7 @@
 //! whose settings live in the project's folder as before.
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use objc2::rc::{Retained, Weak};
@@ -23,10 +23,11 @@ use objc2_app_kit::{
     NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTitlePosition,
     NSToolbar, NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
     NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
-    NSString, ns_string,
+    NSString, NSURL, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
@@ -299,6 +300,20 @@ define_class!(
                 self.replace_wsdl(key);
             }
         }
+
+        // SAFETY: an action method: takes the sender, returns nothing.
+        #[unsafe(method(showWsdlInFinder:))]
+        fn show_wsdl_in_finder(&self, _sender: Option<&AnyObject>) {
+            let Some(Pane::ProjectGeneral(key)) = self.selected() else {
+                return;
+            };
+            let Some(entry) = self.wsdl_to_show(key) else {
+                return;
+            };
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&entry.to_string_lossy()));
+            NSWorkspace::sharedWorkspace()
+                .activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
+        }
     }
 );
 
@@ -468,6 +483,26 @@ impl SettingsWindowController {
             self.ivars().servers.borrow_mut().push((key, pane.clone()));
             pane
         })
+    }
+
+    /// The General pane's buttons under the WSDL files.
+    fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Retained<NSView> {
+        let buttons = [
+            target_button("Show in Finder", self, sel!(showWsdlInFinder:), mtm),
+            target_button("Replace WSDL…", self, sel!(replaceWsdl:), mtm),
+        ]
+        .map(view);
+        let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&buttons), mtm);
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        stack.setSpacing(8.0);
+        view(stack)
+    }
+
+    /// What the General pane's Show in Finder selects: project `key`'s entry WSDL, in the
+    /// project's `wsdl/` folder with the files it imports.
+    pub fn wsdl_to_show(&self, key: ProjectKey) -> Option<PathBuf> {
+        self.read(|app| app.project(key)?.project().entry_wsdl().ok())
+            .flatten()
     }
 
     /// The General pane's Replace WSDL…: the import sheet on this window, for project `key`.
@@ -685,12 +720,7 @@ impl SettingsWindowController {
                         form_row("WSDL files", view(files), mtm),
                         padded_row(
                             view(NSTextField::labelWithString(ns_string!(""), mtm)),
-                            view(target_button(
-                                "Replace WSDL…",
-                                self,
-                                sel!(replaceWsdl:),
-                                mtm,
-                            )),
+                            self.wsdl_buttons(mtm),
                             mtm,
                         ),
                     ],

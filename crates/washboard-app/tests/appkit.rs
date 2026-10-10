@@ -2278,6 +2278,14 @@ mod checks {
         let settings_window = settings.window().retain();
         let before = settings.wsdl_files_shown().expect("the General pane");
         assert_eq!(before, ["Legacy.wsdl"]);
+        // Show in Finder selects the entry WSDL in the project's folder (Finder itself is
+        // not opened here).
+        let shown = settings.wsdl_to_show(key).expect("the entry WSDL");
+        let expected = ctx.other.join("wsdl/Legacy.wsdl");
+        assert_eq!(
+            shown.canonicalize().expect("exists"),
+            expected.canonicalize().expect("exists")
+        );
         // SAFETY: `replaceWsdl:` takes the sender.
         let _: () = unsafe { msg_send![settings, replaceWsdl: None::<&AnyObject>] };
         wait_until("the sheet to attach", || {
