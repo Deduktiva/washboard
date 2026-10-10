@@ -13,9 +13,9 @@ use rusqlite::{Connection, OpenFlags};
 use super::ProjectError;
 
 /// The version this build writes and understands.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
 
-const MIGRATIONS: &[&str] = &[V1];
+const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// PLAN §3, schema v1.
 const V1: &str = "
@@ -45,6 +45,10 @@ CREATE TABLE history  (id TEXT PRIMARY KEY,
 CREATE INDEX history_by_request ON history(request_id, sent_at);
 CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT);
 ";
+
+/// The request's start line and headers as sent (`RequestHead` as JSON); `NULL` in rows
+/// written before.
+const V2: &str = "ALTER TABLE history ADD COLUMN request_headers TEXT;";
 
 /// Opens the database with the settings every connection needs.
 ///

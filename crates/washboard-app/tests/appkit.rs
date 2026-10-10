@@ -1872,14 +1872,14 @@ mod checks {
         assert!(!response.is_spinning());
         let body = response.body().text_view().string().to_string();
         assert!(body.contains("LookupResponse"), "{body}");
-        // The pane shows the model's headers; what they are is the HTTP client's business,
-        // tested in washboard-core.
+        // The pane shows the model's headers text; what it holds is tested in the model.
         let headers = ctx
             .delegate
-            .read(|app| Some(app.project(key)?.response()?.headers.clone()))
+            .read(|app| Some(app.project(key)?.response()?.headers_text()))
             .flatten()
             .expect("a response");
-        assert!(!headers.is_empty());
+        assert!(headers.starts_with("Request\nPOST "), "{headers}");
+        assert_eq!(response.headers(), headers);
         let headers_font = response
             .headers_view()
             .documentView()
@@ -1887,14 +1887,6 @@ mod checks {
             .and_then(|v| v.font())
             .expect("the Headers tab has a font");
         assert!(headers_font.isFixedPitch(), "headers in the code font");
-        for (name, value) in &headers {
-            let line = format!("{name}: {value}");
-            assert!(
-                response.headers().contains(&line),
-                "{line} in {}",
-                response.headers()
-            );
-        }
         assert_eq!(
             response.history().rows().len(),
             history + 1,

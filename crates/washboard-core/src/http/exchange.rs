@@ -38,6 +38,22 @@ impl RawMessage {
             .split_once(' ')
             .map_or(&self.start_line, |(_, rest)| rest)
     }
+
+    /// The headers with an `Authorization` value cut to its scheme, `Basic ••••••••`: what
+    /// the UI shows unless asked to reveal it, and all the history stores.
+    pub fn masked_headers(&self) -> Vec<(String, String)> {
+        self.headers
+            .iter()
+            .map(|(name, value)| {
+                if !name.eq_ignore_ascii_case("authorization") {
+                    return (name.clone(), value.clone());
+                }
+                let scheme = value.split_whitespace().next().unwrap_or_default();
+                let masked = format!("{scheme} ••••••••").trim_start().to_owned();
+                (name.clone(), masked)
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

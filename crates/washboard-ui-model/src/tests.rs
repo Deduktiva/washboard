@@ -1206,6 +1206,28 @@ fn send_shows_the_response_and_records_history() {
         response.body.as_deref().expect("body").contains("\n"),
         "pretty-printed"
     );
+    let headers = response.headers_text();
+    assert!(
+        headers.starts_with("Request\nPOST /soap HTTP/1.1\n"),
+        "{headers}"
+    );
+    assert!(
+        headers.contains("authorization: Basic ••••••••\n"),
+        "{headers}"
+    );
+    assert!(
+        headers
+            .to_lowercase()
+            .contains("\n\nresponse\ncontent-type: "),
+        "{headers}"
+    );
+    let mut unrecorded = response.clone();
+    unrecorded.request = None;
+    let headers = unrecorded.headers_text();
+    assert!(
+        headers.starts_with("Request\nnot recorded\n\nResponse\n"),
+        "{headers}"
+    );
     assert_eq!(window.history().len(), 1);
     assert_eq!(response.history, Some(window.history()[0].id));
     assert_eq!(window.history()[0].request_id, first);
@@ -1350,7 +1372,9 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
     let window = app.project(key).expect("open");
     let (newest, older) = (window.history()[0].id, window.history()[1].id);
     assert!(window.older_exchange().is_none(), "the latest is shown");
-    assert!(window.response().expect("response").error.is_some());
+    let latest = window.response().expect("response");
+    assert!(latest.error.is_some());
+    assert!(latest.headers_text().ends_with("\nResponse\nno response\n"));
 
     app.take_events();
     app.show_history(key, older).expect("show");
@@ -1365,6 +1389,11 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
     let shown = window.older_exchange().expect("an older exchange");
     assert_eq!(shown.entry, older);
     assert_eq!(shown.request, sent, "the request as sent");
+    let headers = window.response().expect("response").headers_text();
+    assert!(
+        headers.starts_with("Request\nPOST "),
+        "the head as sent: {headers}"
+    );
     assert_eq!(window.response().expect("response").status, Some(200));
     assert!(
         editor_text(&app, key).contains("2027-01-01"),

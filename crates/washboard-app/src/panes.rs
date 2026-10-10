@@ -776,12 +776,8 @@ impl ResponsePane {
             .and_then(|r| r.body.clone())
             .unwrap_or_default();
         self.ivars().body.set_text(&body);
-        let headers: String = response
-            .iter()
-            .flat_map(|r| &r.headers)
-            .map(|(name, value)| format!("{name}: {value}\n"))
-            .collect();
-        set_text(&self.ivars().headers, &headers);
+        let headers = response.as_ref().map(ResponseView::headers_text);
+        set_text(&self.ivars().headers, &headers.unwrap_or_default());
     }
 
     /// Lists the selected request's history, with the shown exchange selected and ringed

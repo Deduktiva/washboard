@@ -46,7 +46,7 @@ use crate::xml::DecodeError;
 
 pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE};
 pub use db::SCHEMA_VERSION;
-pub use history::HistoryRecord;
+pub use history::{HistoryRecord, RequestHead};
 pub use names::{NameError, validate_request_name};
 
 use fsutil::{IoContext, join_rel, remove_dir_if_exists};
