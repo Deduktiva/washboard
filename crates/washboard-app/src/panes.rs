@@ -47,7 +47,7 @@ impl RequestBar {
         let (operation, operation_label) = layout::chip("", mtm);
         operation.setHidden(true);
         let state = NSTextField::labelWithString(ns_string!(""), mtm);
-        state.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+        state.setFont(Some(&NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE)));
         let view = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         view.addView_inGravity(&name, NSStackViewGravity::Leading);
         view.addView_inGravity(&operation, NSStackViewGravity::Leading);

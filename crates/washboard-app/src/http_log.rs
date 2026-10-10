@@ -253,12 +253,12 @@ impl HttpLog {
         let (colour, font) = if exchange.tls.verification_skipped {
             (
                 NSColor::systemOrangeColor(),
-                NSFont::boldSystemFontOfSize(12.0),
+                NSFont::boldSystemFontOfSize(layout::STATUS_FONT_SIZE),
             )
         } else {
             (
                 NSColor::secondaryLabelColor(),
-                NSFont::systemFontOfSize(12.0),
+                NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE),
             )
         };
         tls.setTextColor(Some(&colour));
