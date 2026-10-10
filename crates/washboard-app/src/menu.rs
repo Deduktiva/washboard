@@ -52,7 +52,7 @@ const FIND_PREVIOUS: isize = 3;
 const FIND_SET_FIND_STRING: isize = 7;
 const FIND_REPLACE: isize = 12;
 
-const OPEN_RECENT: &str = "Open Recent";
+const OPEN_RECENT: &str = "Recent Projects";
 const CLEAR_MENU: &str = "Clear Menu";
 
 /// `NSBackspaceCharacter`: the key equivalent AppKit shows as ⌫.
@@ -129,7 +129,15 @@ const APP: &[Entry] = &[
 ];
 
 const FILE: &[Entry] = &[
-    item("New Project…", c"newProject:", "n", SHIFT_CMD),
+    Entry::Submenu(
+        "New",
+        Special::None,
+        &[
+            item("New Project…", c"newProject:", "n", SHIFT_CMD),
+            Entry::Separator,
+            item("New Request...", c"newRequest:", "n", CMD),
+        ],
+    ),
     item("Open Project…", c"openProject:", "o", CMD),
     // Refilled from the model's recent projects by `set_recent_projects`.
     Entry::Submenu(
@@ -137,9 +145,17 @@ const FILE: &[Entry] = &[
         Special::None,
         &[item(CLEAR_MENU, c"clearRecentProjects:", "", NONE)],
     ),
-    Entry::Separator,
-    item("Close", c"performClose:", "w", CMD),
+    item("Close Project", c"performClose:", "w", CMD),
     item("Save All", c"saveAll:", "s", CMD),
+    Entry::Separator,
+    item("Duplicate Request", c"duplicateRequest:", "d", CMD),
+    item("Rename Request", c"renameRequest:", "", NONE),
+    item("Delete Request", c"deleteRequest:", BACKSPACE, CMD),
+    Entry::Separator,
+    item("Send", c"sendRequest:", "\r", CMD),
+    // Enabled only while a send is in flight. The toolbar's Send turns into Cancel instead;
+    // the menu keeps both, so pressing ⌘↩ twice never cancels the first send.
+    item("Cancel Send", c"cancelSend:", ".", CMD),
 ];
 
 const EDIT: &[Entry] = &[
@@ -171,24 +187,12 @@ const EDIT: &[Entry] = &[
     Entry::Separator,
     // Answered by the project window, enabled while it has a request open.
     item("Format XML", c"formatXML:", "i", CTRL),
+    item("Validate", c"validateRequest:", "b", CMD),
 ];
 
 // `toggleSidebar:` reaches the project window's split view controller, which also retitles
 // the item Show or Hide Sidebar.
 const VIEW: &[Entry] = &[item("Show Sidebar", c"toggleSidebar:", "s", CTRL_CMD)];
-
-const PROJECT: &[Entry] = &[
-    item("New Request", c"newRequest:", "n", CMD),
-    item("Duplicate", c"duplicateRequest:", "d", CMD),
-    item("Rename", c"renameRequest:", "", NONE),
-    item("Delete", c"deleteRequest:", BACKSPACE, CMD),
-    Entry::Separator,
-    item("Validate", c"validateRequest:", "b", CMD),
-    item("Send", c"sendRequest:", "\r", CMD),
-    // Enabled only while a send is in flight. The toolbar's Send turns into Cancel instead;
-    // the menu keeps both, so pressing ⌘↩ twice never cancels the first send.
-    item("Cancel Send", c"cancelSend:", ".", CMD),
-];
 
 const WINDOW: &[Entry] = &[
     item("Minimize", c"performMiniaturize:", "m", CMD),
@@ -204,7 +208,6 @@ const MAIN: &[Entry] = &[
     Entry::Submenu("File", Special::None, FILE),
     Entry::Submenu("Edit", Special::None, EDIT),
     Entry::Submenu("View", Special::None, VIEW),
-    Entry::Submenu("Project", Special::None, PROJECT),
     Entry::Submenu("Window", Special::Window, WINDOW),
     // Empty until there is documentation: registered as the Help menu, it gets the system's
     // menu search field.
