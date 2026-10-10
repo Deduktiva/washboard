@@ -10,7 +10,7 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::ops::Range;
 use std::path::Path;
 
-use objc2::rc::Retained;
+use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
@@ -90,6 +90,8 @@ pub struct ProjectIvars {
     response: Retained<ResponsePane>,
     split: OnceCell<Retained<NSSplitViewController>>,
     replace: RefCell<Option<Retained<ImportSheetController>>>,
+    /// The window the Replace WSDL sheet was attached to, for the alert after it.
+    replace_parent: RefCell<Option<Weak<NSWindow>>>,
     /// What the last Replace WSDL changed, as shown in its alert.
     replace_summary: RefCell<Option<String>>,
 }
@@ -249,11 +251,6 @@ define_class!(
             }
         }
 
-        #[unsafe(method(replaceWsdl:))]
-        fn replace_wsdl(&self, _sender: Option<&AnyObject>) {
-            self.show_replace_sheet();
-        }
-
         #[unsafe(method(projectSettings:))]
         fn project_settings(&self, _sender: Option<&AnyObject>) {
             self.show_settings();
@@ -283,6 +280,7 @@ impl ProjectWindowController {
             response: ResponsePane::new(key, mtm),
             split: OnceCell::new(),
             replace: RefCell::new(None),
+            replace_parent: RefCell::new(None),
             replace_summary: RefCell::new(None),
         });
         // SAFETY: `initWithWindow:` is NSWindowController's designated initializer.
@@ -544,16 +542,17 @@ impl ProjectWindowController {
         })
     }
 
-    /// Shows the Replace WSDL sheet, unless the window already has a sheet.
-    pub fn show_replace_sheet(&self) -> Option<Retained<ImportSheetController>> {
-        let window = self.project_window();
-        if window.attachedSheet().is_some() {
+    /// Shows the Replace WSDL sheet on `parent` (the Settings window, whose project pane has
+    /// the button), unless it already has a sheet.
+    pub fn show_replace_sheet(&self, parent: &NSWindow) -> Option<Retained<ImportSheetController>> {
+        if parent.attachedSheet().is_some() {
             return None;
         }
         let target = ImportTarget::ReplaceWsdl(self.key());
         let sheet = ImportSheetController::new(target, self.mtm());
         *self.ivars().replace.borrow_mut() = Some(sheet.clone());
-        sheet.present(&window);
+        *self.ivars().replace_parent.borrow_mut() = Some(Weak::from_retained(&parent.retain()));
+        sheet.present(parent);
         with_delegate(self.mtm(), |d| {
             d.update(|app| app.begin_import(target));
             // Shows the model's sheet through `ImportChanged`.
@@ -581,7 +580,16 @@ impl ProjectWindowController {
         let alert = NSAlert::new(self.mtm());
         alert.setMessageText(ns_string!("The WSDL was replaced"));
         alert.setInformativeText(&NSString::from_str(&summary));
-        alert.beginSheetModalForWindow_completionHandler(&self.project_window(), None);
+        // On the window the sheet was on, where the user is looking; the project window if
+        // that one has gone.
+        let parent = self
+            .ivars()
+            .replace_parent
+            .borrow()
+            .as_ref()
+            .and_then(Weak::load)
+            .unwrap_or_else(|| self.project_window());
+        alert.beginSheetModalForWindow_completionHandler(&parent, None);
     }
 
     /// The text of the last Replace WSDL alert.

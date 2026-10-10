@@ -177,7 +177,6 @@ const PROJECT: &[Entry] = &[
     item("Validate", c"validateRequest:", "b", CMD),
     item("Send", c"sendRequest:", "\r", CMD),
     Entry::Separator,
-    item("Replace WSDL…", c"replaceWsdl:", "", NONE),
     item("Project Settings…", c"projectSettings:", "", NONE),
 ];
 

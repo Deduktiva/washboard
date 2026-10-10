@@ -8,7 +8,7 @@
 //! whose settings live in the project's folder as before.
 
 use std::cell::{Cell, OnceCell, RefCell};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use objc2::rc::{Retained, Weak};
@@ -23,16 +23,18 @@ use objc2_app_kit::{
     NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTitlePosition,
     NSToolbar, NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
     NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
+    NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
-    NSString, ns_string,
+    NSString, NSURL, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout::{self, view};
+use crate::sheets::ImportSheetController;
 use crate::table::TextTable;
 use crate::text::count;
 
@@ -162,6 +164,8 @@ pub struct SettingsWindowIvars {
     indent: OnceCell<Retained<NSPopUpButton>>,
     on_save: OnceCell<Retained<NSSwitch>>,
     servers: RefCell<Vec<(ProjectKey, Retained<ServersPane>)>>,
+    /// The shown General pane's list of WSDL files.
+    wsdl_files: RefCell<Option<Retained<NSTextField>>>,
 }
 
 define_class!(
@@ -287,6 +291,28 @@ define_class!(
         fn setting_changed(&self, _sender: Option<&AnyObject>) {
             let settings = self.shown();
             with_delegate(self.mtm(), |d| d.set_format_settings(settings));
+        }
+
+        // SAFETY: an action method: takes the sender, returns nothing.
+        #[unsafe(method(replaceWsdl:))]
+        fn replace_wsdl_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(Pane::ProjectGeneral(key)) = self.selected() {
+                self.replace_wsdl(key);
+            }
+        }
+
+        // SAFETY: an action method: takes the sender, returns nothing.
+        #[unsafe(method(showWsdlInFinder:))]
+        fn show_wsdl_in_finder(&self, _sender: Option<&AnyObject>) {
+            let Some(Pane::ProjectGeneral(key)) = self.selected() else {
+                return;
+            };
+            let Some(entry) = self.wsdl_to_show(key) else {
+                return;
+            };
+            let url = NSURL::fileURLWithPath(&NSString::from_str(&entry.to_string_lossy()));
+            NSWorkspace::sharedWorkspace()
+                .activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
         }
     }
 );
@@ -459,6 +485,52 @@ impl SettingsWindowController {
         })
     }
 
+    /// The General pane's buttons under the WSDL files.
+    fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Retained<NSView> {
+        let buttons = [
+            target_button("Show in Finder", self, sel!(showWsdlInFinder:), mtm),
+            target_button("Replace WSDL…", self, sel!(replaceWsdl:), mtm),
+        ]
+        .map(view);
+        let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&buttons), mtm);
+        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+        stack.setSpacing(8.0);
+        view(stack)
+    }
+
+    /// What the General pane's Show in Finder selects: project `key`'s entry WSDL, in the
+    /// project's `wsdl/` folder with the files it imports.
+    pub fn wsdl_to_show(&self, key: ProjectKey) -> Option<PathBuf> {
+        self.read(|app| app.project(key)?.project().entry_wsdl().ok())
+            .flatten()
+    }
+
+    /// The General pane's Replace WSDL…: the import sheet on this window, for project `key`.
+    pub fn replace_wsdl(&self, key: ProjectKey) -> Option<Retained<ImportSheetController>> {
+        let project = with_delegate(self.mtm(), |d| d.project(key)).flatten()?;
+        project.show_replace_sheet(self.window())
+    }
+
+    /// The model replaced project `key`'s WSDL: its General pane lists the new files.
+    pub fn wsdl_replaced(&self, key: ProjectKey) {
+        if self.selected() == Some(Pane::ProjectGeneral(key)) {
+            self.select(Pane::ProjectGeneral(key));
+        }
+    }
+
+    /// The WSDL files a project's General pane lists, once one was shown.
+    pub fn wsdl_files_shown(&self) -> Option<Vec<String>> {
+        let label = self.ivars().wsdl_files.borrow().clone()?;
+        Some(
+            label
+                .stringValue()
+                .to_string()
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
     /// The sidebar's rows, in order: section headers and panes.
     pub fn sidebar_titles(&self) -> Vec<String> {
         let outline = self.outline();
@@ -626,8 +698,10 @@ impl SettingsWindowController {
             .read(|app| {
                 let window = app.project(key)?;
                 let project = window.project();
-                let entry = project.wsdl_path().ok();
-                let files = wsdl_files(&project.wsdl_dir(), entry.as_deref());
+                let dir = project.wsdl_dir();
+                let entry = project.entry_wsdl().ok();
+                let entry = entry.as_deref().and_then(|e| e.strip_prefix(&dir).ok());
+                let files = wsdl_files(&dir, entry);
                 Some((window.name().to_owned(), window.path().to_owned(), files))
             })
             .flatten()
@@ -635,6 +709,7 @@ impl SettingsWindowController {
         let folder_label = value_label(&folder.display().to_string(), mtm);
         folder_label.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
         let files = value_label(&wsdl.join("\n"), mtm);
+        *self.ivars().wsdl_files.borrow_mut() = Some(files.clone());
         page(
             vec![
                 project_note(&name, mtm),
@@ -643,11 +718,17 @@ impl SettingsWindowController {
                         form_row("Name", view(value_label(&name, mtm)), mtm),
                         form_row("Folder", view(folder_label), mtm),
                         form_row("WSDL files", view(files), mtm),
+                        padded_row(
+                            view(NSTextField::labelWithString(ns_string!(""), mtm)),
+                            self.wsdl_buttons(mtm),
+                            mtm,
+                        ),
                     ],
                     mtm,
                 ),
                 note(
-                    "Project ▸ Replace WSDL… swaps the WSDL files; requests are kept.",
+                    "Replace WSDL checks the new files as New Project does. Requests are kept \
+                     as they are and validated against the new WSDL.",
                     mtm,
                 ),
             ],
@@ -1292,12 +1373,17 @@ impl ServersPane {
 impl ModelAccess for ServersPane {}
 
 /// The WSDL files under `dir`, relative to it, the entry first.
-fn wsdl_files(dir: &Path, entry: Option<&str>) -> Vec<String> {
+fn wsdl_files(dir: &Path, entry: Option<&Path>) -> Vec<String> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
+            // Hidden names in `wsdl/` are Washboard's: `.previous` holds the set before the
+            // last Replace WSDL.
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, root, out);
@@ -1309,8 +1395,8 @@ fn wsdl_files(dir: &Path, entry: Option<&str>) -> Vec<String> {
     let mut files = Vec::new();
     walk(dir, dir, &mut files);
     files.sort();
-    if let Some(entry) = entry
-        && let Some(i) = files.iter().position(|f| f == entry)
+    if let Some(entry) = entry.map(|e| e.display().to_string())
+        && let Some(i) = files.iter().position(|f| *f == entry)
     {
         let first = files.remove(i);
         files.insert(0, first);

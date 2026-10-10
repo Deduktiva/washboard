@@ -420,7 +420,6 @@ mod checks {
                 ("Validate", "b", C, "validateRequest:"),
                 ("Send", "\r", C, "sendRequest:"),
                 ("-", "", 0, ""),
-                ("Replace WSDL…", "", 0, "replaceWsdl:"),
                 ("Project Settings…", "", 0, "projectSettings:"),
             ],
         ),
@@ -2265,8 +2264,8 @@ mod checks {
         );
     }
 
-    /// Replace WSDL checks the new files like New Project, swaps the WSDL and says what
-    /// changed.
+    /// Replace WSDL, from the project's General settings, checks the new files like New
+    /// Project, swaps the WSDL and says what changed; the pane then lists the new files.
     pub fn replace_wsdl(ctx: &Ctx) {
         let key = ctx
             .delegate
@@ -2275,9 +2274,24 @@ mod checks {
         let project = ctx.delegate.project(key).expect("a window");
         wait_loaded(&project);
         let window = project.project_window();
+        let settings = ctx.delegate.show_settings(Some(Pane::ProjectGeneral(key)));
+        let settings_window = settings.window().retain();
+        let before = settings.wsdl_files_shown().expect("the General pane");
+        assert_eq!(before, ["Legacy.wsdl"]);
+        // Show in Finder selects the entry WSDL in the project's folder (Finder itself is
+        // not opened here).
+        let shown = settings.wsdl_to_show(key).expect("the entry WSDL");
+        let expected = ctx.other.join("wsdl/Legacy.wsdl");
+        assert_eq!(
+            shown.canonicalize().expect("exists"),
+            expected.canonicalize().expect("exists")
+        );
         // SAFETY: `replaceWsdl:` takes the sender.
-        let _: () = unsafe { msg_send![&*project, replaceWsdl: None::<&AnyObject>] };
-        wait_until("the sheet to attach", || window.attachedSheet().is_some());
+        let _: () = unsafe { msg_send![settings, replaceWsdl: None::<&AnyObject>] };
+        wait_until("the sheet to attach", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert!(window.attachedSheet().is_none(), "on the Settings window");
         let sheet = project.replace_sheet().expect("created by replaceWsdl:");
         assert_eq!(sheet.finish_button().title().to_string(), "Replace");
         assert!(!sheet.finish_button().isEnabled());
@@ -2295,15 +2309,23 @@ mod checks {
         wait_until("the outcome", || project.replace_summary().is_some());
         let summary = project.replace_summary().expect("shown");
         assert!(summary.contains("removed"), "{summary}");
-        wait_until("the outcome alert", || window.attachedSheet().is_some());
-        let alert = window.attachedSheet().expect("the outcome alert");
-        window.endSheet(&alert);
+        wait_until("the outcome alert", || {
+            settings_window.attachedSheet().is_some()
+        });
+        let alert = settings_window.attachedSheet().expect("the outcome alert");
+        settings_window.endSheet(&alert);
         wait_until("the new services", || {
             project.sidebar().roots()[1]
                 .children()
                 .iter()
                 .any(|n| n.title() == "CustomerService")
         });
+        // The pane lists the new set, the entry WSDL first, and not the previous set kept in
+        // `wsdl/.previous`.
+        let files = settings.wsdl_files_shown().expect("the General pane");
+        assert_eq!(files[0], "CustomerService.wsdl", "{files:?}");
+        assert!(files.iter().all(|f| !f.starts_with('.')), "{files:?}");
+        autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
 
