@@ -2233,6 +2233,23 @@ mod checks {
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 
+    /// The buttons' titles and the labels' texts under `view`, depth first.
+    fn texts_under(view: &NSView) -> (Vec<String>, Vec<String>) {
+        fn walk(v: &NSView, buttons: &mut Vec<String>, labels: &mut Vec<String>) {
+            for sub in v.subviews().iter() {
+                if let Some(button) = sub.downcast_ref::<NSButton>() {
+                    buttons.push(button.title().to_string());
+                } else if let Some(label) = sub.downcast_ref::<NSTextField>() {
+                    labels.push(label.stringValue().to_string());
+                }
+                walk(&sub, buttons, labels);
+            }
+        }
+        let (mut buttons, mut labels) = (Vec::new(), Vec::new());
+        walk(view, &mut buttons, &mut labels);
+        (buttons, labels)
+    }
+
     /// The model's server names for `key`, in order.
     fn server_names(ctx: &Ctx, key: ProjectKey) -> Vec<String> {
         ctx.delegate
@@ -2605,7 +2622,7 @@ mod checks {
         assert!(projects.join("Customers/wsdl").is_dir());
 
         let window = project.project_window();
-        // Opened on the project's Servers, to confirm the suggested server.
+        // Opened on the project's Servers, where the WSDL's address is one Add as Server… away.
         let settings_window = ctx.delegate.settings_window();
         assert!(settings_window.window().isVisible());
         assert_eq!(
@@ -2613,18 +2630,36 @@ mod checks {
             Some(Pane::Servers(project.key()))
         );
         let settings = settings_window.servers(project.key());
-        assert!(settings.servers().is_empty(), "nothing before confirming");
-        let suggested = settings.suggestion_rows();
-        assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
-        assert!(settings.shows_suggestions());
-        assert_form_layout(settings_window, "Servers, suggestions only");
-        settings.confirm_suggestion(0);
-        assert!(settings.suggestion_rows().is_empty());
-        assert!(!settings.shows_suggestions(), "nothing left to suggest");
-        assert_form_layout(settings_window, "Servers, one server");
-        assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
-        assert_eq!(settings.server_rows(), [suggested[0].clone()]);
-        assert!(!settings.is_editing(), "adding a suggestion opens no sheet");
+        assert!(
+            settings.servers().is_empty(),
+            "no server before the user adds one"
+        );
+        wait_until("the WSDL's address", || !settings.wsdl_rows().is_empty());
+        let wsdl = settings.wsdl_rows();
+        assert_eq!(
+            wsdl,
+            [[
+                "CustomerPort",
+                "https://customer.example.invalid/ws/customer"
+            ]],
+            "the SOAP 1.1 port"
+        );
+        assert_form_layout(settings_window, "Servers, the WSDL's address only");
+        settings.add_wsdl_server(0);
+        wait_until("the server sheet", || {
+            settings_window.window().attachedSheet().is_some()
+        });
+        settings.save();
+        wait_until("the sheet to close", || {
+            settings_window.window().attachedSheet().is_none()
+        });
+        assert_eq!(server_names(ctx, project.key()), [wsdl[0][0].clone()]);
+        assert_eq!(settings.server_rows(), wsdl);
+        assert_eq!(settings.wsdl_rows(), wsdl, "the WSDL's row stays");
+        assert_form_layout(
+            settings_window,
+            "Servers, one server and the WSDL's address",
+        );
 
         autoreleasepool(|_| window.performClose(None));
         assert!(
@@ -2799,8 +2834,43 @@ mod checks {
             .collect();
         assert_eq!(names, server_names(ctx, key));
         assert_eq!(names[1], "Production");
-        assert!(servers.suggestion_rows().is_empty());
-        assert!(!servers.shows_suggestions());
+
+        // The WSDL's addresses follow the servers, to be added as servers but not edited.
+        wait_until("the WSDL's addresses", || !servers.wsdl_rows().is_empty());
+        assert_form_layout(settings, "Servers with the WSDL's addresses");
+        let wsdl = servers.wsdl_rows();
+        assert_eq!(
+            wsdl,
+            [
+                ["LegacyPort", "http://legacy.example.invalid/rpc"],
+                ["LegacyEncodedPort", "http://legacy.example.invalid/rpc-enc"],
+            ]
+        );
+        let rows = servers.list_rows();
+        assert_eq!(rows.len(), names.len() + wsdl.len());
+        for (i, row) in rows.iter().enumerate() {
+            let (buttons, labels) = texts_under(row);
+            if i < names.len() {
+                assert_eq!(buttons, ["Edit…"], "server row {i}");
+                assert!(!labels.contains(&"From WSDL".to_string()), "{labels:?}");
+            } else {
+                assert_eq!(buttons, ["Add as Server…"], "WSDL row {i}, no Edit…");
+                assert!(labels.contains(&"From WSDL".to_string()), "{labels:?}");
+                assert_eq!(
+                    row.toolTip().map(|t| t.to_string()).as_deref(),
+                    Some("From the WSDL's soap:address. Add it as a server to use it.")
+                );
+            }
+        }
+        let popup_titles = || -> Vec<String> {
+            project
+                .server_popup()
+                .itemTitles()
+                .iter()
+                .map(|t| t.to_string())
+                .collect()
+        };
+        assert_eq!(popup_titles(), names, "only servers can be sent to");
 
         // Edit… opens the server in a sheet; Save writes it.
         servers.edit(1);
@@ -2918,6 +2988,52 @@ mod checks {
         assert_eq!(server_names(ctx, key).len(), names.len());
         assert_eq!(servers.server_rows().len(), names.len());
 
+        // Add as Server… opens the sheet on a new server filled in from the WSDL's row; Cancel
+        // adds nothing, Save adds it and the row stays.
+        servers.add_wsdl_server(0);
+        wait_until("the server sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert!(servers.is_editing() && servers.editing().is_none());
+        assert!(servers.delete_button().isHidden(), "nothing to delete yet");
+        assert_eq!(servers.name_field().stringValue().to_string(), wsdl[0][0]);
+        assert_eq!(servers.url_field().stringValue().to_string(), wsdl[0][1]);
+        assert_server_sheet_layout(&servers, "server sheet from the WSDL");
+        servers.cancel();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(
+            server_names(ctx, key).len(),
+            names.len(),
+            "Cancel adds nothing"
+        );
+        servers.add_wsdl_server(0);
+        servers.save();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        let model_servers = ctx
+            .delegate
+            .read(|app| app.project(key).map(|w| w.servers().to_vec()))
+            .flatten()
+            .unwrap_or_default();
+        let added = model_servers.last().expect("a server");
+        assert_eq!(model_servers.len(), names.len() + 1);
+        assert_eq!(wsdl[0], [added.name.clone(), added.url.clone()]);
+        assert_eq!(servers.wsdl_rows(), wsdl, "the WSDL's rows stay");
+        assert_eq!(
+            servers.list_rows().len(),
+            names.len() + 1 + wsdl.len(),
+            "the server and the WSDL's row with the same address"
+        );
+        assert_eq!(popup_titles(), server_names(ctx, key));
+        // Back to the fixture's servers for what follows.
+        let id = added.id;
+        ctx.delegate
+            .command("delete", |app| app.delete_server(key, id))
+            .expect("deleted");
+
         // The project's General pane, then the remembered pane on the next Settings….
         settings.select(Pane::ProjectGeneral(key));
         assert_eq!(
@@ -2941,6 +3057,7 @@ mod checks {
         let window = project.project_window();
         let servers = project.show_settings_servers().expect("the Servers pane");
         assert_eq!(servers.server_rows()[1][0], "Production EU");
+        wait_until("the WSDL's addresses", || servers.wsdl_rows() == wsdl);
         assert_eq!(servers.servers()[1].auth, basic);
         servers.edit(1);
         assert_eq!(servers.user_field().stringValue().to_string(), "bob");

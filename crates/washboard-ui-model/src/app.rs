@@ -356,7 +356,6 @@ impl App {
             response: None,
             older: None,
             sending: None,
-            suggested_servers: Vec::new(),
             replace_outcome: None,
         };
         // A database that fails here fails again on the first command, which reports it.
@@ -392,6 +391,8 @@ impl App {
             Err(message) => window.schema = SchemaState::Failed(message),
         }
         self.events.push(Event::SidebarChanged { project: key });
+        // The Servers pane lists the WSDL's addresses.
+        self.events.push(Event::ServersChanged { project: key });
         self.start_check(key, Check::Full);
     }
 

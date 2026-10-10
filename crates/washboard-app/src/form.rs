@@ -433,6 +433,28 @@ pub fn subtitle_row(
     control: &NSView,
     mtm: MainThreadMarker,
 ) -> Retained<NSView> {
+    item_row(title, None, subtitle, control, mtm)
+}
+
+/// A [`subtitle_row`] with `tag` in secondary text after the title, saying what kind of item it
+/// is when a list holds more than one kind. The title truncates before the tag does.
+pub fn tagged_subtitle_row(
+    title: &str,
+    tag: &str,
+    subtitle: &str,
+    control: &NSView,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    item_row(title, Some(tag), subtitle, control, mtm)
+}
+
+fn item_row(
+    title: &str,
+    tag: Option<&str>,
+    subtitle: &str,
+    control: &NSView,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
     let title = NSTextField::labelWithString(&NSString::from_str(title), mtm);
     layout::truncating(&title, NSLineBreakMode::ByTruncatingTail);
     let subtitle = small_secondary(subtitle, mtm);
@@ -441,15 +463,44 @@ pub fn subtitle_row(
     place_trailing(&row, control);
     for v in [&*title, &*subtitle] {
         add(&row, v);
+        activate([v
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET)]);
+    }
+    // After the title is in the row: a constraint needs both views in one hierarchy.
+    let tag = tag.map(|tag| {
+        let tag = small_secondary(tag, mtm);
+        tag.setSelectable(false);
+        tag.setContentCompressionResistancePriority_forOrientation(
+            NSLayoutPriorityRequired,
+            NSLayoutConstraintOrientation::Horizontal,
+        );
+        add(&row, &tag);
         activate([
-            v.leadingAnchor()
-                .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET),
-            v.trailingAnchor()
+            tag.leadingAnchor()
+                .constraintEqualToAnchor_constant(&title.trailingAnchor(), CONTROL_SPACING),
+            tag.firstBaselineAnchor()
+                .constraintEqualToAnchor(&title.firstBaselineAnchor()),
+            tag.trailingAnchor()
                 .constraintLessThanOrEqualToAnchor_constant(
                     &control.leadingAnchor(),
                     -CONTROL_SPACING,
                 ),
         ]);
+        tag
+    });
+    // With a tag, the tag keeps the title off the control.
+    let mut ends = vec![&*subtitle];
+    if tag.is_none() {
+        ends.push(&*title);
+    }
+    for v in ends {
+        activate([v
+            .trailingAnchor()
+            .constraintLessThanOrEqualToAnchor_constant(
+                &control.leadingAnchor(),
+                -CONTROL_SPACING,
+            )]);
     }
     activate([
         title

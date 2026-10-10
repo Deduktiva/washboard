@@ -16,7 +16,7 @@ use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
     HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
-    Reformat, SchemaState, WellFormedness,
+    Reformat, SchemaState, WellFormedness, WsdlServer,
 };
 
 fn fixtures() -> PathBuf {
@@ -1574,7 +1574,7 @@ fn files_next_to_the_wsdl_are_found_without_adding_them() {
 }
 
 #[test]
-fn create_copies_opens_and_suggests_servers() {
+fn create_copies_and_opens_with_the_wsdl_servers() {
     let setup = Setup::new();
     let (fake, mut app) = setup.launch();
     let target = ImportTarget::NewProject;
@@ -1602,17 +1602,87 @@ fn create_copies_opens_and_suggests_servers() {
 
     let window = app.project(key).expect("open");
     assert!(
-        window.servers().is_empty(),
-        "nothing connects before the user confirms"
+        window.wsdl_servers().is_empty(),
+        "none while the schema loads"
     );
-    let suggested = window.suggested_servers().to_vec();
-    assert_eq!(suggested.len(), 1, "only the SOAP 1.1 port: {suggested:?}");
-    app.confirm_suggested_server(key, 0, "http://127.0.0.1:9/customers")
-        .expect("confirm");
+    fake.pump_until(&mut app, |app| loaded(app, key));
     let window = app.project(key).expect("open");
-    assert!(window.suggested_servers().is_empty());
-    assert_eq!(window.servers()[0].url, "http://127.0.0.1:9/customers");
-    assert_eq!(window.servers()[0].name, suggested[0].port);
+    assert!(
+        window.servers().is_empty(),
+        "nothing connects before the user adds a server"
+    );
+    assert_eq!(
+        window.wsdl_servers(),
+        [customer_port()],
+        "only the SOAP 1.1 port"
+    );
+
+    // Adding it as a server leaves the WSDL's row as it is.
+    let id = app.add_server(key).expect("add");
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    assert_eq!(server.id, id);
+    server.name = customer_port().port;
+    server.url = customer_port().url;
+    app.update_server(key, &server, None).expect("save");
+    let window = app.project(key).expect("open");
+    assert_eq!(window.servers().len(), 1);
+    assert_eq!(window.wsdl_servers(), [customer_port()]);
+
+    // Reopened, the addresses come from the WSDL again; nothing was stored for them.
+    assert!(app.close_project(key));
+    let key = app.open_project(&folder).expect("reopen");
+    assert!(app.project(key).expect("open").wsdl_servers().is_empty());
+    fake.pump_until(&mut app, |app| loaded(app, key));
+    assert!(
+        app.take_events()
+            .contains(&Event::ServersChanged { project: key })
+    );
+    let window = app.project(key).expect("open");
+    assert_eq!(window.wsdl_servers(), [customer_port()]);
+    assert_eq!(window.servers().len(), 1);
+}
+
+fn customer_port() -> WsdlServer {
+    WsdlServer {
+        port: "CustomerPort".into(),
+        url: "https://customer.example.invalid/ws/customer".into(),
+    }
+}
+
+#[test]
+fn wsdl_servers_follow_replace_wsdl() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let window = app.project(key).expect("open");
+    let ports: Vec<String> = window.wsdl_servers().into_iter().map(|s| s.port).collect();
+    assert_eq!(
+        ports,
+        ["LegacyPort", "LegacyEncodedPort"],
+        "both bind SOAP 1.1"
+    );
+    assert_eq!(
+        window.wsdl_servers()[0].url,
+        "http://legacy.example.invalid/rpc"
+    );
+    let target = ImportTarget::ReplaceWsdl(key);
+    app.begin_import(target);
+    app.set_import_files(
+        target,
+        customer().join("CustomerService.wsdl"),
+        vec![customer()],
+    )
+    .expect("files");
+    fake.pump_until(&mut app, |app| checked(app, target));
+    app.replace_wsdl(key).expect("replace");
+    assert!(
+        app.project(key).expect("open").wsdl_servers().is_empty(),
+        "none while the new WSDL loads"
+    );
+    fake.pump_until(&mut app, |app| loaded(app, key));
+    assert_eq!(
+        app.project(key).expect("open").wsdl_servers(),
+        [customer_port()]
+    );
 }
 
 #[test]

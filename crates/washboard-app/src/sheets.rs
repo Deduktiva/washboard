@@ -406,28 +406,33 @@ impl ImportSheetController {
     }
 
     /// Create or Replace; also called by tests. Does nothing while disabled. A new project
-    /// whose WSDL names server addresses opens with its settings, to confirm them.
+    /// whose WSDL names server addresses opens with its Servers pane, where each is one Add as
+    /// Server… away from being the first server.
     pub fn finish(&self) {
         if !self.finish_button().isEnabled() {
             return;
         }
         match self.target() {
             ImportTarget::NewProject => {
+                // The import check knows the addresses; the new project's schema loads later.
+                let addresses = self
+                    .read(|app| {
+                        app.import_sheet(ImportTarget::NewProject).is_some_and(|sheet| {
+                            matches!(&sheet.check, CheckState::Done(c) if !c.addresses.is_empty())
+                        })
+                    })
+                    .unwrap_or(false);
                 let Some(key) = self.command("Could not create the project", App::create_project)
                 else {
                     return;
                 };
-                with_delegate(self.mtm(), |d| {
-                    let suggested = d
-                        .read(|app| app.project(key).map(|w| !w.suggested_servers().is_empty()))
-                        .flatten()
-                        .unwrap_or(false);
-                    if let Some(project) = d.project(key)
-                        && suggested
-                    {
-                        project.show_settings_servers();
-                    }
-                });
+                if addresses {
+                    with_delegate(self.mtm(), |d| {
+                        if let Some(project) = d.project(key) {
+                            project.show_settings_servers();
+                        }
+                    });
+                }
             }
             ImportTarget::ReplaceWsdl(key) => {
                 self.command("Could not replace the WSDL", |app| app.replace_wsdl(key));
