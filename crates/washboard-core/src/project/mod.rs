@@ -22,6 +22,7 @@ mod db;
 mod fsutil;
 mod history;
 mod names;
+mod replace_report;
 mod requests;
 mod servers;
 mod timefmt;
@@ -48,6 +49,7 @@ pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE
 pub use db::SCHEMA_VERSION;
 pub use history::{HistoryRecord, RequestHead};
 pub use names::{NameError, validate_request_name};
+pub use replace_report::{ReplaceReport, RequestText, request_texts};
 
 use fsutil::{IoContext, join_rel, remove_dir_if_exists};
 

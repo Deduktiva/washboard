@@ -1,13 +1,14 @@
 //! `new-project` and `replace-wsdl`: the import check, then the project API.
 
-use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
 use washboard_core::diag::Severity;
-use washboard_core::project::{Project, format_timestamp};
-use washboard_core::wsdl::Wsdl;
+use washboard_core::model::RequestId;
+use washboard_core::project::{Project, ReplaceReport, format_timestamp, request_texts};
+use washboard_core::validate::RequestSchema;
 
 use crate::support::{self, short_time};
 
@@ -42,31 +43,40 @@ pub fn new(
     Ok(ExitCode::SUCCESS)
 }
 
+/// Prints what changed (PLAN §4 "Replace WSDL"): operations added and removed, and requests
+/// that no longer validate against the new WSDL. Requests are never rewritten.
 pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Result<ExitCode> {
     let checked = support::check_import(entry, extra)?;
     let mut project = support::open_write(dir)?;
-    let before = supported_ops(&support::load_project_wsdl(&project)?);
+    let before = support::load_project_wsdl(&project)?.supported_operations();
     project.replace_wsdl(&checked.set)?;
-    let after = supported_ops(&checked.wsdl);
     println!("replaced the WSDL; the previous set is in wsdl/.previous/");
-    for op in after.difference(&before) {
+    // `check_import` has made sure the set compiles; `None` only if the request wrapper
+    // around it does not, and then the report checks well-formedness alone.
+    let schema = RequestSchema::compile(&checked.wsdl.bundle).ok();
+    let requests = request_texts(&project)?;
+    let report = ReplaceReport::new(&before, &checked.wsdl, schema.as_ref(), &requests);
+    for op in &report.added {
         println!("  added:   {op}");
     }
-    for op in before.difference(&after) {
+    for op in &report.removed {
         println!("  removed: {op}");
     }
-    let stale: Vec<String> = project
+    let names: HashMap<RequestId, String> = project
         .requests()?
         .into_iter()
-        .filter(|r| {
-            r.operation
-                .as_ref()
-                .is_some_and(|o| !after.contains(&o.to_string()))
-        })
-        .map(|r| r.name)
+        .map(|r| (r.id, r.name))
         .collect();
-    for name in stale {
-        println!("  request {name:?} was created for an operation that no longer exists");
+    for id in &report.invalid {
+        if let Some(name) = names.get(id) {
+            println!("  no longer valid: {name:?}");
+        }
+    }
+    if !report.invalid.is_empty() {
+        println!(
+            "see why with: washboard -C {} request validate <name>",
+            shell_word(&dir.display().to_string())
+        );
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -118,13 +128,6 @@ pub fn show(dir: &Path) -> anyhow::Result<ExitCode> {
     println!("servers:     {}", project.servers()?.len());
     println!("history:     last {} per request", project.history_limit()?);
     Ok(ExitCode::SUCCESS)
-}
-
-fn supported_ops(w: &Wsdl) -> BTreeSet<String> {
-    w.supported_operations()
-        .iter()
-        .map(ToString::to_string)
-        .collect()
 }
 
 /// Quotes for a POSIX shell when needed, so the printed command can be pasted.

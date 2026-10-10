@@ -405,6 +405,81 @@ fn format_reindents_checks_and_leaves_malformed_requests_alone() {
 }
 
 #[test]
+fn replace_wsdl_reports_operations_and_requests_that_no_longer_validate() {
+    let e = customer();
+    let save = |args: &[&str]| ok(wb(&e, args)).trim().to_owned();
+    assert_eq!(
+        save(&[
+            "operation",
+            "template",
+            "GetCustomer",
+            "--save",
+            "--name",
+            "Good"
+        ]),
+        "Good"
+    );
+    assert_eq!(
+        save(&[
+            "operation",
+            "template",
+            "GetCustomer",
+            "--save",
+            "--name",
+            "Bad"
+        ]),
+        "Bad"
+    );
+    fill_from_fixture(&e, "Good", "valid-get-customer.xml");
+    fill_from_fixture(&e, "Bad", "invalid-bad-simple-type.xml");
+    let replace = |wsdl: &Path| {
+        ok(wb(
+            &e,
+            &[
+                "project",
+                "replace-wsdl",
+                "--wsdl",
+                wsdl.to_str().expect("utf-8"),
+                "--xsd-dir",
+                e.src.to_str().expect("utf-8"),
+            ],
+        ))
+    };
+
+    // The same WSDL again: nothing added or removed, only the broken request is named.
+    let out = replace(&e.src.join("CustomerService.wsdl"));
+    assert!(
+        !out.contains("added:") && !out.contains("removed:"),
+        "{out}"
+    );
+    assert!(out.contains("no longer valid: \"Bad\"\n"), "{out}");
+    assert!(!out.contains("\"Good\""), "{out}");
+    assert!(out.contains("request validate <name>"), "{out}");
+
+    // A different service: its operations replace the old ones and both requests break.
+    let good = fs::read_to_string(e.project.join("requests/Good.xml")).expect("file");
+    let legacy = env("legacy-rpc");
+    let out = replace(&legacy.src.join("Legacy.wsdl"));
+    assert!(
+        out.contains("  added:   ") && out.contains("Lookup"),
+        "{out}"
+    );
+    assert!(
+        out.contains("  removed: ") && out.contains("CreateOrder"),
+        "{out}"
+    );
+    assert!(
+        out.contains("no longer valid: \"Bad\"\n") && out.contains("no longer valid: \"Good\"\n"),
+        "{out}"
+    );
+    // Requests are never rewritten.
+    assert_eq!(
+        fs::read_to_string(e.project.join("requests/Good.xml")).expect("file"),
+        good
+    );
+}
+
+#[test]
 fn servers() {
     let e = customer();
     ok(wb(
