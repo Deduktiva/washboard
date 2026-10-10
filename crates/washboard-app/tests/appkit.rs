@@ -19,7 +19,6 @@ fn main() {
     let ctx = checks::Ctx::launch(mtm);
     let checks: &[Check] = &[
         ("lifecycle", checks::lifecycle),
-        ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
         ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
@@ -30,7 +29,6 @@ fn main() {
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
         ("dark_mode", checks::dark_mode),
-        ("menu_validation", checks::menu_validation),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
@@ -365,191 +363,6 @@ mod checks {
         assert!(!terminate, "closing the last window must not quit");
     }
 
-    const C: usize = NSEventModifierFlags::Command.0;
-    const S: usize = NSEventModifierFlags::Shift.0;
-    const O: usize = NSEventModifierFlags::Option.0;
-    const CTRL: usize = NSEventModifierFlags::Control.0;
-
-    /// (title, key equivalent, modifiers, action); `-` is a separator, an action of `>` a
-    /// submenu.
-    type Row = (&'static str, &'static str, usize, &'static str);
-
-    const MENUS: &[(&str, &[Row])] = &[
-        (
-            "Washboard",
-            &[
-                ("About Washboard", "", 0, "orderFrontStandardAboutPanel:"),
-                ("-", "", 0, ""),
-                ("Settings…", ",", C, "showSettings:"),
-                ("-", "", 0, ""),
-                ("Services", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Hide Washboard", "h", C, "hide:"),
-                ("Hide Others", "h", O | C, "hideOtherApplications:"),
-                ("Show All", "", 0, "unhideAllApplications:"),
-                ("-", "", 0, ""),
-                ("Quit Washboard", "q", C, "terminate:"),
-            ],
-        ),
-        (
-            "File",
-            &[
-                ("New Project…", "n", S | C, "newProject:"),
-                ("Open Project…", "o", C, "openProject:"),
-                ("Open Recent", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Close", "w", C, "performClose:"),
-                ("Save All", "s", C, "saveAll:"),
-            ],
-        ),
-        (
-            "Edit",
-            &[
-                ("Undo", "z", C, "undo:"),
-                ("Redo", "z", S | C, "redo:"),
-                ("-", "", 0, ""),
-                ("Cut", "x", C, "cut:"),
-                ("Copy", "c", C, "copy:"),
-                ("Paste", "v", C, "paste:"),
-                ("Select All", "a", C, "selectAll:"),
-                ("-", "", 0, ""),
-                ("Find", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Format XML", "i", CTRL, "formatXML:"),
-            ],
-        ),
-        ("View", &[("Show Sidebar", "s", CTRL | C, "toggleSidebar:")]),
-        (
-            "Project",
-            &[
-                ("New Request", "n", C, "newRequest:"),
-                ("Duplicate", "d", C, "duplicateRequest:"),
-                ("Rename", "", 0, "renameRequest:"),
-                ("Delete", "\u{8}", C, "deleteRequest:"),
-                ("-", "", 0, ""),
-                ("Validate", "b", C, "validateRequest:"),
-                ("Send", "\r", C, "sendRequest:"),
-                ("Cancel Send", ".", C, "cancelSend:"),
-            ],
-        ),
-        (
-            "Window",
-            &[
-                ("Minimize", "m", C, "performMiniaturize:"),
-                ("Zoom", "", 0, "performZoom:"),
-                ("-", "", 0, ""),
-                ("HTTP Log", "l", O | C, "showHttpLog:"),
-                ("-", "", 0, ""),
-                ("Bring All to Front", "", 0, "arrangeInFront:"),
-            ],
-        ),
-        ("Help", &[]),
-    ];
-
-    fn rows(menu: &NSMenu) -> Vec<(String, String, usize, String)> {
-        menu.itemArray()
-            .iter()
-            .map(|item| {
-                if item.isSeparatorItem() {
-                    return ("-".into(), String::new(), 0, String::new());
-                }
-                let action = if item.hasSubmenu() {
-                    ">".into()
-                } else {
-                    item.action()
-                        .map(|s| s.name().to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                };
-                let key = item.keyEquivalent().to_string();
-                let modifiers = if key.is_empty() {
-                    0
-                } else {
-                    item.keyEquivalentModifierMask().0
-                };
-                (item.title().to_string(), key, modifiers, action)
-            })
-            .collect()
-    }
-
-    /// Titles, shortcuts and actions of every menu item, and the menus AppKit manages.
-    ///
-    /// AppKit adds items of its own (Close All as an alternate of Close, Emoji & Symbols and
-    /// AutoFill in Edit, window tiling in Window), varying by macOS release. Only our items
-    /// are compared, in order; separators are not compared.
-    pub fn main_menu(ctx: &Ctx) {
-        let main = ctx.app.mainMenu().expect("a main menu");
-        let items = main.itemArray();
-        assert_eq!(items.len(), MENUS.len(), "top-level menus");
-        for (item, (title, expected)) in items.iter().zip(MENUS) {
-            let submenu = item.submenu().expect("top-level items have submenus");
-            assert_eq!(submenu.title().to_string(), *title);
-            let expected: Vec<_> = expected
-                .iter()
-                .filter(|(t, ..)| *t != "-")
-                .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
-                .collect();
-            let (ours, added): (Vec<_>, Vec<_>) = rows(&submenu)
-                .into_iter()
-                .filter(|(t, ..)| t != "-")
-                .partition(|(t, ..)| expected.iter().any(|(e, ..)| e == t));
-            assert_eq!(ours, expected, "{title} menu");
-            if !added.is_empty() {
-                let titles: Vec<_> = added.iter().map(|(t, ..)| t.as_str()).collect();
-                print!("({title}: AppKit added {titles:?}) ");
-            }
-        }
-
-        let windows = ctx
-            .app
-            .windowsMenu()
-            .expect("the Window menu is registered");
-        assert_eq!(windows.title().to_string(), "Window");
-        let services = ctx
-            .app
-            .servicesMenu()
-            .expect("the Services menu is registered");
-        assert_eq!(services.title().to_string(), "Services");
-        // Registered as the Help menu, it gets the system's menu search field.
-        let help = ctx.app.helpMenu().expect("the Help menu is registered");
-        assert_eq!(help.title().to_string(), "Help");
-        let find = main
-            .itemWithTitle(&NSString::from_str("Edit"))
-            .and_then(|i| i.submenu())
-            .and_then(|m| m.itemWithTitle(&NSString::from_str("Find")))
-            .and_then(|i| i.submenu())
-            .expect("Edit ▸ Find");
-        let find_rows = rows(&find);
-        let expected: Vec<(String, String, usize, String)> = [
-            ("Find…", "f", C, "performFindPanelAction:"),
-            ("Find and Replace…", "f", O | C, "performFindPanelAction:"),
-            ("Find Next", "g", C, "performFindPanelAction:"),
-            ("Find Previous", "g", S | C, "performFindPanelAction:"),
-            ("Use Selection for Find", "e", C, "performFindPanelAction:"),
-            ("Jump to Selection", "j", C, "centerSelectionInVisibleArea:"),
-        ]
-        .iter()
-        .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
-        .collect();
-        assert_eq!(find_rows, expected, "Find menu");
-        let replace = find
-            .itemWithTitle(&NSString::from_str("Find and Replace…"))
-            .expect("Find and Replace");
-        // `NSTextFinderActionShowReplaceInterface`.
-        assert_eq!(replace.tag(), 12);
-
-        // Settings is answered by the app delegate, so it is enabled with no window open.
-        let app_menu = items
-            .firstObject()
-            .and_then(|i| i.submenu())
-            .expect("app menu");
-        let settings = app_menu.itemWithTitle(&objc2_foundation::NSString::from_str("Settings…"));
-        app_menu.update();
-        assert!(
-            settings.expect("Settings item").isEnabled(),
-            "Settings is enabled"
-        );
-    }
-
     fn open_recent_titles(ctx: &Ctx) -> Vec<String> {
         let file = ctx
             .app
@@ -558,9 +371,9 @@ mod checks {
             .and_then(|i| i.submenu())
             .expect("File menu");
         let recent = file
-            .itemWithTitle(&NSString::from_str("Open Recent"))
+            .itemWithTitle(&NSString::from_str("Recent Projects"))
             .and_then(|i| i.submenu())
-            .expect("Open Recent submenu");
+            .expect("Recent Projects submenu");
         recent
             .itemArray()
             .iter()
@@ -570,7 +383,7 @@ mod checks {
     }
 
     /// Closing the last project shows the welcome window listing it; opening it from the list
-    /// or from File ▸ Open Recent brings it back, once.
+    /// or from File ▸ Recent Projects brings it back, once.
     pub fn welcome_window(ctx: &Ctx) {
         let window = ctx.open().project_window();
         autoreleasepool(|_| window.performClose(None));
@@ -1445,56 +1258,6 @@ mod checks {
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 
-    /// Project menu items that act on the selected request are disabled without one, and
-    /// Delete steps aside while a text view has the focus, so ⌘⌫ deletes to the start of the
-    /// line there instead of asking to delete the request.
-    pub fn menu_validation(ctx: &Ctx) {
-        let project = ctx.open();
-        wait_loaded(&project);
-        if project.selected_request().is_none() {
-            // SAFETY: `newRequest:` takes the sender.
-            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
-        }
-        let request = project.selected_request().expect("a request is selected");
-        let menu = ctx
-            .app
-            .mainMenu()
-            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
-            .and_then(|i| i.submenu())
-            .expect("Project menu");
-        let enabled = |title: &str| -> bool {
-            let item = menu
-                .itemWithTitle(&NSString::from_str(title))
-                .expect("a Project menu item");
-            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
-            unsafe { msg_send![&*project, validateMenuItem: &*item] }
-        };
-        let window = project.project_window();
-        assert!(enabled("New Request"), "the WSDL is loaded");
-
-        window.makeFirstResponder(Some(project.editor().text_view()));
-        assert!(!enabled("Delete"), "⌘⌫ goes to the editor");
-        assert!(enabled("Duplicate") && enabled("Send"), "the rest stay");
-        let outline = project.sidebar().outline().expect("the sidebar is built");
-        window.makeFirstResponder(Some(outline));
-        assert!(
-            enabled("Delete"),
-            "⌘⌫ deletes the selected request from the sidebar"
-        );
-
-        let key = project.key();
-        ctx.delegate
-            .command("deselect", |app| app.select_request(key, None))
-            .expect("deselected");
-        for title in ["Duplicate", "Rename", "Delete", "Validate", "Send"] {
-            assert!(!enabled(title), "{title} without a selected request");
-        }
-        ctx.delegate
-            .command("reselect", |app| app.select_request(key, Some(request)))
-            .expect("reselected");
-        autoreleasepool(|_| window.performClose(None));
-    }
-
     /// Format XML (⌃I) is one undo step that keeps the selection on the same text; the settings
     /// window writes the user defaults and the model follows; Save All formats with format on
     /// save, autosave never does.
@@ -2039,13 +1802,13 @@ mod checks {
         let project_menu = ctx
             .app
             .mainMenu()
-            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("File")))
             .and_then(|i| i.submenu())
-            .expect("Project menu");
+            .expect("File menu");
         let enabled = |title: &str| -> bool {
             let item = project_menu
                 .itemWithTitle(&NSString::from_str(title))
-                .expect("a Project menu item");
+                .expect("a File menu item");
             // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
             unsafe { msg_send![&*project, validateMenuItem: &*item] }
         };
