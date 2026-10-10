@@ -77,6 +77,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
 | WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
 | WP-SIDEBAR-FLATTEN | FORMAT-XML, SIDEBAR-MENU (done) | the OPERATIONS tree in `crates/washboard-app/src/sidebar.rs`, a pure tree-shaping function in `crates/washboard-app/src/text.rs`, one setting in the app settings (`app_settings.rs`, or `settings_window.rs` once WP-SETTINGS-WINDOW has replaced it) | Most WSDLs have one service, and many have one port, so the OPERATIONS group spends two levels on rows with nothing to choose. Leave out a level that has only one row, behind a setting that is on by default. Below. |
+| WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); coordinate with WP-SIDEBAR-FLATTEN, which groups operations the same way | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
 | WP-SETTINGS-WINDOW | APP-INTEGRATION (done); coordinate with WP-FORMAT-XML, which adds the first app setting | new `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (replaced); the Settings… and Project Settings… items in `menu.rs` | One Settings window for the app and the open projects, replacing the Project Settings sheet. Below. |
 
 ### WP-SIDEBAR-FLATTEN in detail
@@ -114,6 +115,56 @@ app's OPERATIONS group is shaped differently.
   counts, and the setting off. In `tests/appkit.rs`: the fixture project's OPERATIONS rows
   with the setting on and off, an operation row's tooltip naming its service and port, and
   the selection surviving the toggle.
+
+### WP-OPERATION-PICKER in detail
+
+Today Project ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
+else the first supported one (`App::default_operation`), so creating a request for any other
+operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
+scrolling, not typing.
+
+- **Where.** Project ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
+  both titles gain the ellipsis, since they now ask something first. An operation row's New
+  Request and a double-click on an operation still create directly: the operation is already
+  chosen.
+- **Window.** A sheet on the project window, like the import sheet: a search field on top,
+  focused, and a list below. Return (default button "Create") creates the request for the
+  highlighted row; Esc or Cancel closes the sheet and creates nothing; a double-click on a row
+  creates. ↑/↓ move the highlight while the focus stays in the search field, as in Xcode's
+  Open Quickly, so the hands never leave the keyboard. The sheet's size is remembered (user
+  defaults), not its search text.
+- **Rows.** One per operation: its name, and in secondary text the input element's QName
+  (`cus:GetCustomer`) or, for rpc/literal, "rpc". Grouped under "Service › Port" section headers
+  in WSDL order, with the same rule as WP-SIDEBAR-FLATTEN: only supported ports count, and a
+  header is left out when there is only one supported port in the project (then the list is
+  just the operations). Unsupported operations sit in an "Unsupported" section at the end,
+  greyed, with their reason as the tooltip (PLAN §1: shown, never dropped); they can be
+  highlighted but not created, so Create is disabled on them.
+- **Search.** Case-insensitive; a row matches when every space-separated word of the query is a
+  substring of the operation name, the input element's local name, or its service or port name.
+  Rows whose operation name starts with the query come first, then the rest, each in WSDL order.
+  An empty query shows everything. Sections with no match disappear; with no match at all, the
+  list says "No operation matches" and Create is disabled.
+- **Initial highlight.** The operation selected in the sidebar; else the operation of the
+  selected request (another request for the same operation is the common case); else the first
+  supported operation. The search field starts empty.
+- **When there is nothing to pick.** New Request is disabled while the WSDL loads or when it
+  failed to load, in the menu and in the context menu, rather than opening a sheet that cannot
+  do anything. A WSDL with no supported operation opens the sheet with only the Unsupported
+  section, so the user sees why.
+- **After Create.** As today: the request is created with the template, selected, and enters
+  inline rename (`Event::BeginRename`).
+- **Model.** The filtering and ordering is a pure function in `washboard-ui-model` over the
+  sidebar's `ServiceNode`s and the query, returning the sections and rows to show, so it is
+  tested on Linux; the app only draws it. `App::default_operation` stays for the initial
+  highlight.
+- **Tests:** on Linux, the filter: words in any order, matching on service, port and element
+  names, prefix matches first, unsupported operations kept in their section, headers left out
+  with one supported port (both fixtures) and kept with two (a synthetic tree). In
+  `tests/appkit.rs`: ⌘N opens the sheet with the sidebar's operation highlighted; typing
+  filters; ↓ then Return creates a request for that operation and starts rename; Esc creates
+  nothing; Create is disabled on an unsupported row; New Request is disabled while the schema
+  loads.
 
 ### WP-SETTINGS-WINDOW in detail
 
