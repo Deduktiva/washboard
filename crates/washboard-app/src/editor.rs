@@ -39,11 +39,11 @@ use objc2_foundation::{
 };
 use washboard_core::xml::utf16::{Utf16Cursor, changed_range, utf16_edit};
 use washboard_core::xml::{TokenBuffer, TokenKind};
-use washboard_ui_model::{Completions, ProjectKey};
+use washboard_ui_model::{Completions, Issue, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::colors;
-use crate::text::{completion_kinds, hover_text};
+use crate::text::{LineMarker, completion_kinds, hover_text, line_markers};
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
@@ -94,8 +94,11 @@ fn color(kind: TokenKind) -> Option<Retained<NSColor>> {
 pub struct RulerIvars {
     /// UTF-16 offsets of line starts; line `n` (1-based) starts at `line_starts[n - 1]`.
     line_starts: RefCell<Vec<usize>>,
-    /// 1-based lines with an error, sorted.
-    error_lines: RefCell<Vec<usize>>,
+    /// Lines with issues, sorted by line.
+    markers: RefCell<Vec<LineMarker>>,
+    /// The tool tip rects of the markers drawn last, in ruler coordinates, and their lines.
+    /// Rebuilt only when they move: re-adding a rect would hide a tool tip being shown.
+    tool_tips: RefCell<Vec<(usize, NSRect)>>,
 }
 
 define_class!(
@@ -114,6 +117,19 @@ define_class!(
         fn draw_labels(&self, _rect: NSRect) {
             self.draw_line_numbers();
         }
+
+        // The tool tip rects' owner (`NSViewToolTipOwner`); `data` is the marker's line.
+        // SAFETY: the signature matches `view:stringForToolTip:point:userData:`.
+        #[unsafe(method_id(view:stringForToolTip:point:userData:))]
+        fn string_for_tool_tip(
+            &self,
+            _view: &NSView,
+            _tag: NSToolTipTag,
+            _point: NSPoint,
+            data: *mut c_void,
+        ) -> Retained<NSString> {
+            NSString::from_str(&self.tool_tip(data as usize).unwrap_or_default())
+        }
     }
 );
 
@@ -129,16 +145,66 @@ impl LineNumberRuler {
         this
     }
 
-    /// Lines (1-based) to mark with an error.
-    pub fn set_error_lines(&self, mut lines: Vec<usize>) {
-        lines.sort_unstable();
-        lines.dedup();
-        *self.ivars().error_lines.borrow_mut() = lines;
+    /// Marks the lines of `issues`, errors in the error colour and lines with only warnings
+    /// in the warning colour; hovering a marker lists its line's messages.
+    pub fn set_issues(&self, issues: &[Issue]) {
+        *self.ivars().markers.borrow_mut() = line_markers(issues);
         self.setNeedsDisplay(true);
     }
 
+    /// Lines (1-based) marked with an error.
     pub fn error_lines(&self) -> Vec<usize> {
-        self.ivars().error_lines.borrow().clone()
+        self.marked_lines(true)
+    }
+
+    /// Lines (1-based) marked with a warning: they have warnings and no error.
+    pub fn warning_lines(&self) -> Vec<usize> {
+        self.marked_lines(false)
+    }
+
+    fn marked_lines(&self, error: bool) -> Vec<usize> {
+        let markers = self.ivars().markers.borrow();
+        markers
+            .iter()
+            .filter(|m| m.error == error)
+            .map(|m| m.line)
+            .collect()
+    }
+
+    /// The tool tip of line `line`'s marker: its issues' messages, errors first.
+    pub fn tool_tip(&self, line: usize) -> Option<String> {
+        let markers = self.ivars().markers.borrow();
+        let at = markers.binary_search_by_key(&line, |m| m.line).ok()?;
+        Some(markers[at].tool_tip.clone())
+    }
+
+    /// Lines with a tool tip rect, from the last draw: the visible markers.
+    pub fn tool_tip_lines(&self) -> Vec<usize> {
+        self.ivars()
+            .tool_tips
+            .borrow()
+            .iter()
+            .map(|(l, _)| *l)
+            .collect()
+    }
+
+    /// Puts a tool tip rect on each drawn marker, the ruler's width by its line's height.
+    /// The rects follow scrolling, so they are placed where the markers are drawn.
+    fn set_tool_tips(&self, tips: Vec<(usize, NSRect)>) {
+        if *self.ivars().tool_tips.borrow() == tips {
+            return;
+        }
+        self.removeAllToolTips();
+        let owner: &AnyObject = self;
+        for &(line, rect) in &tips {
+            // SAFETY: the ruler owns its tool tips, so it outlives their unretained owner
+            // reference; it implements `view:stringForToolTip:point:userData:`, which reads
+            // `userData` back as the line number and never dereferences it.
+            unsafe {
+                self.addToolTipRect_owner_userData(rect, owner, line as *mut c_void);
+            }
+        }
+        *self.ivars().tool_tips.borrow_mut() = tips;
     }
 
     /// Line numbers of the lines intersecting the visible rect, from the layout manager.
@@ -167,7 +233,8 @@ impl LineNumberRuler {
         };
         let lines = self.visible_lines();
         let starts = self.ivars().line_starts.borrow();
-        let errors = self.ivars().error_lines.borrow();
+        let markers = self.ivars().markers.borrow();
+        let mut tips = Vec::new();
         let font = NSFont::monospacedDigitSystemFontOfSize_weight(FONT_SIZE - 2.0, unsafe {
             // SAFETY: an immutable AppKit constant.
             NSFontWeightRegular
@@ -192,13 +259,30 @@ impl LineNumberRuler {
                 NSPoint::new(0.0, rect.origin.y + origin_y),
                 Some(&text_view),
             );
-            let is_error = errors.binary_search(&line).is_ok();
-            let color = if is_error {
-                colors::error()
-            } else {
-                NSColor::secondaryLabelColor()
+            let marker = markers
+                .binary_search_by_key(&line, |m| m.line)
+                .ok()
+                .map(|at| &markers[at]);
+            let color = match marker {
+                Some(m) if m.error => colors::error(),
+                Some(_) => colors::warning(),
+                None => NSColor::secondaryLabelColor(),
             };
-            let label = NSString::from_str(&if is_error {
+            if marker.is_some() {
+                let line_rect = NSRect::new(
+                    NSPoint::new(0.0, rect.origin.y + origin_y),
+                    NSSize::new(1.0, rect.size.height),
+                );
+                let tip = self.convertRect_fromView(line_rect, Some(&text_view));
+                tips.push((
+                    line,
+                    NSRect::new(
+                        NSPoint::new(0.0, tip.origin.y),
+                        NSSize::new(RULER_WIDTH, tip.size.height),
+                    ),
+                ));
+            }
+            let label = NSString::from_str(&if marker.is_some() {
                 format!("⚠{line}")
             } else {
                 line.to_string()
@@ -214,6 +298,7 @@ impl LineNumberRuler {
             // SAFETY: as above; drawing happens inside AppKit's draw call.
             unsafe { label.drawAtPoint_withAttributes(NSPoint::new(x, point.y), Some(&attrs)) };
         }
+        self.set_tool_tips(tips);
     }
 }
 

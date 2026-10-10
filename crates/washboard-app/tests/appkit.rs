@@ -1646,9 +1646,21 @@ mod checks {
         assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
         let summary = project.issues().summary();
         assert!(summary.starts_with("⚠ "), "{summary}");
+        let ruler = editor.ruler();
+        assert!(ruler.error_lines().contains(&line), "gutter marker");
         assert!(
-            editor.ruler().error_lines().contains(&line),
-            "gutter marker"
+            ruler.warning_lines().is_empty(),
+            "{:?}",
+            ruler.warning_lines()
+        );
+        // Hovering the marker lists the line's messages.
+        let tip = ruler.tool_tip(line).expect("the marker has a tool tip");
+        assert!(tip.contains(&issues.rows()[0][1]), "{tip}");
+        ruler.display();
+        assert!(
+            ruler.tool_tip_lines().contains(&line),
+            "{:?}",
+            ruler.tool_tip_lines()
         );
         wait_until("the invalid marker", || selected_markers(&project).1);
 
@@ -1684,6 +1696,7 @@ mod checks {
             project.issues().summary() == "✓ Valid"
         });
         assert!(editor.ruler().error_lines().is_empty(), "gutter cleared");
+        assert_eq!(editor.ruler().tool_tip(line), None);
         wait_until("the marker to clear", || !selected_markers(&project).1);
         autoreleasepool(|_| project.project_window().performClose(None));
     }
