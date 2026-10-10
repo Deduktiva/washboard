@@ -273,8 +273,8 @@ selected pane (`SettingsPane`) is kept there too.
 4. Copy files, create DB, default server pre-filled from `soap:address`
    (disabled until the user confirms the URL — no implicit connection).
 
-### Replace WSDL (Project ▸ Replace WSDL…)
-Same import sheet. After replacing: recompile, re-validate every request, show a report
+### Replace WSDL (Settings ▸ the project's General ▸ Replace WSDL…)
+Same import sheet, on the Settings window. After replacing: recompile, re-validate every request, show a report
 (operations added/removed, requests now invalid). Requests are never rewritten automatically.
 
 ### Requests
@@ -392,9 +392,10 @@ persisted. Bodies over 5 MB are truncated in the view.
 One ordinary window (not a sheet) for the app and every open project, laid out like System
 Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped forms. The
 "Washboard" section holds the app settings (General: indent width, format on save); below it,
-one section per open project with General (name, folder, WSDL files) and Servers (server list,
-the selected server's form, the WSDL's suggested servers). Project panes say that their
-settings belong to the project and are saved in its folder. Changes apply as they are made;
+one section per open project with General (name, folder, WSDL files with Show in Finder and
+Replace WSDL…) and Servers (server list, the selected server's form, the WSDL's suggested
+servers). Project panes say that their settings belong to the project and are saved in its
+folder. Changes apply as they are made;
 there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
 the window on that project's Servers pane. A closed project's section leaves the window.
 
