@@ -60,6 +60,10 @@ must likewise skip its build when cross-checking for macOS from another host (se
   Rust state in `#[ivars]` behind `RefCell`/`Cell`. AppKit delegate properties are weak: the
   controller owns its delegates and data sources. Check method names on docs.rs for the exact
   versions in `Cargo.lock`; the selector-to-Rust naming is easy to guess wrong.
+- **Forms (`washboard-app`):** build Settings-style forms (sections, grouped rows, footnotes)
+  with `form.rs`, not hand-made stacks; it owns the margins and alignment, listed in its module
+  doc. Add a row kind there rather than positioning a one-off. `tests/appkit.rs`
+  (`assert_form_layout`) checks the geometry; call it for a new pane.
 - **Tests:** use `fixtures/` for WSDL/XSD inputs; build temp dirs for project tests. Fixture
   files are byte-exact (`.gitattributes`); never reformat them.
 - **Style:** match the surrounding code; doc comments on public items explain *why* and
