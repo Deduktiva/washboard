@@ -162,7 +162,7 @@ impl ImportSheetController {
             control
         };
         let (location, wsdl, files) = (path(), path(), value());
-        let button = |title: &str, action: Sel| target_button(title, &this, action, mtm);
+        let button = |title: &str, action: Sel| layout::button(title, &this, action, mtm);
         let add = button("Add…", sel!(addFiles:));
         let clear = button("Clear", sel!(clearFiles:));
 
@@ -575,25 +575,6 @@ fn sheet_window(title: &str, size: NSSize, mtm: MainThreadMarker) -> Retained<NS
         NSWindowStyleMask::Titled,
         mtm,
     )
-}
-
-fn target_button(
-    title: &str,
-    target: &NSObject,
-    action: Sel,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    let target: &AnyObject = target;
-    // SAFETY: every caller owns the button through its window, so the target outlives the
-    // button's weak target reference.
-    unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str(title),
-            Some(target),
-            Some(action),
-            mtm,
-        )
-    }
 }
 
 fn label(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {

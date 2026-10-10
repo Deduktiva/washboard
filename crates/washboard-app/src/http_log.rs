@@ -10,7 +10,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSColor, NSFont, NSPanel, NSScrollView, NSSplitView, NSStackView,
+    NSBackingStoreType, NSColor, NSFont, NSPanel, NSScrollView, NSSplitView, NSStackView,
     NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
 };
 use objc2_foundation::{
@@ -103,16 +103,7 @@ impl HttpLog {
         sides.addSubview(&request);
         sides.addSubview(&response);
 
-        // SAFETY: this object owns the button through the panel, so it outlives the button's
-        // weak target reference.
-        let reveal = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                ns_string!("Show Authorization"),
-                Some(&this),
-                Some(sel!(toggleAuthorization:)),
-                mtm,
-            )
-        };
+        let reveal = layout::button("Show Authorization", &this, sel!(toggleAuthorization:), mtm);
         let tls = NSTextField::labelWithString(ns_string!(""), mtm);
         let header = layout::row(&[layout::view(reveal), layout::view(tls.clone())], mtm);
         header.setSpacing(12.0);
@@ -296,10 +287,6 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     panel.setTitle(ns_string!("HTTP Log"));
     panel.setHidesOnDeactivate(false);
     // Size and position are kept across launches.
-    let name = ns_string!("HTTP Log");
-    if !panel.setFrameUsingName(name) {
-        panel.center();
-    }
-    panel.setFrameAutosaveName(name);
+    layout::keep_frame(&panel, ns_string!("HTTP Log"));
     panel
 }

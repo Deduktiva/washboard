@@ -610,6 +610,8 @@ fn send_records_history_and_last_server() {
     let shown = ok(wb(&e, &["request", "history", req, "--show", "2"]));
     assert!(shown.contains("customer locked"), "{shown}");
     assert!(shown.contains(&sent), "{shown}");
+    assert!(shown.contains("\nPOST /"), "{shown}");
+    assert!(shown.contains("\nsoapaction: "), "{shown}");
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -647,6 +649,12 @@ fn basic_auth_password_comes_from_the_environment() {
         "no basic auth header: {}",
         s.head
     );
+    let shown = ok(wb(
+        &e,
+        &["request", "history", "CreateOrder 1", "--show", "1"],
+    ));
+    assert!(shown.contains("authorization: Basic ••••••••\n"), "{shown}");
+    assert!(!shown.contains("YWxpY2U6c2VjcmV0"), "{shown}");
     // CreateOrder has no soapAction: sent as an empty quoted string.
     assert!(
         s.head.to_ascii_lowercase().contains("soapaction: \"\""),

@@ -5,15 +5,16 @@
 //! scroll views use `Fill`, where the views that hug least (scroll views) take the slack.
 
 use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSFont,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSButton, NSColor, NSFont,
     NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
     NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView,
     NSStackViewDistribution, NSTableCellView, NSTextField, NSTitlePosition,
     NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString};
 
 /// `v` as a plain `NSView`, for stacks and grids, whatever its class's depth below `NSView`.
 pub fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
@@ -211,6 +212,36 @@ pub fn vertical_scroll(document: &NSView, mtm: MainThreadMarker) -> Retained<NSS
     // Shown only when the content does not fit, also with legacy (always-on) scrollers.
     scroll.setAutohidesScrollers(true);
     scroll
+}
+
+/// A push button sending `action` to `target`, which must own the button (through its view
+/// or window): the button holds its target weakly.
+pub fn button(
+    title: &str,
+    target: &NSObject,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let target: &AnyObject = target;
+    // SAFETY: every caller owns the button, so the target outlives the button's weak target
+    // reference; action methods take the sender.
+    unsafe {
+        NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(title),
+            Some(target),
+            Some(action),
+            mtm,
+        )
+    }
+}
+
+/// Keeps `window`'s size and position in the user defaults under `name`; the first time, it
+/// starts centred.
+pub fn keep_frame(window: &NSWindow, name: &NSString) {
+    if !window.setFrameUsingName(name) {
+        window.center();
+    }
+    window.setFrameAutosaveName(name);
 }
 
 /// A titled window of content size `size`, for a controller that keeps it in a `Retained`:

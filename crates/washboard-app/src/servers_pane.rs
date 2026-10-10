@@ -28,7 +28,7 @@ use washboard_ui_model::{ProjectKey, WsdlServer};
 use crate::app::ModelAccess;
 use crate::form;
 use crate::layout::{self, view};
-use crate::settings_window::{project_note, state, target_button};
+use crate::settings_window::{project_note, state};
 
 const TIMEOUT_WIDTH: f64 = 60.0;
 const SHEET_WIDTH: f64 = 480.0;
@@ -504,13 +504,13 @@ impl ServersPane {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let edit = target_button("Edit…", self, sel!(editServer:), mtm);
+                let edit = layout::button("Edit…", self, sel!(editServer:), mtm);
                 edit.setTag(NSInteger::try_from(i).unwrap_or(0));
                 form::subtitle_row(&s.name, &s.url, &edit, mtm)
             })
             .collect();
         rows.extend(self.ivars().wsdl.borrow().iter().enumerate().map(|(i, s)| {
-            let add = target_button("Add as Server…", self, sel!(addWsdlServer:), mtm);
+            let add = layout::button("Add as Server…", self, sel!(addWsdlServer:), mtm);
             add.setTag(NSInteger::try_from(i).unwrap_or(0));
             let row = form::tagged_subtitle_row(&s.port, WSDL_TAG, &s.url, &add, mtm);
             row.setToolTip(Some(&NSString::from_str(WSDL_TOOL_TIP)));
@@ -520,7 +520,7 @@ impl ServersPane {
         if rows.is_empty() {
             rows.push(form::text_row("No servers", mtm));
         }
-        let add = target_button("Add Server…", self, sel!(addServer:), mtm);
+        let add = layout::button("Add Server…", self, sel!(addServer:), mtm);
         rows.push(form::button_row(vec![view(add)], mtm));
         let list = self.ivars().list.get().expect("set in new()");
         form::set_rows(list, rows, mtm);
@@ -590,10 +590,10 @@ impl ServersPane {
         );
         let title = form::header("", mtm);
 
-        let delete = target_button("Delete Server", self, sel!(deleteServer:), mtm);
-        let cancel = target_button("Cancel", self, sel!(cancelServer:), mtm);
+        let delete = layout::button("Delete Server", self, sel!(deleteServer:), mtm);
+        let cancel = layout::button("Cancel", self, sel!(cancelServer:), mtm);
         cancel.setKeyEquivalent(ns_string!("\u{1b}"));
-        let save = target_button("Save", self, sel!(saveServer:), mtm);
+        let save = layout::button("Save", self, sel!(saveServer:), mtm);
         save.setKeyEquivalent(ns_string!("\r"));
         let body = form::body(
             vec![

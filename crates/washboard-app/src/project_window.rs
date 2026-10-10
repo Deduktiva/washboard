@@ -16,9 +16,9 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBeep, NSBox, NSBoxType, NSButton, NSColor, NSImage, NSLayoutAttribute,
-    NSLineBreakMode, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView,
-    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSAlert, NSBeep, NSBox, NSBoxType, NSColor, NSImage, NSLayoutAttribute, NSLineBreakMode,
+    NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView, NSSplitView,
+    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
     NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
@@ -351,11 +351,7 @@ impl ProjectWindowController {
         window.setContentSize(NSSize::new(1100.0, 700.0));
         // Size and position are kept per project, by folder (the key changes every launch),
         // as PLAN §3 intends; a project opened for the first time starts centred.
-        let frame_name = autosave_name("ProjectWindow", folder);
-        if !window.setFrameUsingName(&frame_name) {
-            window.center();
-        }
-        window.setFrameAutosaveName(&frame_name);
+        layout::keep_frame(&window, &autosave_name("ProjectWindow", folder));
         this.add_accessory(&window, mtm);
         // Request and response start with half each, unless the project remembers them.
         window.layoutIfNeeded();
@@ -690,21 +686,9 @@ impl ProjectWindowController {
     fn add_accessory(&self, window: &NSWindow, mtm: MainThreadMarker) {
         let label = layout::small_label("", mtm);
         layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
-        let button = |title: &str, action| {
-            // SAFETY: this controller owns the window and so the button, which holds its
-            // target weakly; both actions take the sender.
-            unsafe {
-                NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str(title),
-                    Some(self),
-                    Some(action),
-                    mtm,
-                )
-            }
-        };
-        let restore = button("Restore Request", sel!(restoreRequest:));
+        let restore = layout::button("Restore Request", self, sel!(restoreRequest:), mtm);
         restore.setToolTip(Some(ns_string!("Copy the sent request into the editor")));
-        let latest = button("Show Latest", sel!(showLatest:));
+        let latest = layout::button("Show Latest", self, sel!(showLatest:), mtm);
         latest.setKeyEquivalent(ns_string!("\u{1b}"));
         latest.setBezelColor(Some(&NSColor::controlAccentColor()));
         latest.setToolTip(Some(ns_string!("Show Latest (Esc)")));

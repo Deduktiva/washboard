@@ -11,10 +11,10 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn,
+    NSColor, NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn,
     NSControlTextEditingDelegate, NSImage, NSImageView, NSLayoutConstraintOrientation,
     NSLayoutPriorityDefaultHigh, NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPopUpButton, NSSplitViewController, NSSplitViewItem, NSStackView,
@@ -58,7 +58,6 @@ impl Pane {
 /// The selected pane in the user defaults: `app`, or `general:` / `servers:` and the project's
 /// folder, which, unlike its key, is the same on the next launch.
 pub const PANE_KEY: &str = "SettingsPane";
-const FRAME_NAME: &str = "Settings";
 
 #[derive(Debug)]
 pub struct ItemIvars {
@@ -334,11 +333,7 @@ impl SettingsWindowController {
         window.setContentMinSize(NSSize::new(620.0, 420.0));
         // The window holds its delegate weakly; this controller owns the window.
         window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
-        let name = NSString::from_str(FRAME_NAME);
-        if !window.setFrameUsingName(&name) {
-            window.center();
-        }
-        window.setFrameAutosaveName(&name);
+        layout::keep_frame(&window, ns_string!("Settings"));
 
         let (app_pane, indent, on_save) = app_pane(&this, mtm);
         let ivars = this.ivars();
@@ -433,44 +428,38 @@ impl SettingsWindowController {
 
     /// The model's servers changed (`ServersChanged`).
     pub fn reload_servers(&self, key: ProjectKey) {
-        let pane = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, p)| p.clone());
-        if let Some(pane) = pane {
+        if let Some(pane) = self.existing_servers(key) {
             pane.reload();
         }
     }
 
     /// The Servers pane of project `key`, created on first use.
     pub fn servers(&self, key: ProjectKey) -> Retained<ServersPane> {
-        let existing = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, p)| p.clone());
-        existing.unwrap_or_else(|| {
+        self.existing_servers(key).unwrap_or_else(|| {
             let pane = ServersPane::new(key, &self.project_name(key), self.mtm());
             self.ivars().servers.borrow_mut().push((key, pane.clone()));
             pane
         })
     }
 
+    fn existing_servers(&self, key: ProjectKey) -> Option<Retained<ServersPane>> {
+        let panes = self.ivars().servers.borrow();
+        panes
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, p)| p.clone())
+    }
+
     /// The General pane's buttons under the WSDL files.
     fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Vec<Retained<NSView>> {
         vec![
-            view(target_button(
+            view(layout::button(
                 "Show in Finder",
                 self,
                 sel!(showWsdlInFinder:),
                 mtm,
             )),
-            view(target_button(
+            view(layout::button(
                 "Replace WSDL…",
                 self,
                 sel!(replaceWsdl:),
@@ -864,25 +853,6 @@ pub(crate) fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSV
             "These settings affect only the project “{project}”."
         ))
         .build()
-}
-
-pub(crate) fn target_button(
-    title: &str,
-    target: &NSObject,
-    action: Sel,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    let target: &AnyObject = target;
-    // SAFETY: the settings window owns every button and its target, so the target outlives
-    // the button's weak target reference.
-    unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str(title),
-            Some(target),
-            Some(action),
-            mtm,
-        )
-    }
 }
 
 fn settings_window(mtm: MainThreadMarker) -> Retained<NSWindow> {
