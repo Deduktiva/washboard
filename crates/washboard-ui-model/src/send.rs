@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
 use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
-use washboard_core::project::HistoryRecord;
+use washboard_core::project::{HistoryRecord, RequestHead};
 use washboard_core::validate::validate_request;
 use washboard_core::xml;
 
@@ -56,6 +56,9 @@ pub struct ResponseView {
     pub status: Option<u16>,
     /// Transport error (connect, TLS, timeout); then there is no response.
     pub error: Option<String>,
+    /// The request's start line and headers as sent; `None` for history entries recorded
+    /// before the history kept them.
+    pub request: Option<RequestHead>,
     pub headers: Vec<(String, String)>,
     /// Pretty-printed if it is well-formed XML, else as received.
     pub body: Option<String>,
@@ -76,6 +79,7 @@ impl ResponseView {
             duration: entry.duration,
             status: entry.http_status,
             error: entry.error,
+            request: record.request_head,
             headers: record.response_headers,
             size: record.response_body.as_ref().map_or(0, Vec::len),
             body: record
@@ -102,11 +106,37 @@ impl ResponseView {
             duration: Some(exchange.duration),
             status: response.and_then(RawMessage::status_code),
             error: exchange.error.clone(),
+            request: Some(RequestHead::of(&exchange.request)),
             headers: response.map(|r| r.headers.clone()).unwrap_or_default(),
             size: response.map_or(0, |r| r.body.len()),
             body: response.map(|r| display_body(&r.body, indent)),
             fault,
         }
+    }
+
+    /// The Headers tab: the request's start line and headers as sent, then the response's.
+    pub fn headers_text(&self) -> String {
+        let mut text = String::from("Request\n");
+        match &self.request {
+            Some(head) => {
+                text.push_str(&head.start_line);
+                text.push('\n');
+                push_headers(&mut text, &head.headers);
+            }
+            None => text.push_str("not recorded\n"),
+        }
+        text.push_str("\nResponse\n");
+        if self.error.is_some() {
+            text.push_str("no response\n");
+        }
+        push_headers(&mut text, &self.headers);
+        text
+    }
+}
+
+fn push_headers(text: &mut String, headers: &[(String, String)]) {
+    for (name, value) in headers {
+        text.push_str(&format!("{name}: {value}\n"));
     }
 }
 
