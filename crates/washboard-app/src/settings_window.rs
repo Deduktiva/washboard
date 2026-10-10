@@ -34,6 +34,7 @@ use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServ
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout::{self, view};
 use crate::table::TextTable;
+use crate::text::count;
 
 /// Which pane the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,12 +715,7 @@ fn app_pane(
     let indent =
         NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
     for width in INDENT_RANGE {
-        let title = if width == 1 {
-            "1 space".to_owned()
-        } else {
-            format!("{width} spaces")
-        };
-        indent.addItemWithTitle(&NSString::from_str(&title));
+        indent.addItemWithTitle(&NSString::from_str(&count(width, "space")));
     }
     let on_save = NSSwitch::new(mtm);
     let target: &AnyObject = target;
