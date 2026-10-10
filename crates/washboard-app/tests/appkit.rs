@@ -1656,12 +1656,11 @@ mod checks {
         // Hovering the marker lists the line's messages.
         let tip = ruler.tool_tip(line).expect("the marker has a tool tip");
         assert!(tip.contains(&issues.rows()[0][1]), "{tip}");
-        ruler.display();
-        assert!(
-            ruler.tool_tip_lines().contains(&line),
-            "{:?}",
-            ruler.tool_tip_lines()
-        );
+        // Its rect is placed when the ruler draws, which needs the text laid out first.
+        wait_until("the marker's tool tip rect", || {
+            ruler.display();
+            ruler.tool_tip_lines().contains(&line)
+        });
         // So does hovering the underline in the text, before the element's hover.
         let message = issues.rows()[0][1].clone();
         let row = text[..start].rfind('\n').map_or(0, |i| i + 1)
