@@ -29,7 +29,7 @@ pub enum Event {
         project: ProjectKey,
         request: RequestId,
     },
-    /// The server list changed; the popup and the settings sheet reload it.
+    /// The server list or the WSDL's addresses changed; the popup and the Servers pane reload.
     ServersChanged { project: ProjectKey },
     /// The server popup's selection changed.
     ServerSelectionChanged { project: ProjectKey },

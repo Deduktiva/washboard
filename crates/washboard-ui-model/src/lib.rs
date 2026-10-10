@@ -39,11 +39,9 @@ pub use format::{FormatSettings, INDENT_RANGE, Reformat};
 pub use front_end::{
     Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
 };
-pub use import::{
-    CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome, SuggestedServer,
-};
+pub use import::{CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome};
 pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
 pub use window::{
     OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
-    ServiceNode, Sidebar,
+    ServiceNode, Sidebar, WsdlServer,
 };

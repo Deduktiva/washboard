@@ -57,7 +57,8 @@ pub struct CheckedImport {
     pub report: StructuralReport,
     /// Schema compile errors and warnings; empty if the check already failed.
     pub compile: Vec<Diagnostic>,
-    /// `(port, address)` of each SOAP 1.1 port, offered as servers after creation.
+    /// `(port, address)` of each SOAP 1.1 port: New Project opens the Servers pane when there
+    /// is one, before the new project's schema has loaded.
     pub addresses: Vec<(String, String)>,
     /// Files read because a relative reference named them and they exist next to the
     /// importing file; the user did not add them.
@@ -91,13 +92,6 @@ pub struct ReplaceOutcome {
     pub removed: Vec<OperationRef>,
     /// Requests that fail validation against the new WSDL.
     pub invalid: Vec<RequestId>,
-}
-
-/// A server suggested from a `soap:address`, added only once the user confirms its URL.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SuggestedServer {
-    pub port: String,
-    pub url: String,
 }
 
 impl App {
@@ -171,8 +165,10 @@ impl App {
         self.events.push(Event::ImportChanged { target });
     }
 
-    /// Create (New Project): copies the files, creates and opens the project, and offers the
-    /// WSDL's addresses as servers.
+    /// Create (New Project): copies the files, creates and opens the project. The WSDL's
+    /// addresses become servers only through Add as Server… ([`ProjectWindow::wsdl_servers`]).
+    ///
+    /// [`ProjectWindow::wsdl_servers`]: crate::ProjectWindow::wsdl_servers
     pub fn create_project(&mut self) -> Result<ProjectKey, ModelError> {
         let target = ImportTarget::NewProject;
         let sheet = self.imports.get(&target).ok_or(ModelError::NoImport)?;
@@ -186,49 +182,12 @@ impl App {
         let name = sheet.name.trim();
         let folder = parent.join(name);
         let project = Project::create(&folder, name, &checked.set)?;
-        let suggested = checked
-            .addresses
-            .iter()
-            .map(|(port, url)| SuggestedServer {
-                port: port.clone(),
-                url: url.clone(),
-            })
-            .collect();
         self.imports.remove(&target);
         self.events.push(Event::ImportChanged { target });
         let key = self.add_project(project, OpenProject::new(&folder));
-        if let Some(window) = self.window_mut(key) {
-            window.suggested_servers = suggested;
-        }
         self.note_recent(&folder);
         self.update_welcome();
         Ok(key)
-    }
-
-    /// Settings ▸ Servers: adds a suggested server once the user has confirmed (or edited) its
-    /// URL. Nothing connects before that.
-    pub fn confirm_suggested_server(
-        &mut self,
-        key: ProjectKey,
-        index: usize,
-        url: &str,
-    ) -> Result<(), ModelError> {
-        let window = self.window(key)?;
-        if index >= window.suggested_servers.len() {
-            return Ok(());
-        }
-        let suggestion = window.suggested_servers.remove(index);
-        let id = self.add_server(key)?;
-        let window = self.window(key)?;
-        let mut server = window
-            .servers
-            .iter()
-            .find(|s| s.id == id)
-            .cloned()
-            .ok_or(ModelError::NoServer)?;
-        server.name = suggestion.port;
-        server.url = url.to_owned();
-        self.update_server(key, &server, None)
     }
 
     /// Replace (Replace WSDL): swaps the project's WSDL set, then reloads the schema and
@@ -264,6 +223,8 @@ impl App {
         window.schema = crate::window::SchemaState::Loading;
         self.imports.remove(&target);
         self.events.push(Event::ImportChanged { target });
+        // The old WSDL's addresses go until the new one has loaded.
+        self.events.push(Event::ServersChanged { project: key });
         self.spawn(
             move || {
                 let schema = ProjectSchema::load(&entry, wsdl_dir)?;

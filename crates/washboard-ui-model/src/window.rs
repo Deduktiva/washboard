@@ -17,7 +17,7 @@ use washboard_core::wsdl::{self, Protocol, Sources, Wsdl};
 use crate::app::ModelError;
 use crate::diagnostics::WellFormedness;
 use crate::editor::Editor;
-use crate::import::{ReplaceOutcome, SuggestedServer};
+use crate::import::ReplaceOutcome;
 use crate::send::{OlderExchange, ResponseView, Sending};
 
 /// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
@@ -155,6 +155,14 @@ impl OperationNode {
     }
 }
 
+/// A SOAP 1.1 port's `soap:address`, listed with the servers but never one itself: it is only
+/// sent to once the user has added it as a server (PLAN §4 "Create project", step 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsdlServer {
+    pub port: String,
+    pub url: String,
+}
+
 /// What the request bar shows for the open request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSummary {
@@ -178,7 +186,6 @@ pub struct ProjectWindow {
     pub(crate) response: Option<ResponseView>,
     pub(crate) older: Option<OlderExchange>,
     pub(crate) sending: Option<Sending>,
-    pub(crate) suggested_servers: Vec<SuggestedServer>,
     pub(crate) replace_outcome: Option<ReplaceOutcome>,
 }
 
@@ -235,9 +242,18 @@ impl ProjectWindow {
         self.editor.as_ref().is_some_and(|e| e.dirty())
     }
 
-    /// Servers from the WSDL's addresses, not added until the user confirms them.
-    pub fn suggested_servers(&self) -> &[SuggestedServer] {
-        &self.suggested_servers
+    /// The loaded WSDL's SOAP 1.1 addresses, in document order; empty while the schema loads
+    /// or when it failed. Read from the WSDL each time, never stored: the WSDL is the record.
+    pub fn wsdl_servers(&self) -> Vec<WsdlServer> {
+        let SchemaState::Ready(schema) = &self.schema else {
+            return Vec::new();
+        };
+        schema
+            .wsdl
+            .soap11_addresses()
+            .into_iter()
+            .map(|(port, url)| WsdlServer { port, url })
+            .collect()
     }
 
     /// What the last Replace WSDL changed.

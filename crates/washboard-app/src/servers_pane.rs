@@ -1,9 +1,13 @@
 //! A project's Servers pane in the Settings window: the project's servers in a list, each
-//! with an Edit… button that opens it in a sheet, and the servers the WSDL suggests.
+//! with an Edit… button that opens it in a sheet, then the WSDL's SOAP 1.1 addresses, each
+//! with Add as Server…, which opens the sheet on a new server filled in from it.
 //!
 //! A sheet, as System Settings edits a network's details, rather than a form under the list:
 //! that form showed with no server selected, and which server it edited followed a list
 //! selection. The sheet edits a copy; Save writes it through the model, Cancel drops it.
+//!
+//! The WSDL's rows are not servers: they can't be edited, deleted or sent to, and stay when a
+//! server has the same address. The list says what the WSDL offers; the user decides.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::time::Duration;
@@ -19,7 +23,7 @@ use objc2_foundation::{
     NSInteger, NSNumber, NSNumberFormatter, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
-use washboard_ui_model::{ProjectKey, SuggestedServer};
+use washboard_ui_model::{ProjectKey, WsdlServer};
 
 use crate::app::ModelAccess;
 use crate::form;
@@ -30,6 +34,8 @@ const TIMEOUT_WIDTH: f64 = 60.0;
 const SHEET_WIDTH: f64 = 480.0;
 /// A new server's timeout, until the user picks another; the model's default.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const WSDL_TAG: &str = "From WSDL";
+const WSDL_TOOL_TIP: &str = "From the WSDL's soap:address. Add it as a server to use it.";
 
 /// The sheet's controls.
 #[derive(Debug)]
@@ -54,11 +60,12 @@ pub struct ServersIvars {
     key: ProjectKey,
     /// The model's servers as last shown.
     servers: RefCell<Vec<Server>>,
-    suggested: RefCell<Vec<SuggestedServer>>,
+    /// The WSDL's addresses as last shown, listed after the servers.
+    wsdl: RefCell<Vec<WsdlServer>>,
     view: OnceCell<Retained<NSView>>,
     list: OnceCell<Retained<NSBox>>,
-    /// The suggestions' section and the group its rows go in.
-    suggestions: OnceCell<(Retained<NSView>, Retained<NSBox>)>,
+    /// The list's rows, servers first, then the WSDL's.
+    rows: RefCell<Vec<Retained<NSView>>>,
     sheet: OnceCell<Retained<NSWindow>>,
     body: OnceCell<Retained<NSView>>,
     form: OnceCell<ServerForm>,
@@ -113,9 +120,9 @@ define_class!(
             self.delete();
         }
 
-        #[unsafe(method(confirmSuggestion:))]
-        fn confirm_suggestion_action(&self, sender: Option<&AnyObject>) {
-            self.confirm_suggestion(tag(sender));
+        #[unsafe(method(addWsdlServer:))]
+        fn add_wsdl_server_action(&self, sender: Option<&AnyObject>) {
+            self.add_wsdl_server(tag(sender));
         }
     }
 );
@@ -125,10 +132,10 @@ impl ServersPane {
         let this = Self::alloc(mtm).set_ivars(ServersIvars {
             key,
             servers: RefCell::new(Vec::new()),
-            suggested: RefCell::new(Vec::new()),
+            wsdl: RefCell::new(Vec::new()),
             view: OnceCell::new(),
             list: OnceCell::new(),
-            suggestions: OnceCell::new(),
+            rows: RefCell::new(Vec::new()),
             sheet: OnceCell::new(),
             body: OnceCell::new(),
             form: OnceCell::new(),
@@ -139,12 +146,6 @@ impl ServersPane {
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
         let list = form::group(vec![], mtm);
-        let suggestion_rows = form::group(vec![], mtm);
-        let suggestions = form::Section::new(mtm)
-            .header(&form::header("Suggested by the WSDL", mtm))
-            .group(&suggestion_rows)
-            .text("Servers named by the WSDL's addresses. Add one to use it.")
-            .build();
         let view = form::page(
             vec![
                 project_note(project, mtm),
@@ -152,7 +153,6 @@ impl ServersPane {
                     .header(&form::header("Servers", mtm))
                     .group(&list)
                     .build(),
-                suggestions.clone(),
             ],
             mtm,
         );
@@ -161,7 +161,6 @@ impl ServersPane {
         let ivars = this.ivars();
         let _ = ivars.view.set(view);
         let _ = ivars.list.set(list);
-        let _ = ivars.suggestions.set((suggestions, suggestion_rows));
         let _ = ivars.sheet.set(sheet);
         let _ = ivars.body.set(body);
         let _ = ivars.form.set(form);
@@ -198,25 +197,20 @@ impl ServersPane {
             .collect()
     }
 
-    /// The servers suggested by the WSDL's `soap:address`es, not yet confirmed: port, address.
-    pub fn suggestion_rows(&self) -> Vec<Vec<String>> {
+    /// The WSDL's addresses the list shows after the servers: port and address.
+    pub fn wsdl_rows(&self) -> Vec<Vec<String>> {
         self.ivars()
-            .suggested
+            .wsdl
             .borrow()
             .iter()
             .map(|s| vec![s.port.clone(), s.url.clone()])
             .collect()
     }
 
-    /// Whether the suggestions' section is shown.
-    pub fn shows_suggestions(&self) -> bool {
-        !self
-            .ivars()
-            .suggestions
-            .get()
-            .expect("set in new()")
-            .0
-            .isHidden()
+    /// The list's rows, servers first, then the WSDL's, without the "No servers" placeholder
+    /// and the Add Server… row.
+    pub fn list_rows(&self) -> Vec<Retained<NSView>> {
+        self.ivars().rows.borrow().clone()
     }
 
     /// The row of the server the sheet edits; `None` while it adds one or is closed.
@@ -264,18 +258,17 @@ impl ServersPane {
         &self.form().delete
     }
 
-    /// Shows the model's servers and suggestions.
+    /// Shows the model's servers and the WSDL's addresses.
     pub fn reload(&self) {
         let key = self.ivars().key;
-        let (servers, suggested) = self
+        let (servers, wsdl) = self
             .read(|app| {
                 app.project(key)
-                    .map(|w| (w.servers().to_vec(), w.suggested_servers().to_vec()))
+                    .map(|w| (w.servers().to_vec(), w.wsdl_servers()))
             })
             .flatten()
             .unwrap_or_default();
-        self.show_suggestions(&suggested);
-        *self.ivars().suggested.borrow_mut() = suggested;
+        *self.ivars().wsdl.borrow_mut() = wsdl;
         *self.ivars().servers.borrow_mut() = servers;
         self.show_list();
         // Deleted, from the sheet's Delete Server or elsewhere.
@@ -304,10 +297,23 @@ impl ServersPane {
 
     /// Opens the sheet on a new server, which Save adds.
     pub fn add_server(&self) {
+        self.add_new(String::new(), String::new());
+    }
+
+    /// Opens the sheet on a new server named after WSDL row `row`'s port, with its address as
+    /// the URL. Nothing is added, and nothing connects, before Save.
+    pub fn add_wsdl_server(&self, row: usize) {
+        let Some(wsdl) = self.ivars().wsdl.borrow().get(row).cloned() else {
+            return;
+        };
+        self.add_new(wsdl.port, wsdl.url);
+    }
+
+    fn add_new(&self, name: String, url: String) {
         let server = Server {
             id: ServerId::new(),
-            name: String::new(),
-            url: String::new(),
+            name,
+            url,
             ignore_tls_errors: false,
             auth: Auth::None,
             timeout: DEFAULT_TIMEOUT,
@@ -387,23 +393,6 @@ impl ServersPane {
 
     pub fn timeout_field(&self) -> &NSTextField {
         &self.form().timeout
-    }
-
-    /// Adds suggestion `row` as a server with its address as suggested.
-    pub fn confirm_suggestion(&self, row: usize) {
-        let Some(url) = self
-            .ivars()
-            .suggested
-            .borrow()
-            .get(row)
-            .map(|s| s.url.clone())
-        else {
-            return;
-        };
-        let key = self.ivars().key;
-        self.command("Could not add the server", |app| {
-            app.confirm_suggested_server(key, row, &url)
-        });
     }
 
     /// `current` with the sheet's values, and the password to store, if one was typed.
@@ -504,7 +493,8 @@ impl ServersPane {
         self.ivars().form.get().expect("set in new()")
     }
 
-    /// One row per server: its name and address, and Edit…; then Add Server….
+    /// One row per server: its name and address, and Edit…; then one per WSDL address, tagged,
+    /// with Add as Server…; then Add Server….
     fn show_list(&self) {
         let mtm = self.mtm();
         let mut rows: Vec<Retained<NSView>> = self
@@ -519,6 +509,14 @@ impl ServersPane {
                 form::subtitle_row(&s.name, &s.url, &edit, mtm)
             })
             .collect();
+        rows.extend(self.ivars().wsdl.borrow().iter().enumerate().map(|(i, s)| {
+            let add = target_button("Add as Server…", self, sel!(addWsdlServer:), mtm);
+            add.setTag(NSInteger::try_from(i).unwrap_or(0));
+            let row = form::tagged_subtitle_row(&s.port, WSDL_TAG, &s.url, &add, mtm);
+            row.setToolTip(Some(&NSString::from_str(WSDL_TOOL_TIP)));
+            row
+        }));
+        *self.ivars().rows.borrow_mut() = rows.clone();
         if rows.is_empty() {
             rows.push(form::text_row("No servers", mtm));
         }
@@ -526,23 +524,6 @@ impl ServersPane {
         rows.push(form::button_row(vec![view(add)], mtm));
         let list = self.ivars().list.get().expect("set in new()");
         form::set_rows(list, rows, mtm);
-    }
-
-    /// One row per suggestion: its port and address, and an Add button.
-    fn show_suggestions(&self, suggested: &[SuggestedServer]) {
-        let mtm = self.mtm();
-        let (section, rows) = self.ivars().suggestions.get().expect("set in new()");
-        form::set_shown(section, !suggested.is_empty());
-        let rows_now = suggested
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let add = target_button("Add", self, sel!(confirmSuggestion:), mtm);
-                add.setTag(NSInteger::try_from(i).unwrap_or(0));
-                form::subtitle_row(&s.port, &s.url, &add, mtm)
-            })
-            .collect();
-        form::set_rows(rows, rows_now, mtm);
     }
 
     fn server_sheet(
