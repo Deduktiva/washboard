@@ -244,6 +244,11 @@ CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT);  -- split positions, s
 bookmark data, window frame autosave name, last selected request). Bookmark data is stored
 from day one so we can enable the App Sandbox later without a migration.
 
+App settings (not per project) live in the user defaults (`NSUserDefaults`, domain
+`at.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
+and `FormatOnSave` so far. The app reads them and passes them to the model at launch and on
+change; the model stores no settings of its own, and the CLI reads none.
+
 ---
 
 ## 4. Feature behaviour
@@ -274,7 +279,11 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
   (`GetCustomer 1`, `GetCustomer 2`, …). The new row enters inline-rename immediately.
 - Double-clicking an operation in the sidebar's *Operations* section also creates a request.
 - **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`),
-  **Delete** (⌘⌫, confirms; history deleted with it).
+  **Delete** (⌘⌫, confirms; history deleted with it). The same commands are in each request
+  row's context menu, which acts on the clicked row; an operation's and the REQUESTS header's
+  menus offer New Request.
+- Requests are listed by name in Finder order (case-insensitive, numbers by value); a new or
+  renamed request moves to its place and stays selected.
 - Each request remembers `last_server_id`; the toolbar server popup shows it. A new request
   uses the most recently used server of the project.
 
@@ -295,7 +304,10 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
   fed by the Rust schema model: element names allowed at the cursor path, attribute names,
   enumeration values. Triggered on `<`, space inside a tag, `="`, and ⌥⎋.
 - **Hover** on an element name: type name, cardinality, `xs:documentation` (tooltip).
-- Format XML (⌃I) — pretty-print preserving comments.
+- Format XML (⌃I, Edit menu): re-indents element-only content with the app's indent width
+  (1–8 spaces, default 2; also used for new requests and the response pane), keeping text,
+  comments, PIs and attribute values byte for byte. One undo step; a request that is not
+  well-formed is left alone.
 
 ### Validation semantics
 1. Must be well-formed.
@@ -372,6 +384,9 @@ persisted. Bodies over 5 MB are truncated in the view.
   immediately on: switching requests, send, window losing key, app deactivate, quit.
 - ⌘S = **Save All** across every open project (menu only, no toolbar button). Since autosave
   is aggressive, it mostly acts as "flush now"; the window's edited dot reflects unsaved buffers.
+  With "Format on save" on (off by default), Save All first formats the open request, as the
+  same undo step as ⌃I. Autosave never formats (it would rewrite the text under the cursor),
+  and neither does Send: a request is sent as written.
 - Metadata changes (servers, renames, last server) go straight to SQLite.
 
 ### Multiple projects / restore
@@ -576,8 +591,8 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 
 Each milestone ends in something runnable.
 
-M0 (libxml2 and ureq spikes) and M1 (core library and the `washboard` CLI) are done; follow-up
-work is in `docs/TASKS.md`.
+M0 (libxml2 and ureq spikes), M1 (core library and the `washboard` CLI) and M2–M4 are done;
+M5 is under way. Follow-up work and what is left of M5 are in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),
@@ -623,7 +638,7 @@ Interactive version: [`gui-draft.html`](gui-draft.html).
 │                      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
 │ OPERATIONS           │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
 │  ▾ CustomerService   │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
-│    ▾ CustomerPort    │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
+│   ▾ CustomerPort 1.1 │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
 │        GetCustomer   │ │  …│                                   │ │                                 │
 │        CreateOrder   │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
 │        ListOrders    │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
@@ -691,7 +706,7 @@ An older history entry selected (drawer open):
 │ Authorization: Basic ••••••  │ <soap:Envelope …>                 │
 │                              │                                   │
 │ <soapenv:Envelope …>         │                                   │
-│ TLS: verification SKIPPED    │                                   │
+│ TLS · certificate verificat… │                                   │
 └──────────────────────────────┴───────────────────────────────────┘
 ```
 Authorization values are masked in the log by default (click to reveal).
