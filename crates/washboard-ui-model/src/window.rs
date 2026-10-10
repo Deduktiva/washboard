@@ -295,7 +295,7 @@ impl ProjectWindow {
         rows.sort_by(|a, b| finder_order(&a.name, &b.name));
         self.sidebar.requests = rows;
         if let Some(sel) = self.selected_request()
-            && !self.sidebar.requests.iter().any(|r| r.id == sel)
+            && self.sidebar.request(sel).is_none()
         {
             self.restore.last_selected_request = None;
         }
@@ -368,10 +368,7 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                                 b.operations
                                     .iter()
                                     .map(|op| OperationNode {
-                                        operation: OperationRef {
-                                            binding: b.name.clone(),
-                                            operation: op.name.clone(),
-                                        },
+                                        operation: b.operation_ref(op),
                                         unsupported: op.support.reason().map(ToString::to_string),
                                     })
                                     .collect()

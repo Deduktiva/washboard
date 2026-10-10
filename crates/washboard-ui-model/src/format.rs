@@ -2,14 +2,13 @@
 //! computes the new text; the front end applies it through the text widget so it is one undo
 //! step, and the widget reports it back as an ordinary edit.
 
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
-use washboard_core::xml::{self, utf16::Utf16Cursor, utf16::utf16_to_byte};
+use washboard_core::xml::{self, utf16::Utf16Cursor, utf16::utf16_edit, utf16::utf16_to_byte};
 
 use crate::app::{App, ModelError, ProjectKey};
 
-/// Allowed indent widths, in spaces.
-pub const INDENT_RANGE: RangeInclusive<usize> = 1..=8;
+pub use washboard_core::xml::INDENT_RANGE;
 
 /// The app's formatting settings. The front end keeps them where its platform keeps settings
 /// (the user defaults on macOS) and hands them over at launch and on change; the model stores
@@ -25,7 +24,7 @@ pub struct FormatSettings {
 impl Default for FormatSettings {
     fn default() -> Self {
         FormatSettings {
-            indent: 2,
+            indent: xml::DEFAULT_INDENT,
             on_save: false,
         }
     }
@@ -75,9 +74,7 @@ impl App {
         if new == old {
             return Ok(None);
         }
-        let (bytes, new_len) = changed_range(old, &new);
-        let range = Utf16Cursor::new(old).utf16_range(bytes.clone());
-        let text = new[bytes.start..bytes.start + new_len].to_owned();
+        let (range, text) = utf16_edit(old, &new);
         let start = map_offset(old, &new, utf16_to_byte(old, selection.start));
         let end = map_offset(old, &new, utf16_to_byte(old, selection.end)).max(start);
         let selection = Utf16Cursor::new(&new).utf16_range(start..end);
@@ -104,36 +101,11 @@ impl App {
     }
 }
 
-/// The byte range of `old` that changed, and the length of its replacement in `new`: the
-/// smallest such edit, so the widget keeps its layout and scroll position outside it.
-fn changed_range(old: &str, new: &str) -> (Range<usize>, usize) {
-    let mut start = old
-        .bytes()
-        .zip(new.bytes())
-        .take_while(|(a, b)| a == b)
-        .count();
-    while !old.is_char_boundary(start) {
-        start -= 1;
-    }
-    let max_suffix = old.len().min(new.len()) - start;
-    let mut suffix = old
-        .bytes()
-        .rev()
-        .zip(new.bytes().rev())
-        .take(max_suffix)
-        .take_while(|(a, b)| a == b)
-        .count();
-    while !old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix) {
-        suffix -= 1;
-    }
-    (start..old.len() - suffix, new.len() - suffix - start)
-}
-
 /// Where byte `at` of `old` is in `new`. Formatting changes only whitespace, so the position
 /// before the n-th non-whitespace character stays before it. Falls back to the same offset,
 /// clamped, if the texts differ in more than whitespace.
 fn map_offset(old: &str, new: &str, at: usize) -> usize {
-    let is_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let is_ws = xml::is_xml_ws_char;
     let solid = |s: &str| s.chars().filter(|c| !is_ws(*c)).collect::<String>();
     let at = at.min(old.len());
     if solid(old) != solid(new) {

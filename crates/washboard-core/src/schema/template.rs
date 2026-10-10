@@ -37,7 +37,7 @@ impl Default for TemplateOptions {
         Self {
             max_depth: 6,
             max_nodes: 2000,
-            indent: "  ".into(),
+            indent: " ".repeat(crate::xml::DEFAULT_INDENT),
             prefixes: Vec::new(),
             declare_namespaces: true,
         }

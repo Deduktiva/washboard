@@ -13,7 +13,7 @@ pub(crate) fn is_xml_ws(b: u8) -> bool {
 }
 
 /// [`is_xml_ws`] for `char`s, for `str::trim_matches` and friends.
-pub(crate) fn is_xml_ws_char(c: char) -> bool {
+pub fn is_xml_ws_char(c: char) -> bool {
     u8::try_from(c).is_ok_and(is_xml_ws)
 }
 

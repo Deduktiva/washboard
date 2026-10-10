@@ -33,8 +33,8 @@ pub use encoding::{DecodeError, Decoded, Encoding, decode, decode_lossy, encode_
 pub(crate) use encoding::{UTF8_BOM, declared_encoding};
 pub use escape::{escape_attr, escape_text};
 pub use names::NamespaceMap;
-pub(crate) use names::is_xml_ws_char;
-pub use pretty::pretty_print;
+pub use names::is_xml_ws_char;
+pub use pretty::{DEFAULT_INDENT, INDENT_RANGE, pretty_print};
 pub use start_tags::{StartTag, start_tag_at, start_tags};
 pub use tokens::{RangeTokens, Token, TokenBuffer, TokenKind, tokenize, tokenize_range};
 pub(crate) use tree::parse_wsdl_or_xsd;

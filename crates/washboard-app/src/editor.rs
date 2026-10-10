@@ -37,11 +37,12 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSInteger, NSNotFound, NSNotification, NSNumber, NSObject,
     NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString, NSUInteger,
 };
-use washboard_core::xml::{TokenBuffer, TokenKind, utf16::Utf16Cursor};
+use washboard_core::xml::utf16::{Utf16Cursor, changed_range, utf16_edit};
+use washboard_core::xml::{TokenBuffer, TokenKind};
 use washboard_ui_model::{Completions, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
-use crate::text::{changed_range, completion_kinds, hover_text, utf16_edit};
+use crate::text::{completion_kinds, hover_text};
 
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;

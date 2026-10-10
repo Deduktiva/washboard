@@ -10,11 +10,19 @@
 //!
 //! Iterative, not recursive: a pathologically deep document must not overflow the stack.
 
+use std::ops::RangeInclusive;
+
 use crate::diag::Diagnostic;
 
 use super::lex::{Construct, Lexer, RawAttr, TagInfo};
 use super::names::is_xml_ws;
 use super::wellformed::check_well_formed;
+
+/// Indent widths, in spaces per level, that the app's setting and the CLI accept.
+pub const INDENT_RANGE: RangeInclusive<usize> = 1..=8;
+
+/// The indent width of new requests and Format XML until the user picks another.
+pub const DEFAULT_INDENT: usize = 2;
 
 /// Pretty-prints a well-formed document; returns the well-formedness error otherwise.
 ///
