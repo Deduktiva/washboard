@@ -16,6 +16,8 @@ mod app_settings;
 #[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
+mod form;
+#[cfg(target_os = "macos")]
 mod front_end;
 #[cfg(target_os = "macos")]
 mod http_log;
@@ -27,6 +29,8 @@ mod menu;
 mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
+#[cfg(target_os = "macos")]
+mod servers_pane;
 #[cfg(target_os = "macos")]
 mod settings_window;
 #[cfg(target_os = "macos")]
@@ -46,7 +50,9 @@ pub use app::{AppDelegate, Options, install, run};
 #[cfg(target_os = "macos")]
 pub use app_settings::{INDENT_KEY, ON_SAVE_KEY};
 #[cfg(target_os = "macos")]
-pub use editor::{EditorController, LineNumberRuler};
+pub use editor::{EditorController, LineNumberRuler, highlight_palette};
+#[cfg(target_os = "macos")]
+pub use form::{GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, ROW_INSET, TEXT_ID};
 #[cfg(target_os = "macos")]
 pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
@@ -54,7 +60,9 @@ pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, project_tabbing_id, toolbar_identifiers};
 #[cfg(target_os = "macos")]
-pub use settings_window::{PANE_KEY, Pane, PaneItem, ServersPane, SettingsWindowController};
+pub use servers_pane::ServersPane;
+#[cfg(target_os = "macos")]
+pub use settings_window::{PANE_KEY, Pane, PaneItem, SettingsWindowController};
 #[cfg(target_os = "macos")]
 pub use sheets::ImportSheetController;
 #[cfg(target_os = "macos")]

@@ -884,7 +884,8 @@ impl SidebarController {
             views.push(Retained::into_super(chip.clone()));
         }
         let marker = match node.markers() {
-            (_, true) => Some(("⚠", NSColor::systemOrangeColor())),
+            // Red like every other error marker; the request failed validation.
+            (_, true) => Some(("⚠", NSColor::systemRedColor())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
             (false, false) => None,
         };

@@ -181,6 +181,34 @@ fn clearing_recent_projects_survives_a_relaunch() {
 }
 
 #[test]
+fn removing_one_recent_project_survives_a_relaunch() {
+    let setup = Setup::new();
+    let a = make_project(&setup.tmp, "Alpha");
+    let b = make_project(&setup.tmp, "Beta");
+    {
+        let (_fake, mut app) = setup.launch();
+        for folder in [&a, &b] {
+            let key = app.open_project(folder).expect("open");
+            assert!(app.close_project(key));
+        }
+        assert_eq!(app.recent_projects(), [b.clone(), a.clone()]);
+        app.take_events();
+        app.remove_recent_project(0);
+        assert_eq!(app.take_events(), [Event::RecentProjectsChanged]);
+        assert_eq!(app.recent_projects(), std::slice::from_ref(&a));
+        app.remove_recent_project(5);
+        assert!(app.take_events().is_empty(), "out of range");
+        assert!(app.quit().expect("quit"));
+    }
+    assert!(
+        b.join("washboard.sqlite").exists(),
+        "the folder is left alone"
+    );
+    let (_fake, app) = setup.launch();
+    assert_eq!(app.recent_projects(), [a]);
+}
+
+#[test]
 fn a_missing_project_is_reported_once_and_dropped() {
     let setup = Setup::new();
     let a = make_project(&setup.tmp, "Alpha");

@@ -174,7 +174,9 @@ impl Dialogs for AppKitDialogs {
             ns.setAlertStyle(NSAlertStyle::Warning);
             ns.setMessageText(&NSString::from_str(&confirm.title));
             ns.setInformativeText(&NSString::from_str(&confirm.message));
-            ns.addButtonWithTitle(&NSString::from_str(&confirm.action));
+            // The model only confirms destructive actions, so the button draws as one.
+            let action = ns.addButtonWithTitle(&NSString::from_str(&confirm.action));
+            action.setHasDestructiveAction(true);
             ns.addButtonWithTitle(&NSString::from_str("Cancel"));
             let answer = move |response: NSModalResponse| {
                 let answer = if response == NSAlertFirstButtonReturn {

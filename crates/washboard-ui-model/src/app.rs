@@ -244,6 +244,16 @@ impl App {
         }
     }
 
+    /// The welcome window's Remove from List: forgets one recent project (by its index in
+    /// [`recent_projects`](Self::recent_projects)); its folder is left alone. Written to
+    /// `state.json` at quit, like Clear Menu.
+    pub fn remove_recent_project(&mut self, index: usize) {
+        if index < self.recent.len() {
+            self.recent.remove(index);
+            self.events.push(Event::RecentProjectsChanged);
+        }
+    }
+
     pub fn welcome_visible(&self) -> bool {
         self.projects.is_empty()
     }

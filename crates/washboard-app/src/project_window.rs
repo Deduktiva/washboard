@@ -27,7 +27,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString, ns_string,
+    NSSize, NSString, NSUserDefaults, ns_string,
 };
 
 use washboard_core::model::{RequestId, ServerId};
@@ -37,7 +37,8 @@ use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
 use crate::panes::{IssuesBar, RequestBar, ResponsePane, date_text, sent_formatter};
-use crate::settings_window::{Pane, ServersPane};
+use crate::servers_pane::ServersPane;
+use crate::settings_window::Pane;
 use crate::sheets::ImportSheetController;
 use crate::sidebar::SidebarController;
 use crate::text::replace_summary;
@@ -183,14 +184,21 @@ define_class!(
         // SAFETY: the signature matches `validateMenuItem:`.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
-            let action = item.action();
             // An older exchange is never sent or checked by a shortcut, and the editor those
             // act on is out of sight.
             let on_editor = [sel!(sendRequest:), sel!(validateRequest:), sel!(formatXML:)];
-            let refused = action.is_some_and(|a| on_editor.contains(&a)) && self.older_shown();
-            // Every other item this controller answers is always enabled, as before it
-            // validated anything.
-            !refused && (action != Some(sel!(formatXML:)) || self.has_editor())
+            if item.action().is_some_and(|a| on_editor.contains(&a)) && self.older_shown() {
+                return false.into();
+            }
+            // The menu's Send only sends and Cancel Send only cancels; the toolbar item, which
+            // AppKit does not validate here, toggles. Every other item this controller answers
+            // is always enabled, as before it validated anything.
+            match item.action() {
+                Some(action) if action == sel!(formatXML:) => self.has_editor(),
+                Some(action) if action == sel!(sendRequest:) => !self.is_sending(),
+                Some(action) if action == sel!(cancelSend:) => self.is_sending(),
+                _ => true,
+            }
         }
     }
 
@@ -252,17 +260,18 @@ define_class!(
         #[unsafe(method(sendRequest:))]
         fn send_request(&self, _sender: Option<&AnyObject>) {
             // The toolbar's Send is Cancel while a send is in flight.
-            let key = self.key();
-            let sending = self
-                .read(|app| app.project(key).is_some_and(|w| w.sending()))
-                .unwrap_or(false);
-            if sending {
-                with_delegate(self.mtm(), |d| {
-                    d.update(|app| app.cancel_send(key));
-                    d.sync();
-                });
+            if self.is_sending() {
+                self.cancel_send();
             } else {
+                let key = self.key();
                 self.command("Could not send the request", |app| app.send(key));
+            }
+        }
+
+        #[unsafe(method(cancelSend:))]
+        fn cancel_send_action(&self, _sender: Option<&AnyObject>) {
+            if self.is_sending() {
+                self.cancel_send();
             }
         }
 
@@ -340,16 +349,30 @@ impl ProjectWindowController {
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
 
         let split = this.split_view_controller(mtm);
+        // The sidebar's width, kept per project like the frame below.
+        split
+            .splitView()
+            .setAutosaveName(Some(&autosave_name("ProjectSidebar", folder)));
         window.setContentViewController(Some(&split));
         // `setContentViewController` resizes the window to the controllers' fitting size.
         window.setContentSize(NSSize::new(1100.0, 700.0));
-        window.center();
+        // Size and position are kept per project, by folder (the key changes every launch),
+        // as PLAN §3 intends; a project opened for the first time starts centred.
+        let frame_name = autosave_name("ProjectWindow", folder);
+        if !window.setFrameUsingName(&frame_name) {
+            window.center();
+        }
+        window.setFrameAutosaveName(&frame_name);
         this.add_accessory(&window, mtm);
-        // Request and response start with half each.
+        // Request and response start with half each, unless the project remembers them.
         window.layoutIfNeeded();
         if let Some(content) = this.ivars().content_split.get() {
-            let width = content.frame().size.width;
-            content.setPosition_ofDividerAtIndex((width - content.dividerThickness()) / 2.0, 0);
+            let name = autosave_name("ProjectContent", folder);
+            if !has_split_frames(&name) {
+                let width = content.frame().size.width;
+                content.setPosition_ofDividerAtIndex((width - content.dividerThickness()) / 2.0, 0);
+            }
+            content.setAutosaveName(Some(&name));
         }
         // The window holds its delegate weakly; this controller owns the window.
         window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
@@ -679,6 +702,21 @@ impl ProjectWindowController {
         let _ = self.ivars().older_label.set(label);
     }
 
+    /// Whether this window's request is being sent.
+    pub fn is_sending(&self) -> bool {
+        let key = self.key();
+        self.read(|app| app.project(key).is_some_and(|w| w.sending()))
+            .unwrap_or(false)
+    }
+
+    fn cancel_send(&self) {
+        let key = self.key();
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.cancel_send(key));
+            d.sync();
+        });
+    }
+
     fn has_editor(&self) -> bool {
         let key = self.key();
         self.read(|app| app.project(key).is_some_and(|w| w.editor().is_some()))
@@ -706,10 +744,7 @@ impl ProjectWindowController {
 
     /// Send ↔ Cancel in the toolbar, and the response pane's status (`SendStateChanged`).
     pub fn show_send_state(&self) {
-        let key = self.key();
-        let sending = self
-            .read(|app| app.project(key).is_some_and(|w| w.sending()))
-            .unwrap_or(false);
+        let sending = self.is_sending();
         if let Some(item) = self.send_item() {
             let (label, symbol) = if sending {
                 ("Cancel", "xmark.circle")
@@ -847,6 +882,20 @@ impl ProjectWindowController {
         // the same commands with shortcuts.
         Retained::into_super(scroll)
     }
+}
+
+/// A user defaults name for something kept per project: `kind` and the project's folder.
+fn autosave_name(kind: &str, folder: &Path) -> Retained<NSString> {
+    NSString::from_str(&format!("{kind} {}", folder.display()))
+}
+
+/// A split view with autosave name `name` has saved its subviews' frames before.
+fn has_split_frames(name: &NSString) -> bool {
+    // AppKit's own key for `NSSplitView.autosaveName`.
+    let key = NSString::from_str(&format!("NSSplitView Subview Frames {name}"));
+    NSUserDefaults::standardUserDefaults()
+        .objectForKey(&key)
+        .is_some()
 }
 
 /// Shared by every project window, so they group into one window's tabs.

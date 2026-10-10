@@ -47,7 +47,29 @@ use crate::text::{completion_kinds, hover_text};
 const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
 
-/// Colour of a token kind; `None` keeps the text colour.
+/// Every token kind with a colour of its own, for checking the palette's contrast in both
+/// appearances.
+pub fn highlight_palette() -> Vec<(TokenKind, Retained<NSColor>)> {
+    [
+        TokenKind::TagName,
+        TokenKind::TagPrefix,
+        TokenKind::AttrName,
+        TokenKind::AttrValue,
+        TokenKind::Punct,
+        TokenKind::Comment,
+        TokenKind::Doctype,
+        TokenKind::EntityRef,
+        TokenKind::CharRef,
+        TokenKind::Error,
+    ]
+    .into_iter()
+    .filter_map(|kind| Some((kind, color(kind)?)))
+    .collect()
+}
+
+/// Colour of a token kind; `None` keeps the text colour. Only dynamic system colours, which
+/// AppKit resolves for the current appearance at draw time, so a switch to or from Dark Mode
+/// needs no re-highlighting.
 fn color(kind: TokenKind) -> Option<Retained<NSColor>> {
     Some(match kind {
         TokenKind::TagName => NSColor::systemBlueColor(),
@@ -171,7 +193,7 @@ impl LineNumberRuler {
             );
             let is_error = errors.binary_search(&line).is_ok();
             let color = if is_error {
-                NSColor::systemOrangeColor()
+                NSColor::systemRedColor()
             } else {
                 NSColor::secondaryLabelColor()
             };
@@ -637,7 +659,8 @@ impl EditorController {
             layout.removeTemporaryAttribute_forCharacterRange(key, NSRange::new(0, len));
         }
         let single = NSNumber::new_isize(NSUnderlineStyle::Single.0);
-        let orange = NSColor::systemOrangeColor();
+        // Red like the issues bar's error count; orange is for warnings.
+        let red = NSColor::systemRedColor();
         for range in ranges {
             let start = range.start.min(len);
             let end = range.end.max(start + 1).min(len);
@@ -648,7 +671,7 @@ impl EditorController {
             // SAFETY: the underline style is an `NSNumber`, the underline colour an `NSColor`.
             unsafe {
                 layout.addTemporaryAttribute_value_forCharacterRange(style, &single, range);
-                layout.addTemporaryAttribute_value_forCharacterRange(color, &orange, range);
+                layout.addTemporaryAttribute_value_forCharacterRange(color, &red, range);
             }
         }
     }
@@ -821,16 +844,23 @@ fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
         container.setContainerSize(NSSize::new(f64::MAX, f64::MAX));
         container.setWidthTracksTextView(false);
     }
-    // SAFETY: an immutable AppKit constant.
-    let weight = unsafe { NSFontWeightRegular };
-    text_view.setFont(Some(&NSFont::monospacedSystemFontOfSize_weight(
-        FONT_SIZE, weight,
-    )));
+    text_view.setFont(Some(&code_font()));
     text_view.setRichText(false);
+    // Set rather than left to the defaults: these are the colours the highlighting palette is
+    // checked against, in both appearances.
+    text_view.setTextColor(Some(&NSColor::textColor()));
+    text_view.setBackgroundColor(&NSColor::textBackgroundColor());
     text_view.setAllowsUndo(true);
     text_view.setUsesFindBar(true);
     code_text(&text_view);
     text_view
+}
+
+/// The editor's font, also used wherever XML or headers are shown as text.
+fn code_font() -> Retained<NSFont> {
+    // SAFETY: an immutable AppKit constant.
+    let weight = unsafe { NSFontWeightRegular };
+    NSFont::monospacedSystemFontOfSize_weight(FONT_SIZE, weight)
 }
 
 /// Turns off everything meant for prose in a text view that shows XML: substitutions,
@@ -857,6 +887,10 @@ pub(crate) fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
     scroll.setAutohidesScrollers(true);
     if let Some(text) = scroll_text_view(&scroll) {
         text.setEditable(false);
+        // `scrollableTextView` starts as rich text in the proportional system font; plain
+        // text keeps the font for every `setString`.
+        text.setRichText(false);
+        text.setFont(Some(&code_font()));
         code_text(&text);
     }
     scroll

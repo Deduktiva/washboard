@@ -5,20 +5,24 @@ use std::cell::{OnceCell, RefCell};
 use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControlTextEditingDelegate,
-    NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode, NSScrollView, NSStackView,
-    NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
-    NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControl,
+    NSControlTextEditingDelegate, NSEvent, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSResponder, NSScrollView, NSStackView, NSTableCellView,
+    NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
+    NSWindowTabbingMode, NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
+    NSArray, NSIndexSet, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSURL, ns_string,
 };
 
+use crate::app::with_delegate;
 use crate::layout;
+use crate::menu::menu_item;
 
 /// A recent project as the welcome window and File ▸ Open Recent list it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,11 +54,43 @@ const LEFT: f64 = 250.0;
 const ICON: f64 = 96.0;
 const BUTTON_WIDTH: f64 = 160.0;
 
+define_class!(
+    // SAFETY:
+    // - NSTableView has no subclassing requirements beyond its designated initializers, which
+    //   we inherit.
+    // - `RecentTableView` does not implement `Drop`.
+    #[unsafe(super(NSTableView, NSControl, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[derive(Debug)]
+    pub struct RecentTableView;
+
+    impl RecentTableView {
+        // SAFETY: the signature matches `keyDown:`.
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            let is_return = event
+                .charactersIgnoringModifiers()
+                .is_some_and(|c| matches!(c.to_string().as_str(), "\r" | "\u{3}"));
+            if is_return && self.selectedRow() >= 0 {
+                // Return opens the selected project, as a double-click does.
+                // SAFETY: the target is the welcome controller, whose `openRecent:` takes the
+                // sender.
+                if let Some(target) = self.target() {
+                    let _: () = unsafe { msg_send![&*target, openRecent: Some(self)] };
+                }
+            } else {
+                // SAFETY: `keyDown:` takes the event.
+                let _: () = unsafe { msg_send![super(self), keyDown: event] };
+            }
+        }
+    }
+);
+
 #[derive(Debug)]
 pub struct WelcomeIvars {
     recent: RefCell<Vec<RecentProject>>,
     window: OnceCell<Retained<NSWindow>>,
-    table: OnceCell<Retained<NSTableView>>,
+    table: OnceCell<Retained<RecentTableView>>,
 }
 
 define_class!(
@@ -99,13 +135,35 @@ define_class!(
         }
     }
 
+    // SAFETY: `NSMenuDelegate` has no safety requirements.
+    unsafe impl NSMenuDelegate for WelcomeController {
+        // SAFETY: the signature matches `menuNeedsUpdate:`.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            self.fill_context_menu(menu, self.table().clickedRow());
+        }
+    }
+
     impl WelcomeController {
-        // SAFETY: action methods take the sender and return nothing.
+        // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(openRecent:))]
-        fn open_recent_action(&self, _sender: Option<&AnyObject>) {
-            let row = self.ivars().table.get().map(|t| t.clickedRow());
-            if let Some(row) = row.and_then(|r| usize::try_from(r).ok()) {
+        fn open_recent_action(&self, sender: Option<&AnyObject>) {
+            if let Some(row) = self.acted_on(sender) {
                 self.open_recent(row);
+            }
+        }
+
+        #[unsafe(method(showRecentInFinder:))]
+        fn show_in_finder_action(&self, sender: Option<&AnyObject>) {
+            if let Some(row) = self.acted_on(sender) {
+                self.show_in_finder(row);
+            }
+        }
+
+        #[unsafe(method(removeRecent:))]
+        fn remove_recent_action(&self, sender: Option<&AnyObject>) {
+            if let Some(row) = self.acted_on(sender) {
+                self.remove_recent(row);
             }
         }
     }
@@ -120,10 +178,83 @@ impl WelcomeController {
         });
     }
 
-    /// The model's recent projects, most recent first.
+    /// Shows the project folder in `row` in Finder.
+    pub fn show_in_finder(&self, row: usize) {
+        let Some(folder) = self.folder(row) else {
+            return;
+        };
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
+        NSWorkspace::sharedWorkspace()
+            .activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&[url]));
+    }
+
+    /// Takes the project in `row` off the list; the folder stays where it is.
+    pub fn remove_recent(&self, row: usize) {
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.remove_recent_project(row));
+            d.sync();
+        });
+    }
+
+    /// The context menu for `row`: Open, Show in Finder, Remove from List; none off the rows.
+    pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
+        menu.removeAllItems();
+        if row < 0 || self.folder(row as usize).is_none() {
+            return;
+        }
+        let items: [Option<(&str, Sel)>; 4] = [
+            Some(("Open", sel!(openRecent:))),
+            Some(("Show in Finder", sel!(showRecentInFinder:))),
+            None,
+            Some(("Remove from List", sel!(removeRecent:))),
+        ];
+        for entry in items {
+            let Some((title, action)) = entry else {
+                menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
+                continue;
+            };
+            let item = menu_item(title, Some(action), "", self.mtm());
+            // SAFETY: the target is this controller, which implements every action used here
+            // and owns the window the menu belongs to.
+            unsafe { item.setTarget(Some(self)) };
+            item.setTag(row);
+            menu.addItem(&item);
+        }
+    }
+
+    /// The row an action is for: a context menu item's tag, else the clicked row (a
+    /// double-click), else the selected row (Return).
+    fn acted_on(&self, sender: Option<&AnyObject>) -> Option<usize> {
+        if let Some(item) = sender.and_then(|s| s.downcast_ref::<NSMenuItem>()) {
+            return usize::try_from(item.tag()).ok();
+        }
+        let table = self.table();
+        let row = match table.clickedRow() {
+            -1 => table.selectedRow(),
+            row => row,
+        };
+        usize::try_from(row).ok()
+    }
+
+    /// The folder of the recent project in `row`, from the model.
+    fn folder(&self, row: usize) -> Option<PathBuf> {
+        with_delegate(self.mtm(), |d| {
+            d.read(|app| app.recent_projects().get(row).cloned())
+        })
+        .flatten()
+        .flatten()
+    }
+
+    /// The model's recent projects, most recent first. The first is selected, so Return opens
+    /// the most recent project.
     pub fn set_recent(&self, recent: Vec<RecentProject>) {
+        let any = !recent.is_empty();
         *self.ivars().recent.borrow_mut() = recent;
-        self.table().reloadData();
+        let table = self.table();
+        table.reloadData();
+        if any && table.selectedRow() < 0 {
+            table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        }
     }
 
     pub fn recent(&self) -> Vec<RecentProject> {
@@ -153,6 +284,14 @@ impl WelcomeController {
             table.setTarget(Some(&this));
             table.setDoubleAction(Some(sel!(openRecent:)));
         }
+        // The items depend on the clicked row, so the menu is filled as it opens.
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
+        menu.setDelegate(Some(ProtocolObject::from_ref(&*this)));
+        // SAFETY: the table retains its menu; the menu's delegate is this controller, which
+        // owns the window and with it the table.
+        unsafe { table.setMenu(Some(&menu)) };
+        window.setInitialFirstResponder(Some(&table));
         content.addSubview(&scroll);
         let _ = this.ivars().window.set(window);
         let _ = this.ivars().table.set(table);
@@ -170,6 +309,8 @@ impl WelcomeController {
     pub fn show(&self) {
         self.window().center();
         self.window().makeKeyAndOrderFront(None);
+        // The recent projects take the keys: ↑/↓ choose, Return opens.
+        self.window().makeFirstResponder(Some(self.table()));
     }
 }
 
@@ -262,9 +403,10 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
     pane
 }
 
-fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTableView>) {
+fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<RecentTableView>) {
     let frame = NSRect::new(NSPoint::new(LEFT, 0.0), NSSize::new(WIDTH - LEFT, HEIGHT));
-    let table = NSTableView::new(mtm);
+    // SAFETY: `init` is NSTableView's designated initializer for code-built views.
+    let table: Retained<RecentTableView> = unsafe { msg_send![RecentTableView::alloc(mtm), init] };
     let column =
         NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), ns_string!("project"));
     column.setWidth(WIDTH - LEFT);

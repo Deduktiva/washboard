@@ -11,9 +11,10 @@ use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_clas
 use objc2_app_kit::{
     NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor, NSControlSize, NSEvent, NSFont,
     NSImage, NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow,
-    NSLineBreakMode, NSResponder, NSScrollView, NSSplitView, NSSplitViewController,
-    NSSplitViewDividerStyle, NSSplitViewItem, NSStackView, NSStackViewGravity, NSTabView,
-    NSTabViewItem, NSTextField, NSTitlePosition, NSView, NSViewController,
+    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSResponder, NSScrollView,
+    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTitlePosition, NSView,
+    NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
@@ -390,6 +391,8 @@ impl DrawerSplit {
 pub struct ResponseIvars {
     key: ProjectKey,
     status: Retained<NSTextField>,
+    /// Spins beside the status while a send is in flight.
+    spinner: Retained<NSProgressIndicator>,
     body: Retained<EditorController>,
     headers: Retained<NSScrollView>,
     history: Retained<TextTable>,
@@ -449,9 +452,16 @@ impl ResponsePane {
         let dots = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         dots.setSpacing(3.0);
 
+        let spinner = NSProgressIndicator::new(mtm);
+        spinner.setStyle(NSProgressIndicatorStyle::Spinning);
+        spinner.setControlSize(NSControlSize::Small);
+        spinner.setIndeterminate(true);
+        spinner.setHidden(true);
+
         let this = Self::alloc(mtm).set_ivars(ResponseIvars {
             key,
             status,
+            spinner,
             body,
             headers,
             history,
@@ -518,7 +528,13 @@ impl ResponsePane {
         table_item.setCollapsed(true);
         drawer.addSplitViewItem(&table_item);
 
-        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
+        let status = layout::row(
+            &[
+                layout::view(this.ivars().spinner.clone()),
+                layout::view(this.ivars().status.clone()),
+            ],
+            mtm,
+        );
         status.setEdgeInsets(layout::insets(0.0, 8.0, 0.0, 8.0));
         layout::set_height(&status, layout::BAR_HEIGHT);
         let view = layout::fill_column(&[Retained::into_super(status), drawer.view()], mtm);
@@ -571,12 +587,36 @@ impl ResponsePane {
             .setStringValue(&NSString::from_str(status));
     }
 
+    /// Whether the spinner beside the status is shown.
+    pub fn is_spinning(&self) -> bool {
+        !self.ivars().spinner.isHidden()
+    }
+
+    /// A hidden spinner leaves the status row, so the status keeps its place when idle.
+    fn show_spinner(&self, sending: bool) {
+        let spinner = &self.ivars().spinner;
+        spinner.setHidden(!sending);
+        // SAFETY: both take any sender, and nil is allowed.
+        unsafe {
+            if sending {
+                spinner.startAnimation(None);
+            } else {
+                spinner.stopAnimation(None);
+            }
+        }
+    }
+
     pub fn tabs(&self) -> &NSTabView {
         &self.ivars().tabs
     }
 
     pub fn body(&self) -> &EditorController {
         &self.ivars().body
+    }
+
+    /// The Headers tab's text view.
+    pub fn headers_view(&self) -> &NSScrollView {
+        &self.ivars().headers
     }
 
     /// The Headers tab's text.
@@ -720,6 +760,7 @@ impl ResponsePane {
             _ => "No response yet".to_owned(),
         };
         self.set_status(&status);
+        self.show_spinner(sending);
         // The full URL, for when the server's name is not enough.
         let url = response.as_ref().map(|r| NSString::from_str(&r.url));
         self.ivars().status.setToolTip(url.as_deref());
