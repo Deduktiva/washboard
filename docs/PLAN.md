@@ -381,8 +381,8 @@ Errors: list in the issues bar under the editor (click → jump to line), plus g
     Latest** (default button, Esc). Its background is a yellow tint that works in light and dark.
     While it shows, the toolbar's own items (server popup, Send, HTTP Log) are hidden. A unified
     toolbar cannot be coloured itself; the accessory is AppKit's way to attach a bar to it.
-  - Send (⌘↩) and Edit ▸ Validate (⌘B) are disabled, in the menu too, and the model refuses
-    to send in this state, so an old exchange is never sent by a shortcut.
+  - Send (⌘↩), Edit ▸ Validate (⌘B) and Format XML are disabled, in the menu too, and the
+    model refuses to send in this state, so an old exchange is never sent by a shortcut.
 - **Back to the latest.** Show Latest, Esc, selecting the newest row, switching requests and a
   finished send all return to the newest exchange and the editor. Restore Request puts the sent
   request into the editor as one undo step (applied through the widget, like Format XML) and
