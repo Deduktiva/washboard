@@ -398,9 +398,13 @@ One ordinary window (not a sheet) for the app and every open project, laid out l
 Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped forms. The
 "Washboard" section holds the app settings (General: indent width, format on save); below it,
 one section per open project with General (name, folder, WSDL files with Show in Finder and
-Replace WSDL…) and Servers (server list, the selected server's form, the WSDL's suggested
-servers). Project panes say that their settings belong to the project and are saved in its
-folder. Changes apply as they are made;
+Replace WSDL…) and Servers (server list, the WSDL's suggested servers). A server is edited
+in a sheet (Edit… on its row, Add Server… under the list) with Save, Cancel and Delete Server;
+User and Password show only with Basic auth. Project panes say that their settings belong to the project and are saved in its
+folder. Layout follows System Settings, decided once in `crates/washboard-app/src/form.rs`:
+groups 20 pt from the content edges and at most 640 pt wide, every header, footnote and row
+label on one leading line inside the group, controls on the trailing edge, text fields one width.
+Changes apply as they are made;
 there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
 the window on that project's Servers pane. A closed project's section leaves the window.
 
@@ -710,25 +714,33 @@ An older history entry selected (drawer open):
 ┌ Servers ────────────────────────────────────────────────────────┐
 │ WASHBOARD          │ These settings belong to Customer API      │
 │  ⚙ General         │ and are saved in its folder.               │
-│ CUSTOMER API       │ ╭────────────────────────────────────────╮ │
-│  ▤ General         │ │ Production                             │ │
-│ ▸▤ Servers         │ │ Staging                              ✓ │ │
-│                    │ │ Local                                  │ │
-│                    │ │ [+] [−]                                │ │
-│                    │ ╰────────────────────────────────────────╯ │
-│                    │ ╭────────────────────────────────────────╮ │
-│                    │ │ Name               [Staging          ] │ │
-│                    │ │ URL       [https://stg.example.com/ws] │ │
-│                    │ │ Ignore certificate errors         [ ○] │ │
-│                    │ │ Auth                          [None ▾] │ │
-│                    │ │ Password                 (in Keychain) │ │
-│                    │ │ Timeout                         [60] s │ │
+│ CUSTOMER API       │ Servers                                    │
+│  ▤ General         │ ╭────────────────────────────────────────╮ │
+│ ▸▤ Servers         │ │ Production                     [Edit…] │ │
+│                    │ │ https://api.example.com/ws             │ │
+│                    │ │ Staging                        [Edit…] │ │
+│                    │ │ https://stg.example.com/ws             │ │
+│                    │ │                         [Add Server…]  │ │
 │                    │ ╰────────────────────────────────────────╯ │
 │                    │ Suggested by the WSDL                      │
 │                    │ ╭────────────────────────────────────────╮ │
-│                    │ │ https://api.example.com/ws       [Add] │ │
+│                    │ │ CustomerPort                     [Add] │ │
+│                    │ │ https://api.example.com/ws             │ │
 │                    │ ╰────────────────────────────────────────╯ │
 └─────────────────────────────────────────────────────────────────┘
+
+Edit… (sheet)
+┌──────────────────────────────────────────────┐
+│ Staging                                      │
+│ ╭──────────────────────────────────────────╮ │
+│ │ Name                 [Staging          ] │ │
+│ │ URL     [https://stg.example.com/ws    ] │ │
+│ │ Ignore certificate errors           [ ○] │ │
+│ │ Authentication          (•) None ( ) Basic│ │
+│ │ Timeout                       [60] seconds│ │
+│ ╰──────────────────────────────────────────╯ │
+│ [Delete Server]            [Cancel] [Save]   │
+└──────────────────────────────────────────────┘
 ```
 
 ### HTTP log panel

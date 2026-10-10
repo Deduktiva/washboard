@@ -21,6 +21,7 @@ fn main() {
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
+        ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
         ("port_chips", checks::port_chips),
@@ -29,6 +30,7 @@ fn main() {
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
         ("dark_mode", checks::dark_mode),
+        ("menu_validation", checks::menu_validation),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
@@ -69,10 +71,11 @@ mod checks {
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
-        NSColorSpace, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
-        NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSView,
-        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
+        NSForegroundColorAttributeName, NSMenu, NSScrollView, NSSplitViewItemBehavior, NSStackView,
+        NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode,
+        NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
+        NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -83,7 +86,10 @@ mod checks {
         AppDelegate, EditorController, ImportSheetController, NodeKind, Options,
         ProjectWindowController, SidebarNode, TextTable,
     };
-    use washboard_app::{Pane, ServersPane};
+    use washboard_app::{
+        GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, Pane, ROW_INSET, ServersPane,
+        SettingsWindowController, TEXT_ID,
+    };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
@@ -676,6 +682,43 @@ mod checks {
             ctx.delegate.projects().len(),
             1,
             "focused, not opened twice"
+        );
+    }
+
+    /// A project window comes back at the size and place it had, and so does its sidebar's
+    /// width (PLAN §3: frames autosaved per project).
+    pub fn window_frames(ctx: &Ctx) {
+        let project = ctx.open();
+        let window = project.project_window();
+        // Smaller and moved, but still on the screen: AppKit constrains a restored frame to
+        // the screen, and the CI runner's screen is only as wide as the default window.
+        let mut frame = window.frame();
+        frame.origin.x += 37.0;
+        frame.size.width -= 61.0;
+        window.setFrame_display(frame, false);
+        // The split view restores its own dividers under this name; their geometry after a
+        // reopen depends on when NSSplitViewController lays out, so only the name is checked.
+        let folder = window.representedFilename().to_string();
+        assert_eq!(
+            window.frameAutosaveName().to_string(),
+            format!("ProjectWindow {folder}")
+        );
+        let split_name = project.split_view().splitView().autosaveName();
+        assert_eq!(
+            split_name.map(|n| n.to_string()),
+            Some(format!("ProjectSidebar {folder}")),
+            "the sidebar's width is saved per project"
+        );
+        autoreleasepool(|_| window.performClose(None));
+        drop(project);
+        assert!(ctx.delegate.projects().is_empty(), "closed");
+
+        let project = ctx.open();
+        let again = project.project_window().frame();
+        assert!(
+            (again.origin.x - frame.origin.x).abs() < 1.0
+                && (again.size.width - frame.size.width).abs() < 1.0,
+            "the frame came back: {again:?}, was {frame:?}"
         );
     }
 
@@ -1402,6 +1445,56 @@ mod checks {
         });
 
         autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// Project menu items that act on the selected request are disabled without one, and
+    /// Delete steps aside while a text view has the focus, so ⌘⌫ deletes to the start of the
+    /// line there instead of asking to delete the request.
+    pub fn menu_validation(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            // SAFETY: `newRequest:` takes the sender.
+            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+        }
+        let request = project.selected_request().expect("a request is selected");
+        let menu = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|i| i.submenu())
+            .expect("Project menu");
+        let enabled = |title: &str| -> bool {
+            let item = menu
+                .itemWithTitle(&NSString::from_str(title))
+                .expect("a Project menu item");
+            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+            unsafe { msg_send![&*project, validateMenuItem: &*item] }
+        };
+        let window = project.project_window();
+        assert!(enabled("New Request"), "the WSDL is loaded");
+
+        window.makeFirstResponder(Some(project.editor().text_view()));
+        assert!(!enabled("Delete"), "⌘⌫ goes to the editor");
+        assert!(enabled("Duplicate") && enabled("Send"), "the rest stay");
+        let outline = project.sidebar().outline().expect("the sidebar is built");
+        window.makeFirstResponder(Some(outline));
+        assert!(
+            enabled("Delete"),
+            "⌘⌫ deletes the selected request from the sidebar"
+        );
+
+        let key = project.key();
+        ctx.delegate
+            .command("deselect", |app| app.select_request(key, None))
+            .expect("deselected");
+        for title in ["Duplicate", "Rename", "Delete", "Validate", "Send"] {
+            assert!(!enabled(title), "{title} without a selected request");
+        }
+        ctx.delegate
+            .command("reselect", |app| app.select_request(key, Some(request)))
+            .expect("reselected");
+        autoreleasepool(|_| window.performClose(None));
     }
 
     /// Format XML (⌃I) is one undo step that keeps the selection on the same text; the settings
@@ -2261,43 +2354,165 @@ mod checks {
         );
     }
 
-    /// The Servers pane's form rows sit together, and its sections fit the window.
-    fn assert_settings_layout(settings: &ServersPane) {
-        let window = settings.view().window().expect("the pane is shown");
+    /// The shown Settings pane keeps `form.rs`'s rules: groups inside the page margins, centred
+    /// and all one width; headers and footnotes on the rows' leading line; every label and
+    /// control in a group inside the group's insets, at its full height, overlapping no other.
+    fn assert_form_layout(settings: &SettingsWindowController, pane: &str) {
+        let page = settings.pane_view().expect("a pane is shown");
+        let window = page.window().expect("the pane is in the window");
         window
             .contentView()
             .expect("content")
             .layoutSubtreeIfNeeded();
         let frame = |v: &NSView| v.convertRect_toView(v.bounds(), None);
-        let fields: [&NSView; 4] = [
-            settings.name_field(),
-            settings.url_field(),
-            settings.user_field(),
-            settings.password_field(),
-        ];
-        // Name, URL, then TLS and Auth, then User, Password: never more than three rows apart.
-        for pair in fields.windows(2) {
-            let gap = frame(pair[0]).origin.y - frame(pair[1]).origin.y;
-            assert!(
-                gap > 0.0 && gap < 3.0 * 50.0,
-                "form rows stay together: {gap} between {:?} and {:?}",
-                pair[0].frame(),
-                pair[1].frame()
-            );
-        }
-        let width = window.contentLayoutRect().size.width;
-        for field in fields {
-            let f = frame(field);
-            assert!(
-                f.origin.x > 0.0 && f.origin.x + f.size.width < width,
-                "a field inside the window: {f:?} in width {width}"
-            );
-        }
-        let list = settings.table().view().frame();
+        let scroll = page.downcast_ref::<NSScrollView>().expect("a pane scrolls");
+        let first = assert_form_rules(&page, frame(&scroll.contentView()), pane);
+        assert!(first.size.width <= MAX_WIDTH + 0.5, "{pane}: {first:?}");
+        // The content area may run under the sidebar; the groups must not.
+        let sidebar = settings
+            .outline()
+            .enclosingScrollView()
+            .expect("the sidebar scrolls");
         assert!(
-            list.size.height >= 100.0,
-            "the server list has room: {list:?}"
+            first.origin.x
+                >= frame(&sidebar).origin.x + frame(&sidebar).size.width + PAGE_MARGIN - 0.5,
+            "{pane}: groups clear of the sidebar: {first:?}, sidebar {:?}",
+            frame(&sidebar)
         );
+    }
+
+    /// The server sheet keeps the same rules as the panes, inside its own margins, and its
+    /// shown text fields share a leading edge.
+    fn assert_server_sheet_layout(servers: &ServersPane, what: &str) {
+        let sheet = servers.sheet();
+        let content = sheet.contentView().expect("content");
+        content.layoutSubtreeIfNeeded();
+        let frame = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        assert_form_rules(&content, frame(&content), what);
+        let body = frame(servers.sheet_body());
+        assert!(
+            (body.size.height - frame(&content).size.height).abs() < 0.5,
+            "{what}: the sheet fits its content: {body:?} in {:?}",
+            frame(&content)
+        );
+        let mut fields: Vec<&NSView> = vec![servers.name_field(), servers.url_field()];
+        if servers.shows_credentials() {
+            fields.extend([servers.user_field() as &NSView, servers.password_field()]);
+        }
+        let edges: Vec<f64> = fields.iter().map(|f| layout_frame(f).origin.x).collect();
+        assert!(
+            edges.iter().all(|x| (x - edges[0]).abs() < 0.5),
+            "{what}: the text fields share a leading edge: {edges:?}"
+        );
+    }
+
+    /// `v`'s alignment rect in window coordinates: what Auto Layout lines up. A label's frame
+    /// is wider than its text by a couple of points on each side.
+    fn layout_frame(v: &NSView) -> NSRect {
+        let f = v.convertRect_toView(v.bounds(), None);
+        let i = v.alignmentRectInsets();
+        NSRect::new(
+            NSPoint::new(f.origin.x + i.left, f.origin.y + i.bottom),
+            NSSize::new(
+                f.size.width - i.left - i.right,
+                f.size.height - i.top - i.bottom,
+            ),
+        )
+    }
+
+    /// The rules every form keeps, under `root` in `area`; returns the first group's frame.
+    fn assert_form_rules(root: &NSView, area: NSRect, pane: &str) -> NSRect {
+        let clip = area;
+        let frame = layout_frame;
+        let mut parts = Vec::new();
+        form_parts(root, None, &mut parts);
+        let has_id = |v: &NSView, id: &str| v.identifier().is_some_and(|i| i.to_string() == id);
+        let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+        let max_x = |r: NSRect| r.origin.x + r.size.width;
+
+        let groups: Vec<NSRect> = parts
+            .iter()
+            .filter(|(v, _)| has_id(v, GROUP_ID))
+            .map(|(v, _)| frame(v))
+            .collect();
+        assert!(!groups.is_empty(), "{pane}: a group");
+        let first = groups[0];
+        let (left, right) = (first.origin.x - clip.origin.x, max_x(clip) - max_x(first));
+        assert!(
+            left >= PAGE_MARGIN - 0.5 && near(left, right),
+            "{pane}: groups within the margins and centred: {left} and {right}"
+        );
+        for g in &groups {
+            assert!(
+                near(g.origin.x, first.origin.x) && near(g.size.width, first.size.width),
+                "{pane}: groups line up: {g:?} and {first:?}"
+            );
+        }
+        for (v, _) in &parts {
+            if has_id(v, HEADER_ID) || has_id(v, TEXT_ID) {
+                let f = frame(v);
+                assert!(
+                    near(f.origin.x, first.origin.x + ROW_INSET)
+                        && max_x(f) <= max_x(first) - ROW_INSET + 0.5,
+                    "{pane}: {v:?} on the rows' leading line: {f:?}, group {first:?}"
+                );
+            }
+        }
+
+        let controls: Vec<(Retained<NSView>, NSRect)> = parts
+            .iter()
+            .filter(|(v, _)| v.downcast_ref::<NSControl>().is_some())
+            .filter_map(|(v, g)| Some((v.clone(), (*g)?)))
+            .collect();
+        for (v, g) in &controls {
+            let f = frame(v);
+            assert!(
+                f.origin.x >= g.origin.x + ROW_INSET / 2.0 - 0.5
+                    && max_x(f) <= max_x(*g) - ROW_INSET + 0.5,
+                "{pane}: {v:?} inside its group's insets: {f:?} in {g:?}"
+            );
+            let needed = v.intrinsicContentSize().height;
+            assert!(
+                needed <= 0.0 || f.size.height >= needed - 0.5,
+                "{pane}: {v:?} at its full height: {f:?}, needs {needed}"
+            );
+        }
+        for (i, (a, _)) in controls.iter().enumerate() {
+            for (b, _) in &controls[i + 1..] {
+                let (fa, fb) = (frame(a), frame(b));
+                let apart = max_x(fa) <= fb.origin.x + 0.5
+                    || max_x(fb) <= fa.origin.x + 0.5
+                    || fa.origin.y + fa.size.height <= fb.origin.y + 0.5
+                    || fb.origin.y + fb.size.height <= fa.origin.y + 0.5;
+                assert!(apart, "{pane}: {a:?} {fa:?} overlaps {b:?} {fb:?}");
+            }
+        }
+        first
+    }
+
+    /// The visible views under `view` with the frame of the group each is in. Lists and other
+    /// scroll views count as one part: their rows are theirs to lay out.
+    fn form_parts(
+        view: &NSView,
+        group: Option<NSRect>,
+        out: &mut Vec<(Retained<NSView>, Option<NSRect>)>,
+    ) {
+        for sub in view.subviews().iter() {
+            if sub.isHidden() {
+                continue;
+            }
+            out.push((sub.clone(), group));
+            if sub.downcast_ref::<NSScrollView>().is_some() {
+                continue;
+            }
+            let is_group = sub.identifier().is_some_and(|i| i.to_string() == GROUP_ID);
+            let inner = if is_group {
+                Some(layout_frame(&sub))
+            } else {
+                group
+            };
+            form_parts(&sub, inner, out);
+        }
     }
 
     /// Waits for the import check the last file change started.
@@ -2480,16 +2695,14 @@ mod checks {
         let suggested = settings.suggestion_rows();
         assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
         assert!(settings.shows_suggestions());
-        assert_settings_layout(&settings);
+        assert_form_layout(settings_window, "Servers, suggestions only");
         settings.confirm_suggestion(0);
         assert!(settings.suggestion_rows().is_empty());
         assert!(!settings.shows_suggestions(), "nothing left to suggest");
+        assert_form_layout(settings_window, "Servers, one server");
         assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
-        assert_eq!(settings.selected(), Some(0));
-        assert_eq!(
-            settings.url_field().stringValue().to_string(),
-            suggested[0][1]
-        );
+        assert_eq!(settings.server_rows(), [suggested[0].clone()]);
+        assert!(!settings.is_editing(), "adding a suggestion opens no sheet");
 
         autoreleasepool(|_| window.performClose(None));
         assert!(
@@ -2641,6 +2854,7 @@ mod checks {
         assert!(settings_window.attachedSheet().is_none() && window.attachedSheet().is_none());
         assert_eq!(settings.selected(), Some(Pane::App));
         assert_eq!(settings_window.title().to_string(), "General");
+        assert_form_layout(settings, "the app's General");
         assert_eq!(
             settings.sidebar_titles(),
             ["Washboard", "General", "Customer API", "General", "Servers"],
@@ -2654,48 +2868,66 @@ mod checks {
             settings_window.title().to_string(),
             "Customer API — Servers"
         );
-        let sheet = settings.servers(key);
-        assert_settings_layout(&sheet);
+        let servers = settings.servers(key);
+        assert_form_layout(settings, "Servers");
 
-        let names = table_column(sheet.table(), 0);
+        let names: Vec<String> = servers
+            .server_rows()
+            .into_iter()
+            .map(|r| r[0].clone())
+            .collect();
         assert_eq!(names, server_names(ctx, key));
         assert_eq!(names[1], "Production");
-        assert!(sheet.suggestion_rows().is_empty());
-        assert!(!sheet.shows_suggestions());
+        assert!(servers.suggestion_rows().is_empty());
+        assert!(!servers.shows_suggestions());
 
-        sheet.table().click(1);
-        assert_eq!(sheet.selected(), Some(1));
-        let server = sheet.servers()[1].clone();
-        assert_eq!(sheet.url_field().stringValue().to_string(), server.url);
-        sheet
-            .name_field()
-            .setStringValue(&NSString::from_str("Production EU"));
-        sheet.commit_form();
-        assert_eq!(table_column(sheet.table(), 0)[1], "Production EU");
-        assert_eq!(server_names(ctx, key)[1], "Production EU");
-
+        // Edit… opens the server in a sheet; Save writes it.
+        servers.edit(1);
+        wait_until("the server sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert_eq!(servers.editing(), Some(1));
+        let server = servers.servers()[1].clone();
         assert_eq!(server.auth, Auth::None);
         assert!(
-            !sheet.user_field().isEnabled(),
-            "no user without Basic auth"
+            !servers.shows_credentials(),
+            "no user or password without Basic auth"
         );
+        assert_server_sheet_layout(&servers, "server sheet, no auth");
+        assert_eq!(servers.url_field().stringValue().to_string(), server.url);
+        servers
+            .name_field()
+            .setStringValue(&NSString::from_str("Production EU"));
+        servers.save();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert!(!servers.is_editing());
+        assert_eq!(servers.server_rows()[1][0], "Production EU");
+        assert_eq!(server_names(ctx, key)[1], "Production EU");
+
+        servers.edit(1);
         // SAFETY: `performClick:` takes any sender.
-        unsafe { sheet.basic_auth_button().performClick(None) };
+        unsafe { servers.basic_auth_button().performClick(None) };
         assert!(
-            sheet.user_field().isEnabled(),
-            "Basic auth enables the user field"
+            servers.shows_credentials(),
+            "Basic auth shows the user and password"
         );
-        sheet
+        assert_server_sheet_layout(&servers, "server sheet, Basic auth");
+        servers
             .user_field()
             .setStringValue(&NSString::from_str("bob"));
-        sheet
+        servers
             .password_field()
             .setStringValue(&NSString::from_str("hunter2"));
-        sheet.commit_form();
+        servers.save();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
         let basic = Auth::Basic {
             username: "bob".into(),
         };
-        assert_eq!(sheet.servers()[1].auth, basic);
+        assert_eq!(servers.servers()[1].auth, basic);
         // By project key, which changes when the project is reopened.
         let password = |ctx: &Ctx, key: ProjectKey| {
             ctx.delegate
@@ -2704,30 +2936,49 @@ mod checks {
                 .flatten()
         };
         assert_eq!(password(ctx, key).as_deref(), Some("hunter2"));
+
+        // Cancel drops the sheet's changes.
+        servers.edit(1);
         assert_eq!(
-            sheet.password_field().stringValue().to_string(),
+            servers.password_field().stringValue().to_string(),
             "",
-            "a saved password leaves the field"
+            "a stored password is not shown"
         );
-
-        sheet.add_server();
-        assert_eq!(server_names(ctx, key).len(), names.len() + 1);
-        assert_eq!(sheet.selected(), Some(names.len()));
-        sheet.remove_selected();
-        assert_eq!(table_column(sheet.table(), 0), server_names(ctx, key));
-        assert_eq!(server_names(ctx, key).len(), names.len());
-
-        // A field being edited is saved when the window closes; no Done button.
-        sheet.table().click(0);
-        assert!(settings_window.makeFirstResponder(Some(sheet.name_field())));
-        let editor = sheet
+        servers
             .name_field()
-            .currentEditor()
-            .expect("editing the name");
-        editor.setString(&NSString::from_str("Staging EU"));
-        autoreleasepool(|_| settings_window.performClose(None));
-        assert!(!settings_window.isVisible());
-        assert_eq!(server_names(ctx, key)[0], "Staging EU");
+            .setStringValue(&NSString::from_str("Discarded"));
+        servers.cancel();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(server_names(ctx, key)[1], "Production EU");
+
+        // Add Server… adds nothing until Save; Delete Server removes it again.
+        servers.add_server();
+        assert!(servers.is_editing() && servers.editing().is_none());
+        assert!(servers.delete_button().isHidden(), "nothing to delete yet");
+        assert_eq!(server_names(ctx, key).len(), names.len());
+        servers
+            .name_field()
+            .setStringValue(&NSString::from_str("Local"));
+        servers
+            .url_field()
+            .setStringValue(&NSString::from_str("http://localhost:8080/ws"));
+        servers.save();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        let added = server_names(ctx, key);
+        assert_eq!(added.len(), names.len() + 1);
+        assert_eq!(added.last().map(String::as_str), Some("Local"));
+        servers.edit(names.len());
+        assert!(!servers.delete_button().isHidden());
+        servers.delete();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(server_names(ctx, key).len(), names.len());
+        assert_eq!(servers.server_rows().len(), names.len());
 
         // The project's General pane, then the remembered pane on the next Settings….
         settings.select(Pane::ProjectGeneral(key));
@@ -2735,6 +2986,7 @@ mod checks {
             settings_window.title().to_string(),
             "Customer API — General"
         );
+        assert_form_layout(settings, "the project's General");
         settings.select(Pane::Servers(key));
         // SAFETY: `showSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, showSettings: None::<&AnyObject>] };
@@ -2749,18 +3001,17 @@ mod checks {
 
         let project = ctx.open();
         let window = project.project_window();
-        let sheet = project.show_settings().expect("the Servers pane");
-        assert_eq!(table_column(sheet.table(), 0)[1], "Production EU");
-        sheet.select(1);
-        assert_eq!(sheet.servers()[1].auth, basic);
-        assert_eq!(sheet.user_field().stringValue().to_string(), "bob");
+        let servers = project.show_settings().expect("the Servers pane");
+        assert_eq!(servers.server_rows()[1][0], "Production EU");
+        assert_eq!(servers.servers()[1].auth, basic);
+        servers.edit(1);
+        assert_eq!(servers.user_field().stringValue().to_string(), "bob");
+        assert!(servers.shows_credentials());
+        servers.cancel();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
         assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
-        // Put the first server's name back for later checks.
-        sheet.select(0);
-        sheet
-            .name_field()
-            .setStringValue(&NSString::from_str("Staging"));
-        sheet.commit_form();
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
