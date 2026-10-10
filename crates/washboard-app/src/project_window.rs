@@ -13,9 +13,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton,
-    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
-    NSSplitViewItem, NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSAlert, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder,
+    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
+    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
@@ -647,26 +647,17 @@ pub fn project_tabbing_id() -> &'static NSString {
 }
 
 fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1100.0, 700.0));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable
         | NSWindowStyleMask::FullSizeContentView;
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the window controller keeps the window, so AppKit must not release it on close
-    // as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str(name));
+    let window = layout::owned_window(
+        &NSString::from_str(name),
+        NSSize::new(1100.0, 700.0),
+        style,
+        mtm,
+    );
     window.setContentMinSize(NSSize::new(720.0, 560.0));
     // Project windows tab with each other (Window ▸ Merge All Windows, or always when the
     // user prefers tabs in System Settings), never with the welcome or New Project window.

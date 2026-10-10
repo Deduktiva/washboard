@@ -8,11 +8,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
-    NSScrollView, NSStackView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource,
-    NSTableViewDelegate, NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControlTextEditingDelegate,
+    NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode, NSScrollView, NSStackView,
+    NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
@@ -174,24 +174,15 @@ impl WelcomeController {
 }
 
 fn window(mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::FullSizeContentView;
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the controller keeps the `Retained<NSWindow>`, so AppKit must not release it on
-    // close as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(ns_string!("Welcome to Washboard"));
+    let window = layout::owned_window(
+        ns_string!("Welcome to Washboard"),
+        NSSize::new(WIDTH, HEIGHT),
+        style,
+        mtm,
+    );
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
     // Not a document window, so it never joins the project windows' tabs.

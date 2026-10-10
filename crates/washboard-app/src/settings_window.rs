@@ -15,19 +15,19 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSControlStateValue,
-    NSControlStateValueOff, NSControlStateValueOn, NSControlTextEditingDelegate, NSFont, NSImage,
-    NSImageView, NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
-    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton,
-    NSResponder, NSScrollView, NSSecureTextField, NSSplitViewController, NSSplitViewItem,
-    NSStackView, NSStackViewGravity, NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField,
+    NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSControlStateValue, NSControlStateValueOff,
+    NSControlStateValueOn, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView,
+    NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLineBreakMode,
+    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton, NSResponder,
+    NSScrollView, NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField,
     NSTextFieldDelegate, NSTitlePosition, NSToolbar, NSToolbarDisplayMode,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowDelegate,
     NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
-    NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString, ns_string,
+    NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
+    NSString, ns_string,
 };
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
@@ -1563,26 +1563,17 @@ fn square_button(
 }
 
 fn settings_window(mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(720.0, 520.0));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable
         | NSWindowStyleMask::FullSizeContentView;
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the controller keeps the `Retained<NSWindow>`, so AppKit must not release it on
-    // close as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(ns_string!("Settings"));
+    let window = layout::owned_window(
+        ns_string!("Settings"),
+        NSSize::new(720.0, 520.0),
+        style,
+        mtm,
+    );
     // A unified, title-only toolbar, like System Settings: the title names the pane.
     let toolbar = NSToolbar::initWithIdentifier(NSToolbar::alloc(mtm), ns_string!("Settings"));
     toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
