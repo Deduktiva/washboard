@@ -504,6 +504,8 @@ impl AppDelegate {
                     controller.response().show_response();
                 }
             }
+            // The response pane follows through `ResponseChanged`.
+            Event::ShownExchangeChanged { .. } => {}
             Event::HistoryChanged { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.response().show_history();

@@ -52,6 +52,9 @@ pub enum Event {
     ShowIssues { project: ProjectKey },
     /// The response pane shows something else.
     ResponseChanged { project: ProjectKey },
+    /// The window switched between the latest exchange and an older one, or to another older
+    /// one ([`ProjectWindow::older_exchange`](crate::ProjectWindow::older_exchange)).
+    ShownExchangeChanged { project: ProjectKey },
     /// The selected request's history list changed.
     HistoryChanged { project: ProjectKey },
     /// An exchange was added to the HTTP log (and the oldest maybe dropped).

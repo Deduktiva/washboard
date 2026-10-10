@@ -21,7 +21,7 @@ use washboard_ui_model::{
     Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
 };
 
-use crate::app::ModelAccess;
+use crate::app::{ModelAccess, with_delegate};
 use crate::editor::{EditorController, read_only_text, set_text, text_of};
 use crate::layout;
 use crate::table::TextTable;
@@ -526,7 +526,8 @@ impl ResponsePane {
         });
     }
 
-    /// History ▸ Restore Request, for the selected row.
+    /// History ▸ Restore Request, for the selected row: shows it, then puts its request as
+    /// sent into the editor.
     pub fn restore_selected(&self) {
         let row = self.ivars().history.table().selectedRow();
         let entry = usize::try_from(row)
@@ -536,8 +537,18 @@ impl ResponsePane {
             return;
         };
         let key = self.ivars().key;
-        self.command("Could not restore the request", |app| {
-            app.restore_request(key, entry)
+        let Some(text) = self.command("Could not restore the request", |app| {
+            app.show_history(key, entry)?;
+            app.restore_request(key)
+        }) else {
+            return;
+        };
+        with_delegate(self.mtm(), |d| {
+            if let Some(controller) = d.project(key) {
+                let editor = controller.editor();
+                let len = editor.text_view().string().length();
+                editor.apply_edit(0..len, &text, 0..0, "Restore Request");
+            }
         });
     }
 }
