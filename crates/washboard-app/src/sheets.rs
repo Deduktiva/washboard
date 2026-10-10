@@ -425,7 +425,7 @@ impl ImportSheetController {
                     if let Some(project) = d.project(key)
                         && suggested
                     {
-                        project.show_settings();
+                        project.show_settings_servers();
                     }
                 });
             }

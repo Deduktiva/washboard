@@ -252,11 +252,6 @@ define_class!(
                 self.cancel_send();
             }
         }
-
-        #[unsafe(method(projectSettings:))]
-        fn project_settings(&self, _sender: Option<&AnyObject>) {
-            self.show_settings();
-        }
     }
 );
 
@@ -606,8 +601,8 @@ impl ProjectWindowController {
             .find(|i| i.itemIdentifier().to_string() == "send")
     }
 
-    /// Project ▸ Project Settings…: the Settings window on this project's Servers pane.
-    pub fn show_settings(&self) -> Option<Retained<ServersPane>> {
+    /// Settings window on this project's Servers pane.
+    pub fn show_settings_servers(&self) -> Option<Retained<ServersPane>> {
         let key = self.key();
         with_delegate(self.mtm(), |d| {
             d.show_settings(Some(Pane::Servers(key))).servers(key)
