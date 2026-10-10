@@ -428,32 +428,26 @@ impl SettingsWindowController {
 
     /// The model's servers changed (`ServersChanged`).
     pub fn reload_servers(&self, key: ProjectKey) {
-        let pane = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, p)| p.clone());
-        if let Some(pane) = pane {
+        if let Some(pane) = self.existing_servers(key) {
             pane.reload();
         }
     }
 
     /// The Servers pane of project `key`, created on first use.
     pub fn servers(&self, key: ProjectKey) -> Retained<ServersPane> {
-        let existing = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, p)| p.clone());
-        existing.unwrap_or_else(|| {
+        self.existing_servers(key).unwrap_or_else(|| {
             let pane = ServersPane::new(key, &self.project_name(key), self.mtm());
             self.ivars().servers.borrow_mut().push((key, pane.clone()));
             pane
         })
+    }
+
+    fn existing_servers(&self, key: ProjectKey) -> Option<Retained<ServersPane>> {
+        let panes = self.ivars().servers.borrow();
+        panes
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, p)| p.clone())
     }
 
     /// The General pane's buttons under the WSDL files.
