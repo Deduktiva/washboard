@@ -4,11 +4,14 @@
 //! window's controller the Project menu, the app delegate the rest. An item nobody answers is
 //! disabled by AppKit's automatic enabling, which is how Project items grey out while only the
 //! welcome window is open.
+//!
+//! Context menus use the same [`Entry`] tables, filled by [`fill_context_menu`] with a target,
+//! since the row they act on is the clicked one, not the selection.
 
 use std::ffi::CStr;
 
 use objc2::rc::Retained;
-use objc2::runtime::Sel;
+use objc2::runtime::{AnyObject, Sel};
 use objc2::{MainThreadMarker, MainThreadOnly, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
 use objc2_foundation::NSString;
@@ -18,7 +21,7 @@ use crate::welcome::RecentProject;
 /// A menu item sending `action`. Every action the app's menus send, its own and AppKit's
 /// (`copy:`, `performFindPanelAction:`, …), takes the sender as its only argument and returns
 /// nothing, whether it reaches a target set later or goes up the responder chain.
-pub fn menu_item(
+fn menu_item(
     title: &str,
     action: Option<Sel>,
     key: &str,
@@ -35,7 +38,7 @@ pub fn menu_item(
     }
 }
 
-const CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
+pub(crate) const CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
 const SHIFT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Shift.0);
 const OPT_CMD: NSEventModifierFlags =
@@ -43,7 +46,7 @@ const OPT_CMD: NSEventModifierFlags =
 const CTRL_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Control.0);
 const CTRL: NSEventModifierFlags = NSEventModifierFlags::Control;
-const NONE: NSEventModifierFlags = NSEventModifierFlags(0);
+pub(crate) const NONE: NSEventModifierFlags = NSEventModifierFlags(0);
 
 /// `NSFindPanelAction` values, sent as the item's tag with `performFindPanelAction:`.
 const FIND_SHOW: isize = 1;
@@ -56,9 +59,9 @@ const OPEN_RECENT: &str = "Recent Projects";
 const CLEAR_MENU: &str = "Clear Menu";
 
 /// `NSBackspaceCharacter`: the key equivalent AppKit shows as ⌫.
-const BACKSPACE: &str = "\u{8}";
+pub(crate) const BACKSPACE: &str = "\u{8}";
 
-enum Entry {
+pub(crate) enum Entry {
     Item {
         title: &'static str,
         action: Option<&'static CStr>,
@@ -72,14 +75,14 @@ enum Entry {
 
 /// Submenus AppKit manages once it is told about them.
 #[derive(Clone, Copy, PartialEq)]
-enum Special {
+pub(crate) enum Special {
     None,
     Services,
     Window,
     Help,
 }
 
-const fn item(
+pub(crate) const fn item(
     title: &'static str,
     action: &'static CStr,
     key: &'static str,
@@ -217,7 +220,7 @@ const MAIN: &[Entry] = &[
 /// Builds the main menu and installs it on `app`, including the Services, Window and Help
 /// menus AppKit maintains.
 pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
-    let menu = build("", MAIN, app, mtm);
+    let menu = build("", MAIN, Some(app), mtm);
     app.setMainMenu(Some(&menu));
 }
 
@@ -249,13 +252,46 @@ pub(crate) fn set_recent_projects(app: &NSApplication, recent: &[RecentProject])
     submenu.addItem(&clear);
 }
 
+/// Empties `menu` and adds `entries`, each item sent to `target` and then handed to
+/// `configure` (for its tag, represented object or enabled state).
+///
+/// # Safety
+///
+/// `target` implements every action in `entries` and outlives the menu: items hold their
+/// target weakly.
+pub(crate) unsafe fn fill_context_menu(
+    menu: &NSMenu,
+    entries: &[Entry],
+    target: &AnyObject,
+    configure: impl Fn(&NSMenuItem),
+) {
+    menu.removeAllItems();
+    add_entries(menu, entries, None, menu.mtm(), &|item| {
+        // SAFETY: the caller guarantees `target` answers the action and outlives the menu.
+        unsafe { item.setTarget(Some(target)) };
+        configure(item);
+    });
+}
+
 fn build(
     title: &str,
     entries: &[Entry],
-    app: &NSApplication,
+    app: Option<&NSApplication>,
     mtm: MainThreadMarker,
 ) -> Retained<NSMenu> {
     let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title));
+    add_entries(&menu, entries, app, mtm, &|_| {});
+    menu
+}
+
+/// Adds `entries` to `menu`, registering the special submenus with `app` if given.
+fn add_entries(
+    menu: &NSMenu,
+    entries: &[Entry],
+    app: Option<&NSApplication>,
+    mtm: MainThreadMarker,
+    configure: &dyn Fn(&NSMenuItem),
+) {
     for entry in entries {
         match entry {
             Entry::Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
@@ -266,10 +302,10 @@ fn build(
                 modifiers,
                 tag,
             } => {
-                // No target: the action goes up the responder chain.
                 let item = menu_item(title, action.map(Sel::register), key, mtm);
                 item.setKeyEquivalentModifierMask(*modifiers);
                 item.setTag(*tag);
+                configure(&item);
                 menu.addItem(&item);
             }
             Entry::Submenu(title, special, entries) => {
@@ -278,14 +314,13 @@ fn build(
                 item.setTitle(&NSString::from_str(title));
                 item.setSubmenu(Some(&submenu));
                 menu.addItem(&item);
-                match special {
-                    Special::None => {}
-                    Special::Services => app.setServicesMenu(Some(&submenu)),
-                    Special::Window => app.setWindowsMenu(Some(&submenu)),
-                    Special::Help => app.setHelpMenu(Some(&submenu)),
+                match (app, special) {
+                    (None, _) | (_, Special::None) => {}
+                    (Some(app), Special::Services) => app.setServicesMenu(Some(&submenu)),
+                    (Some(app), Special::Window) => app.setWindowsMenu(Some(&submenu)),
+                    (Some(app), Special::Help) => app.setHelpMenu(Some(&submenu)),
                 }
             }
         }
     }
-    menu
 }
