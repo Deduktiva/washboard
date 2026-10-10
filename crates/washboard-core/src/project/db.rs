@@ -17,7 +17,7 @@ pub const SCHEMA_VERSION: i32 = 2;
 
 const MIGRATIONS: &[&str] = &[V1, V2];
 
-/// PLAN §3, schema v1.
+/// Schema v1: project, servers, request metadata, history, UI state.
 const V1: &str = "
 CREATE TABLE project  (id TEXT PRIMARY KEY,
                        name TEXT NOT NULL,
