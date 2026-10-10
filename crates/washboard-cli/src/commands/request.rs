@@ -1,4 +1,4 @@
-//! `request list|new|show|rename|duplicate|delete` (`validate`, `send` and `history` live in
+//! `request list|new|show|rename|duplicate|delete|format` (`validate`, `send` and `history` live in
 //! their own modules).
 
 use std::collections::HashMap;
@@ -131,5 +131,35 @@ pub fn show(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
     if !text.ends_with('\n') {
         out.write_all(b"\n")?;
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Format XML at `indent` spaces, as the app's ⌃I does. Rewrites the file only if that changes
+/// it; with `check`, writes nothing and exits 1 if it would. A request that is not well-formed
+/// is left alone and exits 1. The app's indent setting is not read: it lives in the macOS user
+/// defaults, which the CLI does not use.
+pub fn format(dir: &Path, name: &str, indent: usize, check: bool) -> anyhow::Result<ExitCode> {
+    let project = if check {
+        support::open_read(dir)?
+    } else {
+        support::open_write(dir)?
+    };
+    let r = support::find_request(&project, name)?;
+    let text = project.read_request(r.id)?;
+    let formatted = match xml::pretty_print(&text, indent) {
+        Ok(formatted) => formatted,
+        Err(d) => {
+            eprintln!("{name}:{d}");
+            return Ok(ExitCode::from(1));
+        }
+    };
+    if formatted == text {
+        return Ok(ExitCode::SUCCESS);
+    }
+    if check {
+        eprintln!("{name}: not formatted");
+        return Ok(ExitCode::from(1));
+    }
+    project.write_request(r.id, &formatted)?;
     Ok(ExitCode::SUCCESS)
 }

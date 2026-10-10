@@ -75,11 +75,11 @@ pub fn request_envelope(
     let body = operation.body_elements(Direction::Input);
 
     match blocks(model, &headers, &body, opts, false)? {
-        Some((h, b, namespaces)) => Ok(assemble(&h, &b, &namespaces)),
+        Some((h, b, namespaces)) => Ok(assemble(&h, &b, &namespaces, &opts.indent)),
         None => {
             let (h, b, _) = blocks(model, &headers, &body, opts, true)?
                 .unwrap_or_else(|| (Vec::new(), Vec::new(), Vec::new()));
-            Ok(assemble(&h, &b, &[]))
+            Ok(assemble(&h, &b, &[], &opts.indent))
         }
     }
 }
@@ -132,7 +132,13 @@ fn blocks(
     Ok(Some((h, b, order)))
 }
 
-fn assemble(headers: &[String], body: &[String], namespaces: &[(String, String)]) -> String {
+/// `indent` is one level, the same as the blocks were generated with.
+fn assemble(
+    headers: &[String],
+    body: &[String],
+    namespaces: &[(String, String)],
+    indent: &str,
+) -> String {
     let p = ENVELOPE_PREFIX;
     let mut s = format!("<{p}:Envelope xmlns:{p}=\"{SOAP11_ENV_NS}\"");
     // Align further declarations under the first, as hand-written envelopes do.
@@ -142,19 +148,20 @@ fn assemble(headers: &[String], body: &[String], namespaces: &[(String, String)]
     }
     s.push_str(">\n");
     let section = |s: &mut String, name: &str, items: &[String]| {
-        s.push_str(&format!("  <{p}:{name}>\n"));
+        s.push_str(&format!("{indent}<{p}:{name}>\n"));
         for item in items {
             for line in item.lines() {
                 if line.is_empty() {
                     s.push('\n');
                 } else {
-                    s.push_str("    ");
+                    s.push_str(indent);
+                    s.push_str(indent);
                     s.push_str(line);
                     s.push('\n');
                 }
             }
         }
-        s.push_str(&format!("  </{p}:{name}>\n"));
+        s.push_str(&format!("{indent}</{p}:{name}>\n"));
     };
     if !headers.is_empty() {
         section(&mut s, "Header", headers);
@@ -252,6 +259,33 @@ mod tests {
             &TemplateOptions::default(),
         );
         assert!(matches!(err, Err(EnvelopeError::Unsupported { .. })));
+    }
+
+    #[test]
+    fn envelope_uses_the_template_indent() {
+        let (w, m) = load(
+            "customer",
+            "CustomerService.wsdl",
+            &["CustomerBinding.wsdl", "xsd"],
+        );
+        let op = op(
+            "urn:example:customer:service",
+            "CustomerBinding",
+            "GetCustomer",
+        );
+        for width in [2, 4] {
+            let opts = TemplateOptions {
+                indent: " ".repeat(width),
+                ..TemplateOptions::default()
+            };
+            let env = request_envelope(&w, &m, &op, &opts).expect("envelope");
+            // A new request is already formatted at the same width as Format XML.
+            assert_eq!(
+                crate::xml::pretty_print(&env, width).as_ref(),
+                Ok(&env),
+                "width {width}"
+            );
+        }
     }
 
     #[test]

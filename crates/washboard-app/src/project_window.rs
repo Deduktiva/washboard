@@ -13,10 +13,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSButton, NSImage, NSMenu, NSMenuItem, NSPopUpButton, NSResponder,
-    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
-    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSAlert, NSBackingStoreType, NSBeep, NSButton, NSImage, NSMenu, NSMenuItem,
+    NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView, NSSplitView,
+    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView, NSToolbar,
+    NSToolbarDelegate, NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
     NSWindowToolbarStyle,
@@ -27,7 +27,7 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{ImportTarget, ProjectKey, WellFormedness};
+use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, WellFormedness};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
@@ -165,6 +165,17 @@ define_class!(
         }
     }
 
+    // SAFETY: `NSMenuItemValidation` has no safety requirements.
+    unsafe impl NSMenuItemValidation for ProjectWindowController {
+        // SAFETY: the signature matches `validateMenuItem:`.
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
+            // Every other item this controller answers is always enabled, as before it
+            // validated anything.
+            item.action() != Some(sel!(formatXML:)) || self.has_editor()
+        }
+    }
+
     // Project menu and toolbar actions, answered while this window is key.
     impl ProjectWindowController {
         // SAFETY (all below): action methods take the sender and return nothing.
@@ -213,6 +224,11 @@ define_class!(
             }
             // The popup shows what the model chose, also when it refused.
             self.show_server_selection();
+        }
+
+        #[unsafe(method(formatXML:))]
+        fn format_xml(&self, _sender: Option<&AnyObject>) {
+            self.format_request(true);
         }
 
         #[unsafe(method(validateRequest:))]
@@ -468,6 +484,44 @@ impl ProjectWindowController {
 
     pub fn request_bar(&self) -> &RequestBar {
         &self.ivars().request_bar
+    }
+
+    /// Format XML (⌃I) on the open request, applied through the editor as one undo step. A
+    /// request that is not well-formed is left as it is; its error is in the issues bar, and
+    /// with `beep` the user hears that nothing happened.
+    pub fn format_request(&self, beep: bool) {
+        let key = self.key();
+        let selected = self.editor().text_view().selectedRange();
+        let selection = selected.location..selected.location + selected.length;
+        let Some(result) = self.read(|app| app.format_request(key, selection)) else {
+            return;
+        };
+        match result {
+            Ok(Some(reformat)) => self.editor().apply_edit(
+                reformat.range,
+                &reformat.text,
+                reformat.selection,
+                "Format XML",
+            ),
+            Ok(None) => {}
+            Err(ModelError::NotWellFormed(_)) => {
+                if beep {
+                    NSBeep();
+                }
+            }
+            Err(e) => {
+                with_delegate(self.mtm(), |d| {
+                    d.update(|app| app.alert_error("Could not format the request", &e));
+                    d.sync();
+                });
+            }
+        }
+    }
+
+    fn has_editor(&self) -> bool {
+        let key = self.key();
+        self.read(|app| app.project(key).is_some_and(|w| w.editor().is_some()))
+            .unwrap_or(false)
     }
 
     /// The model's selected request.

@@ -45,14 +45,13 @@ impl App {
         key: ProjectKey,
         operation: &OperationRef,
     ) -> Result<RequestId, ModelError> {
+        let opts = TemplateOptions {
+            indent: " ".repeat(self.format.indent),
+            ..TemplateOptions::default()
+        };
         let window = self.window(key)?;
         let schema = window.schema.ready()?.clone();
-        let text = soap::request_envelope(
-            &schema.wsdl,
-            &schema.model,
-            operation,
-            &TemplateOptions::default(),
-        )?;
+        let text = soap::request_envelope(&schema.wsdl, &schema.model, operation, &opts)?;
         let meta = window.project.create_request(operation, &text)?;
         self.requests_changed(key)?;
         self.select_request(key, Some(meta.id))?;

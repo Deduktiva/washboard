@@ -12,6 +12,8 @@
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod app_settings;
+#[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
 mod front_end;
@@ -39,6 +41,8 @@ mod text;
 
 #[cfg(target_os = "macos")]
 pub use app::{AppDelegate, Options, install, run};
+#[cfg(target_os = "macos")]
+pub use app_settings::{AppSettings, INDENT_KEY, ON_SAVE_KEY};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
 #[cfg(target_os = "macos")]

@@ -41,7 +41,7 @@ pub struct ResponseView {
 }
 
 impl ResponseView {
-    fn from_record(record: HistoryRecord) -> ResponseView {
+    fn from_record(record: HistoryRecord, indent: usize) -> ResponseView {
         let entry = record.entry;
         let fault = record.response_body.as_deref().and_then(detect_fault);
         ResponseView {
@@ -54,7 +54,10 @@ impl ResponseView {
             error: entry.error,
             headers: record.response_headers,
             size: record.response_body.as_ref().map_or(0, Vec::len),
-            body: record.response_body.as_deref().map(display_body),
+            body: record
+                .response_body
+                .as_deref()
+                .map(|b| display_body(b, indent)),
             fault,
         }
     }
@@ -64,6 +67,7 @@ impl ResponseView {
         server: &Server,
         exchange: &Exchange,
         fault: Option<SoapFault>,
+        indent: usize,
     ) -> ResponseView {
         let response = exchange.response.as_ref();
         ResponseView {
@@ -76,16 +80,17 @@ impl ResponseView {
             error: exchange.error.clone(),
             headers: response.map(|r| r.headers.clone()).unwrap_or_default(),
             size: response.map_or(0, |r| r.body.len()),
-            body: response.map(|r| display_body(&r.body)),
+            body: response.map(|r| display_body(&r.body, indent)),
             fault,
         }
     }
 }
 
-/// Pretty-printed only if it decodes; a lossy fallback is shown as received.
-fn display_body(bytes: &[u8]) -> String {
+/// Pretty-printed at the app's indent width, so responses look like formatted requests;
+/// a lossy fallback is shown as received.
+fn display_body(bytes: &[u8], indent: usize) -> String {
     match xml::decode(bytes) {
-        Ok(decoded) => xml::pretty_print(&decoded.text).unwrap_or(decoded.text),
+        Ok(decoded) => xml::pretty_print(&decoded.text, indent).unwrap_or(decoded.text),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
@@ -246,6 +251,7 @@ impl App {
             .project
             .record_exchange(request, &server, &exchange, fault.is_some());
         let name = window.name.clone();
+        let indent = self.format.indent;
         let history = match recorded {
             Ok(entry) => Some(entry.id),
             Err(e) => {
@@ -257,7 +263,7 @@ impl App {
             && window.selected_request() == Some(request)
         {
             window.response = Some(ResponseView::from_exchange(
-                history, &server, &exchange, fault,
+                history, &server, &exchange, fault, indent,
             ));
             window.reload_history();
             self.events.push(Event::ResponseChanged { project: key });
@@ -279,9 +285,10 @@ impl App {
 
     /// Shows a history entry in the response pane.
     pub fn show_history(&mut self, key: ProjectKey, entry: HistoryId) -> Result<(), ModelError> {
+        let indent = self.format.indent;
         let window = self.window(key)?;
         let record = window.project.load_history(entry)?;
-        window.response = Some(ResponseView::from_record(record));
+        window.response = Some(ResponseView::from_record(record, indent));
         self.events.push(Event::ResponseChanged { project: key });
         Ok(())
     }
@@ -311,13 +318,13 @@ impl App {
     }
 
     /// Loads the selected request's history and shows its latest entry.
-    pub(crate) fn load_history(window: &mut ProjectWindow) {
+    pub(crate) fn load_history(window: &mut ProjectWindow, indent: usize) {
         window.reload_history();
         window.response = window
             .history
             .first()
             .and_then(|e| window.project.load_history(e.id).ok())
-            .map(ResponseView::from_record);
+            .map(|record| ResponseView::from_record(record, indent));
     }
 }
 
