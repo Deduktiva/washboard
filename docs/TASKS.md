@@ -80,6 +80,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
 | WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
+| WP-STATUS-COLORS | UI review fixes (#81) and WP-DARK-MODE (#71), which change the same lines; coordinate with WP-RULER-HOVER, whose warning markers use the new warning colour | new `crates/washboard-app/src/colors.rs`; the status-colour call sites in `panes.rs`, `editor.rs` (ruler markers, underlines), `sidebar.rs`, `http_log.rs`; a colour rule in `CLAUDE.md` | One function per meaning (error, warning, success) instead of `NSColor::system*Color()` at each call site with a comment saying what it means. Below. |
 
 ### WP-OPERATION-PICKER in detail
 
@@ -204,3 +205,38 @@ would leave folders for removed operations behind.
   operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
   move by the model's command shows in the tree; collapsed folders survive reopening the
   project.
+
+### WP-STATUS-COLORS in detail
+
+The app picks a status colour at each call site: once the UI review fixes (#81) are in,
+`systemRedColor` for errors in six places, `systemOrangeColor` for warnings in three and
+`systemGreenColor` for success in two. #81 also adds comments like "red like the issues bar's
+error count" to keep them consistent. A name says that once, and a change of mind is one line.
+
+- **`colors.rs`**, one function per meaning, each returning `Retained<NSColor>`: `error()`
+  (`systemRedColor`), `warning()` (`systemOrangeColor`), `success()` (`systemGreenColor`).
+  Functions, not cached values: the system colours are dynamic and resolve per appearance and
+  Increase Contrast, so each call returns AppKit's shared object, which costs nothing. The doc
+  comment of each says where it is used.
+- **Call sites on main today:**
+  - Error: the request bar's "XML error" (`panes.rs`); the issues bar's error count (twice,
+    `panes.rs`); after #81, the ruler's error marker and the error underline (`editor.rs`) and
+    the sidebar's invalid-request marker (`sidebar.rs`).
+  - Warning: the issues bar's "schema not checked" and warning count (`panes.rs`); the HTTP
+    log's skipped certificate check (`http_log.rs`). WP-RULER-HOVER's warning markers and
+    underlines join these.
+  - Success: "Well-formed" in the request bar and "✓ Valid" in the issues bar (`panes.rs`).
+  - The comments that only say which colour means what go.
+- **Not status colours:**
+  - The editor's syntax highlighting stays one palette in `editor.rs` (`highlight_palette`
+    after WP-DARK-MODE), keyed by token kind. Attribute values stay `systemRedColor`, as in
+    Xcode, although that is also the error colour: in the editor an error is an underline or a
+    ruler marker, never coloured text, so the two do not meet there.
+  - AppKit's semantic colours (`labelColor`, `secondaryLabelColor`, `separatorColor`, the
+    fills) already name a meaning and stay as they are.
+- **Rule** for `CLAUDE.md`, added with the package: "Colours: status colours come from
+  `colors.rs` (`error`, `warning`, `success`); `NSColor::system*Color` appears only there and in
+  the editor's highlighting palette. AppKit's semantic colours are used directly."
+- **Tests:** the Dark Mode contrast check from WP-DARK-MODE (`tests/appkit.rs`) also measures
+  the three status colours against the window background in both appearances. Nothing else
+  changes behaviour, so the existing checks cover the call sites.
