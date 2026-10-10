@@ -30,6 +30,7 @@ fn main() {
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
         ("dark_mode", checks::dark_mode),
+        ("menu_validation", checks::menu_validation),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
@@ -1443,6 +1444,56 @@ mod checks {
         });
 
         autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// Project menu items that act on the selected request are disabled without one, and
+    /// Delete steps aside while a text view has the focus, so ⌘⌫ deletes to the start of the
+    /// line there instead of asking to delete the request.
+    pub fn menu_validation(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            // SAFETY: `newRequest:` takes the sender.
+            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+        }
+        let request = project.selected_request().expect("a request is selected");
+        let menu = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|i| i.submenu())
+            .expect("Project menu");
+        let enabled = |title: &str| -> bool {
+            let item = menu
+                .itemWithTitle(&NSString::from_str(title))
+                .expect("a Project menu item");
+            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+            unsafe { msg_send![&*project, validateMenuItem: &*item] }
+        };
+        let window = project.project_window();
+        assert!(enabled("New Request"), "the WSDL is loaded");
+
+        window.makeFirstResponder(Some(project.editor().text_view()));
+        assert!(!enabled("Delete"), "⌘⌫ goes to the editor");
+        assert!(enabled("Duplicate") && enabled("Send"), "the rest stay");
+        let outline = project.sidebar().outline().expect("the sidebar is built");
+        window.makeFirstResponder(Some(outline));
+        assert!(
+            enabled("Delete"),
+            "⌘⌫ deletes the selected request from the sidebar"
+        );
+
+        let key = project.key();
+        ctx.delegate
+            .command("deselect", |app| app.select_request(key, None))
+            .expect("deselected");
+        for title in ["Duplicate", "Rename", "Delete", "Validate", "Send"] {
+            assert!(!enabled(title), "{title} without a selected request");
+        }
+        ctx.delegate
+            .command("reselect", |app| app.select_request(key, Some(request)))
+            .expect("reselected");
+        autoreleasepool(|_| window.performClose(None));
     }
 
     /// Format XML (⌃I) is one undo step that keeps the selection on the same text; the settings
