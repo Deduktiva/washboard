@@ -21,6 +21,7 @@ fn main() {
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
+        ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
         ("port_chips", checks::port_chips),
@@ -675,6 +676,43 @@ mod checks {
             ctx.delegate.projects().len(),
             1,
             "focused, not opened twice"
+        );
+    }
+
+    /// A project window comes back at the size and place it had, and so does its sidebar's
+    /// width (PLAN §3: frames autosaved per project).
+    pub fn window_frames(ctx: &Ctx) {
+        let project = ctx.open();
+        let window = project.project_window();
+        // Smaller and moved, but still on the screen: AppKit constrains a restored frame to
+        // the screen, and the CI runner's screen is only as wide as the default window.
+        let mut frame = window.frame();
+        frame.origin.x += 37.0;
+        frame.size.width -= 61.0;
+        window.setFrame_display(frame, false);
+        // The split view restores its own dividers under this name; their geometry after a
+        // reopen depends on when NSSplitViewController lays out, so only the name is checked.
+        let folder = window.representedFilename().to_string();
+        assert_eq!(
+            window.frameAutosaveName().to_string(),
+            format!("ProjectWindow {folder}")
+        );
+        let split_name = project.split_view().splitView().autosaveName();
+        assert_eq!(
+            split_name.map(|n| n.to_string()),
+            Some(format!("ProjectSidebar {folder}")),
+            "the sidebar's width is saved per project"
+        );
+        autoreleasepool(|_| window.performClose(None));
+        drop(project);
+        assert!(ctx.delegate.projects().is_empty(), "closed");
+
+        let project = ctx.open();
+        let again = project.project_window().frame();
+        assert!(
+            (again.origin.x - frame.origin.x).abs() < 1.0
+                && (again.size.width - frame.size.width).abs() < 1.0,
+            "the frame came back: {again:?}, was {frame:?}"
         );
     }
 

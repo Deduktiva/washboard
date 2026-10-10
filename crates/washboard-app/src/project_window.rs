@@ -310,10 +310,20 @@ impl ProjectWindowController {
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
 
         let split = this.split_view_controller(mtm);
+        // The sidebar's width, kept per project like the frame below.
+        split
+            .splitView()
+            .setAutosaveName(Some(&autosave_name("ProjectSidebar", folder)));
         window.setContentViewController(Some(&split));
         // `setContentViewController` resizes the window to the controllers' fitting size.
         window.setContentSize(NSSize::new(1100.0, 700.0));
-        window.center();
+        // Size and position are kept per project, by folder (the key changes every launch),
+        // as PLAN §3 intends; a project opened for the first time starts centred.
+        let frame_name = autosave_name("ProjectWindow", folder);
+        if !window.setFrameUsingName(&frame_name) {
+            window.center();
+        }
+        window.setFrameAutosaveName(&frame_name);
         // The window holds its delegate weakly; this controller owns the window.
         window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         let _ = this.ivars().split.set(split);
@@ -657,6 +667,11 @@ impl ProjectWindowController {
         // the same commands with shortcuts.
         Retained::into_super(scroll)
     }
+}
+
+/// A user defaults name for something kept per project: `kind` and the project's folder.
+fn autosave_name(kind: &str, folder: &Path) -> Retained<NSString> {
+    NSString::from_str(&format!("{kind} {}", folder.display()))
 }
 
 /// Shared by every project window, so they group into one window's tabs.
