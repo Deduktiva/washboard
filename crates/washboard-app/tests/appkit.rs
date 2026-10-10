@@ -430,8 +430,6 @@ mod checks {
                 ("Validate", "b", C, "validateRequest:"),
                 ("Send", "\r", C, "sendRequest:"),
                 ("Cancel Send", ".", C, "cancelSend:"),
-                ("-", "", 0, ""),
-                ("Project Settings…", "", 0, "projectSettings:"),
             ],
         ),
         (
@@ -2861,8 +2859,7 @@ mod checks {
             "the app's section, then one per open project"
         );
 
-        // SAFETY: `projectSettings:` takes the sender.
-        let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };
+        settings.show(Some(Pane::Servers(key)));
         assert_eq!(settings.selected(), Some(Pane::Servers(key)));
         assert_eq!(
             settings_window.title().to_string(),
@@ -3001,7 +2998,7 @@ mod checks {
 
         let project = ctx.open();
         let window = project.project_window();
-        let servers = project.show_settings().expect("the Servers pane");
+        let servers = project.show_settings_servers().expect("the Servers pane");
         assert_eq!(servers.server_rows()[1][0], "Production EU");
         assert_eq!(servers.servers()[1].auth, basic);
         servers.edit(1);

@@ -188,8 +188,6 @@ const PROJECT: &[Entry] = &[
     // Enabled only while a send is in flight. The toolbar's Send turns into Cancel instead;
     // the menu keeps both, so pressing ⌘↩ twice never cancels the first send.
     item("Cancel Send", c"cancelSend:", ".", CMD),
-    Entry::Separator,
-    item("Project Settings…", c"projectSettings:", "", NONE),
 ];
 
 const WINDOW: &[Entry] = &[
