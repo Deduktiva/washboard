@@ -419,6 +419,7 @@ mod checks {
                 ("-", "", 0, ""),
                 ("Validate", "b", C, "validateRequest:"),
                 ("Send", "\r", C, "sendRequest:"),
+                ("Cancel Send", ".", C, "cancelSend:"),
                 ("-", "", 0, ""),
                 ("Project Settings…", "", 0, "projectSettings:"),
             ],
@@ -1816,11 +1817,30 @@ mod checks {
         assert_eq!(response.history().rows().len(), history, "nothing sent");
 
         replace(start, "someday".len(), &date);
+        let project_menu = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|i| i.submenu())
+            .expect("Project menu");
+        let enabled = |title: &str| -> bool {
+            let item = project_menu
+                .itemWithTitle(&NSString::from_str(title))
+                .expect("a Project menu item");
+            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+            unsafe { msg_send![&*project, validateMenuItem: &*item] }
+        };
+        assert!(enabled("Send") && !enabled("Cancel Send"), "idle");
+        assert!(!response.is_spinning());
         action("sendRequest:");
         assert_eq!(send_label().as_deref(), Some("Cancel"));
         assert_eq!(response.status(), "Sending…");
+        assert!(response.is_spinning(), "the spinner shows while sending");
+        // The menu's Send doesn't cancel: ⌘↩ twice must not stop the first send.
+        assert!(!enabled("Send") && enabled("Cancel Send"), "sending");
         wait_until("the response", || response.status().starts_with("200"));
         assert_eq!(send_label().as_deref(), Some("Send"));
+        assert!(!response.is_spinning());
         let body = response.body().text_view().string().to_string();
         assert!(body.contains("LookupResponse"), "{body}");
         // The pane shows the model's headers; what they are is the HTTP client's business,
@@ -1889,6 +1909,15 @@ mod checks {
         assert_eq!(send_label().as_deref(), Some("Cancel"));
         action("sendRequest:");
         assert_eq!(send_label().as_deref(), Some("Send"), "cancelled");
+        // Project ▸ Cancel Send (⌘.) does the same.
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
+        action("cancelSend:");
+        assert_eq!(
+            send_label().as_deref(),
+            Some("Send"),
+            "cancelled from the menu"
+        );
         assert!(
             response.status().starts_with("200"),
             "the last response stays"

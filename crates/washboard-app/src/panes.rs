@@ -9,8 +9,8 @@ use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBox, NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
-    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView, NSStackViewGravity,
-    NSTabView, NSTabViewItem, NSTextField, NSView,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle,
+    NSScrollView, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSView,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
@@ -291,6 +291,8 @@ pub const RESPONSE_TABS: [&str; 3] = ["Response", "Headers", "History"];
 pub struct ResponseIvars {
     key: ProjectKey,
     status: Retained<NSTextField>,
+    /// Spins beside the status while a send is in flight.
+    spinner: Retained<NSProgressIndicator>,
     body: Retained<EditorController>,
     headers: Retained<NSScrollView>,
     history: Retained<TextTable>,
@@ -338,9 +340,16 @@ impl ResponsePane {
             NSLayoutConstraintOrientation::Horizontal,
         );
 
+        let spinner = NSProgressIndicator::new(mtm);
+        spinner.setStyle(NSProgressIndicatorStyle::Spinning);
+        spinner.setControlSize(NSControlSize::Small);
+        spinner.setIndeterminate(true);
+        spinner.setHidden(true);
+
         let this = Self::alloc(mtm).set_ivars(ResponseIvars {
             key,
             status,
+            spinner,
             body,
             headers,
             history,
@@ -391,7 +400,13 @@ impl ResponsePane {
             item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
-        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
+        let status = layout::row(
+            &[
+                layout::view(this.ivars().spinner.clone()),
+                layout::view(this.ivars().status.clone()),
+            ],
+            mtm,
+        );
         status.setEdgeInsets(layout::insets(6.0, 8.0, 2.0, 8.0));
         let view = layout::fill_column(
             &[
@@ -416,6 +431,25 @@ impl ResponsePane {
         self.ivars()
             .status
             .setStringValue(&NSString::from_str(status));
+    }
+
+    /// Whether the spinner beside the status is shown.
+    pub fn is_spinning(&self) -> bool {
+        !self.ivars().spinner.isHidden()
+    }
+
+    /// A hidden spinner leaves the status row, so the status keeps its place when idle.
+    fn show_spinner(&self, sending: bool) {
+        let spinner = &self.ivars().spinner;
+        spinner.setHidden(!sending);
+        // SAFETY: both take any sender, and nil is allowed.
+        unsafe {
+            if sending {
+                spinner.startAnimation(None);
+            } else {
+                spinner.stopAnimation(None);
+            }
+        }
     }
 
     pub fn tabs(&self) -> &NSTabView {
@@ -465,6 +499,7 @@ impl ResponsePane {
             _ => "No response yet".to_owned(),
         };
         self.set_status(&status);
+        self.show_spinner(sending);
         // The full URL, for when the server's name is not enough.
         let url = response.as_ref().map(|r| NSString::from_str(&r.url));
         self.ivars().status.setToolTip(url.as_deref());
