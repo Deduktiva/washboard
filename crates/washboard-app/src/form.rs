@@ -11,6 +11,10 @@
 //!   controls in one row go in an [`hstack`].
 //! - When there is not enough width, the label truncates, never the control; a read-only
 //!   value ([`value_row`]) truncates before its label.
+//! - Rows that only apply sometimes (User and Password without Basic auth) are hidden with
+//!   [`set_row_shown`], not disabled.
+//! - A sheet uses the same sections in a [`body`] with the page margins, its buttons in
+//!   [`dialog_buttons`] at the bottom, and takes its fitting height ([`fit_window`]).
 //!
 //! Positions are explicit constraints, not NSStackView alignment. With vertical stacks set to
 //! `Width` alignment and edge insets, the Settings panes' sections, headers and rows drifted to
@@ -51,14 +55,13 @@ const SECTION_SPACING: f64 = 20.0;
 const PAGE_PADDING: f64 = 20.0;
 /// Text fields in rows share one width, so their leading edges line up down a group.
 pub const FIELD_WIDTH: f64 = 260.0;
-/// The bar of +/− buttons under a list.
-const BAR_HEIGHT: f64 = 28.0;
 
 /// View identifiers, so tests can find a pane's parts and check their geometry.
 pub const HEADER_ID: &str = "form.header";
 pub const GROUP_ID: &str = "form.group";
 pub const TEXT_ID: &str = "form.text";
 const COLLAPSED_ID: &str = "form.collapsed";
+const ROW_ID: &str = "form.row";
 
 define_class!(
     // SAFETY:
@@ -133,6 +136,88 @@ pub fn page(sections: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<
             .constraintEqualToAnchor(&clip.widthAnchor()),
     ]);
     view(scroll)
+}
+
+/// A sheet's content: `sections` top to bottom with the page margins, then `buttons` made
+/// with [`dialog_buttons`]. It does not scroll: the sheet takes its fitting size, see
+/// [`fit_window`].
+pub fn body(
+    sections: Vec<Retained<NSView>>,
+    buttons: Retained<NSView>,
+    width: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let mut blocks: Vec<Block> = sections
+        .into_iter()
+        .enumerate()
+        .map(|(i, view)| Block {
+            view,
+            inset: PAGE_MARGIN,
+            gap: if i == 0 { 0.0 } else { SECTION_SPACING },
+        })
+        .collect();
+    blocks.push(Block {
+        view: buttons,
+        inset: PAGE_MARGIN,
+        gap: SECTION_SPACING,
+    });
+    let body = column(blocks, PAGE_PADDING, mtm);
+    body.widthAnchor()
+        .constraintEqualToConstant(width)
+        .setActive(true);
+    body
+}
+
+/// Sizes `window`'s content to `body`'s fitting size, after rows were shown or hidden.
+pub fn fit_window(window: &objc2_app_kit::NSWindow, body: &NSView) {
+    body.layoutSubtreeIfNeeded();
+    window.setContentSize(body.fittingSize());
+}
+
+/// A sheet's buttons: `leading` alone on the leading edge (a destructive action), `trailing`
+/// on the trailing edge, the default button last.
+pub fn dialog_buttons(
+    leading: Option<Retained<NSView>>,
+    trailing: Vec<Retained<NSView>>,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let trailing = hstack(trailing, mtm);
+    let row = new_view(mtm);
+    add(&row, &trailing);
+    activate([
+        trailing
+            .trailingAnchor()
+            .constraintEqualToAnchor(&row.trailingAnchor()),
+        trailing
+            .topAnchor()
+            .constraintEqualToAnchor(&row.topAnchor()),
+        trailing
+            .bottomAnchor()
+            .constraintEqualToAnchor(&row.bottomAnchor()),
+    ]);
+    match leading {
+        Some(leading) => {
+            add(&row, &leading);
+            activate([
+                leading
+                    .leadingAnchor()
+                    .constraintEqualToAnchor(&row.leadingAnchor()),
+                leading
+                    .centerYAnchor()
+                    .constraintEqualToAnchor(&trailing.centerYAnchor()),
+                trailing
+                    .leadingAnchor()
+                    .constraintGreaterThanOrEqualToAnchor_constant(
+                        &leading.trailingAnchor(),
+                        CONTROL_SPACING,
+                    ),
+            ]);
+        }
+        None => activate([trailing
+            .leadingAnchor()
+            .constraintGreaterThanOrEqualToAnchor(&row.leadingAnchor())]),
+    }
+    row
 }
 
 /// One section of a [`page`], built top to bottom.
@@ -214,22 +299,49 @@ pub fn set_rows(group: &NSBox, rows: Vec<Retained<NSView>>, mtm: MainThreadMarke
     for old in content.subviews().iter() {
         old.removeFromSuperview();
     }
-    let mut blocks = Vec::new();
-    for (i, row) in rows.into_iter().enumerate() {
-        if i > 0 {
-            blocks.push(Block {
-                view: separator(mtm),
-                inset: ROW_INSET,
+    // Each row goes with the hairline above it, so that hiding a row hides its hairline too.
+    let blocks = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut parts = Vec::new();
+            if i > 0 {
+                parts.push(Block {
+                    view: separator(mtm),
+                    inset: ROW_INSET,
+                    gap: 0.0,
+                });
+            }
+            parts.push(Block {
+                view: row,
+                inset: 0.0,
                 gap: 0.0,
             });
-        }
-        blocks.push(Block {
-            view: row,
-            inset: 0.0,
-            gap: 0.0,
-        });
-    }
+            let wrapper = column(parts, 0.0, mtm);
+            wrapper.setIdentifier(Some(&NSString::from_str(ROW_ID)));
+            Block {
+                view: wrapper,
+                inset: 0.0,
+                gap: 0.0,
+            }
+        })
+        .collect();
     fill(&content, &column(blocks, 0.0, mtm));
+}
+
+/// Shows or hides `row` of a [`group`], with the hairline above it. Not for a group's first
+/// row: the second row's hairline would then top the group.
+pub fn set_row_shown(row: &NSView, shown: bool) {
+    let id = NSString::from_str(ROW_ID);
+    let mut view = Some(row.retain());
+    while let Some(v) = view {
+        if v.identifier().is_some_and(|i| *i == *id) {
+            set_shown(&v, shown);
+            return;
+        }
+        // SAFETY: as in `set_shown`.
+        view = unsafe { v.superview() };
+    }
 }
 
 /// Shows or hides `block`, a section or anything else placed by [`page`] or [`Section`],
@@ -365,28 +477,28 @@ pub fn button_row(buttons: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Reta
     row
 }
 
-/// `content` from edge to edge of its group, with no padding: a list.
-pub fn flush_row(content: &NSView, mtm: MainThreadMarker) -> Retained<NSView> {
+/// A line of secondary text in a row of its own, such as a list's "No servers".
+pub fn text_row(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
+    layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
     let row = new_view(mtm);
-    fill(&row, content);
-    row
-}
-
-/// The small +/− buttons under a list, on its leading edge.
-pub fn bar_row(buttons: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
-    let buttons = hstack(buttons, mtm);
-    buttons.setSpacing(0.0);
-    let row = new_view(mtm);
-    add(&row, &buttons);
+    add(&row, &label);
     activate([
-        buttons
+        label
             .leadingAnchor()
-            .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET / 2.0),
-        buttons
+            .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET),
+        label
+            .trailingAnchor()
+            .constraintLessThanOrEqualToAnchor_constant(&row.trailingAnchor(), -ROW_INSET),
+        label
             .centerYAnchor()
             .constraintEqualToAnchor(&row.centerYAnchor()),
-        row.heightAnchor().constraintEqualToConstant(BAR_HEIGHT),
+        label
+            .topAnchor()
+            .constraintGreaterThanOrEqualToAnchor_constant(&row.topAnchor(), ROW_PADDING),
     ]);
+    min_height(&row);
     row
 }
 

@@ -30,6 +30,8 @@ mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
 #[cfg(target_os = "macos")]
+mod servers_pane;
+#[cfg(target_os = "macos")]
 mod settings_window;
 #[cfg(target_os = "macos")]
 mod sheets;
@@ -58,7 +60,9 @@ pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use project_window::{ProjectWindowController, project_tabbing_id, toolbar_identifiers};
 #[cfg(target_os = "macos")]
-pub use settings_window::{PANE_KEY, Pane, PaneItem, ServersPane, SettingsWindowController};
+pub use servers_pane::ServersPane;
+#[cfg(target_os = "macos")]
+pub use settings_window::{PANE_KEY, Pane, PaneItem, SettingsWindowController};
 #[cfg(target_os = "macos")]
 pub use sheets::ImportSheetController;
 #[cfg(target_os = "macos")]

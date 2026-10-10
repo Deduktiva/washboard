@@ -9,33 +9,30 @@
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use objc2::rc::{Retained, Weak};
+use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBezelStyle, NSBox, NSButton, NSColor, NSControlStateValue, NSControlStateValueOff,
-    NSControlStateValueOn, NSControlTextEditingDelegate, NSImage, NSImageView,
-    NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLayoutPriorityRequired,
-    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton,
-    NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView, NSSwitch,
-    NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSToolbar,
-    NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle, NSWorkspace,
+    NSButton, NSColor, NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn,
+    NSControlTextEditingDelegate, NSImage, NSImageView, NSLayoutConstraintOrientation,
+    NSLayoutPriorityDefaultHigh, NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource,
+    NSOutlineViewDelegate, NSPopUpButton, NSSplitViewController, NSSplitViewItem, NSStackView,
+    NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField, NSToolbar, NSToolbarDisplayMode,
+    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
     NSString, NSURL, ns_string,
 };
-use washboard_core::model::{Auth, Server, ServerId};
-use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
+use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::form;
 use crate::layout::{self, view};
+use crate::servers_pane::ServersPane;
 use crate::sheets::ImportSheetController;
-use crate::table::TextTable;
 use crate::text::count;
 
 /// Which pane the window shows.
@@ -62,11 +59,6 @@ impl Pane {
 /// folder, which, unlike its key, is the same on the next launch.
 pub const PANE_KEY: &str = "SettingsPane";
 const FRAME_NAME: &str = "Settings";
-
-/// The server list and the timeout field.
-const LIST_HEIGHT: f64 = 120.0;
-const TIMEOUT_WIDTH: f64 = 60.0;
-const SQUARE_BUTTON: f64 = 22.0;
 
 #[derive(Debug)]
 pub struct ItemIvars {
@@ -823,550 +815,6 @@ fn app_pane(
     (view, indent, on_save)
 }
 
-/// The form controls of a Servers pane.
-#[derive(Debug)]
-struct ServerForm {
-    name: Retained<NSTextField>,
-    url: Retained<NSTextField>,
-    ignore_tls: Retained<NSSwitch>,
-    auth_none: Retained<NSButton>,
-    auth_basic: Retained<NSButton>,
-    user: Retained<NSTextField>,
-    password: Retained<NSSecureTextField>,
-    timeout: Retained<NSTextField>,
-}
-
-#[derive(Debug)]
-pub struct ServersIvars {
-    key: ProjectKey,
-    /// The model's servers as last shown.
-    servers: RefCell<Vec<Server>>,
-    suggested: RefCell<Vec<SuggestedServer>>,
-    selected: Cell<Option<ServerId>>,
-    view: OnceCell<Retained<NSView>>,
-    table: OnceCell<Retained<TextTable>>,
-    /// The suggestions' section and the group its rows go in.
-    suggestions: OnceCell<(Retained<NSView>, Retained<NSBox>)>,
-    /// The selected server's section and its header.
-    details: OnceCell<(Retained<NSView>, Retained<NSTextField>)>,
-    form: OnceCell<ServerForm>,
-}
-
-define_class!(
-    // SAFETY:
-    // - NSObject has no subclassing requirements.
-    // - `ServersPane` does not implement `Drop`.
-    #[unsafe(super = NSObject)]
-    #[thread_kind = MainThreadOnly]
-    #[ivars = ServersIvars]
-    #[derive(Debug)]
-    pub struct ServersPane;
-
-    // SAFETY: `NSObjectProtocol` has no safety requirements.
-    unsafe impl NSObjectProtocol for ServersPane {}
-
-    // SAFETY: `NSTextFieldDelegate` has no safety requirements.
-    unsafe impl NSTextFieldDelegate for ServersPane {}
-
-    // SAFETY: `NSControlTextEditingDelegate` has no safety requirements.
-    unsafe impl NSControlTextEditingDelegate for ServersPane {
-        // A field is saved when editing ends, not on every keystroke: each save writes the
-        // project and, for a password, the Keychain.
-        // SAFETY: the signature matches `controlTextDidEndEditing:`.
-        #[unsafe(method(controlTextDidEndEditing:))]
-        fn text_did_end_editing(&self, _notification: &NSNotification) {
-            self.commit_form();
-        }
-    }
-
-    impl ServersPane {
-        // SAFETY (all below): action methods take the sender and return nothing.
-        #[unsafe(method(formChanged:))]
-        fn form_changed(&self, _sender: Option<&AnyObject>) {
-            self.commit_form();
-        }
-
-        #[unsafe(method(addServer:))]
-        fn add_server_action(&self, _sender: Option<&AnyObject>) {
-            self.add_server();
-        }
-
-        #[unsafe(method(removeServer:))]
-        fn remove_server_action(&self, _sender: Option<&AnyObject>) {
-            self.remove_selected();
-        }
-
-        #[unsafe(method(confirmSuggestion:))]
-        fn confirm_suggestion_action(&self, sender: Option<&AnyObject>) {
-            let row = sender
-                .and_then(|s| s.downcast_ref::<NSButton>())
-                .map_or(0, |b| b.tag());
-            self.confirm_suggestion(usize::try_from(row).unwrap_or(0));
-        }
-    }
-);
-
-impl ServersPane {
-    fn new(key: ProjectKey, project: &str, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(ServersIvars {
-            key,
-            servers: RefCell::new(Vec::new()),
-            suggested: RefCell::new(Vec::new()),
-            selected: Cell::new(None),
-            view: OnceCell::new(),
-            table: OnceCell::new(),
-            suggestions: OnceCell::new(),
-            details: OnceCell::new(),
-            form: OnceCell::new(),
-        });
-        // SAFETY: `NSObject`'s `init` has this signature.
-        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-
-        let table = TextTable::new(&[], mtm);
-        let weak = Weak::from(&*this);
-        table.on_click(move |row| {
-            if let Some(pane) = weak.load() {
-                pane.select(row);
-            }
-        });
-        layout::set_height(table.view(), LIST_HEIGHT);
-        table
-            .view()
-            .setBorderType(objc2_app_kit::NSBorderType::NoBorder);
-        table.view().setDrawsBackground(false);
-        table.table().setBackgroundColor(&NSColor::clearColor());
-        // The +/− buttons sit inside the list's group, under the list, as in System Settings.
-        let buttons = form::bar_row(
-            vec![
-                square_button("+", &this, sel!(addServer:), mtm),
-                square_button("−", &this, sel!(removeServer:), mtm),
-            ],
-            mtm,
-        );
-        let list = form::group(vec![form::flush_row(table.view(), mtm), buttons], mtm);
-
-        let form = this.server_form(mtm);
-        form::set_width(&form.timeout, TIMEOUT_WIDTH, NSLayoutPriorityRequired);
-        let auth = form::hstack(
-            vec![view(form.auth_none.clone()), view(form.auth_basic.clone())],
-            mtm,
-        );
-        let timeout = form::hstack(
-            vec![
-                view(form.timeout.clone()),
-                view(NSTextField::labelWithString(ns_string!("seconds"), mtm)),
-            ],
-            mtm,
-        );
-        let fields = form::group(
-            vec![
-                form::field_row("Name", &form.name, mtm),
-                form::field_row("URL", &form.url, mtm),
-                form::control_row("Ignore certificate errors", &form.ignore_tls, mtm),
-                form::control_row("Authentication", &auth, mtm),
-                form::field_row("User", &form.user, mtm),
-                form::field_row("Password", &form.password, mtm),
-                form::control_row("Timeout", &timeout, mtm),
-            ],
-            mtm,
-        );
-        // Titled with the server's name; hidden while no server is selected.
-        let title = form::header("", mtm);
-        let details = form::Section::new(mtm)
-            .header(&title)
-            .group(&fields)
-            .text("A password is saved to the Keychain, not in the project folder.")
-            .build();
-
-        let suggestion_rows = form::group(vec![], mtm);
-        let suggestions = form::Section::new(mtm)
-            .header(&form::header("Suggested by the WSDL", mtm))
-            .group(&suggestion_rows)
-            .text("Servers named by the WSDL's addresses. Add one to edit and use it.")
-            .build();
-
-        let view = form::page(
-            vec![
-                project_note(project, mtm),
-                form::Section::new(mtm)
-                    .header(&form::header("Servers", mtm))
-                    .group(&list)
-                    .build(),
-                details.clone(),
-                suggestions.clone(),
-            ],
-            mtm,
-        );
-
-        let ivars = this.ivars();
-        let _ = ivars.view.set(view);
-        let _ = ivars.table.set(table);
-        let _ = ivars.suggestions.set((suggestions, suggestion_rows));
-        let _ = ivars.details.set((details, title));
-        let _ = ivars.form.set(form);
-        this.reload();
-        this
-    }
-
-    /// The pane's view, which the window shows while the pane is selected.
-    pub fn view(&self) -> &Retained<NSView> {
-        self.ivars().view.get().expect("set in new()")
-    }
-
-    pub fn table(&self) -> &TextTable {
-        self.ivars().table.get().expect("set in new()")
-    }
-
-    /// The servers suggested by the WSDL's `soap:address`es, not yet confirmed: port, address.
-    pub fn suggestion_rows(&self) -> Vec<Vec<String>> {
-        self.ivars()
-            .suggested
-            .borrow()
-            .iter()
-            .map(|s| vec![s.port.clone(), s.url.clone()])
-            .collect()
-    }
-
-    /// Whether the suggestions' section is shown.
-    pub fn shows_suggestions(&self) -> bool {
-        !self
-            .ivars()
-            .suggestions
-            .get()
-            .expect("set in new()")
-            .0
-            .isHidden()
-    }
-
-    /// Whether the selected server's form is shown; it is hidden while none is selected.
-    pub fn shows_details(&self) -> bool {
-        !self
-            .ivars()
-            .details
-            .get()
-            .expect("set in new()")
-            .0
-            .isHidden()
-    }
-
-    pub fn servers(&self) -> Vec<Server> {
-        self.ivars().servers.borrow().clone()
-    }
-
-    pub fn selected(&self) -> Option<usize> {
-        let id = self.ivars().selected.get()?;
-        self.ivars()
-            .servers
-            .borrow()
-            .iter()
-            .position(|s| s.id == id)
-    }
-
-    pub fn name_field(&self) -> &NSTextField {
-        &self.form().name
-    }
-
-    pub fn url_field(&self) -> &NSTextField {
-        &self.form().url
-    }
-
-    pub fn user_field(&self) -> &NSTextField {
-        &self.form().user
-    }
-
-    pub fn password_field(&self) -> &NSSecureTextField {
-        &self.form().password
-    }
-
-    pub fn basic_auth_button(&self) -> &NSButton {
-        &self.form().auth_basic
-    }
-
-    /// Shows the model's servers and suggestions. The form keeps what it shows unless the
-    /// selected server is gone, so a save does not disturb the field being edited.
-    pub fn reload(&self) {
-        let key = self.ivars().key;
-        let (servers, suggested) = self
-            .read(|app| {
-                app.project(key)
-                    .map(|w| (w.servers().to_vec(), w.suggested_servers().to_vec()))
-            })
-            .flatten()
-            .unwrap_or_default();
-        self.show_suggestions(&suggested);
-        *self.ivars().suggested.borrow_mut() = suggested;
-        *self.ivars().servers.borrow_mut() = servers;
-        self.reload_table();
-        match self.selected() {
-            Some(_) => {}
-            None if self.ivars().servers.borrow().is_empty() => {
-                self.ivars().selected.set(None);
-                self.enable_form(false);
-            }
-            None => self.select(0),
-        }
-        self.show_details();
-    }
-
-    /// Loads server `row` into the form.
-    pub fn select(&self, row: usize) {
-        let Some(server) = self.ivars().servers.borrow().get(row).cloned() else {
-            return;
-        };
-        self.ivars().selected.set(Some(server.id));
-        let table = self.table().table();
-        table.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
-        let form = self.form();
-        let (basic_auth, user) = match &server.auth {
-            Auth::None => (false, ""),
-            Auth::Basic { username } => (true, username.as_str()),
-        };
-        form.name.setStringValue(&NSString::from_str(&server.name));
-        form.url.setStringValue(&NSString::from_str(&server.url));
-        form.ignore_tls.setState(state(server.ignore_tls_errors));
-        form.auth_none.setState(state(!basic_auth));
-        form.auth_basic.setState(state(basic_auth));
-        form.user.setStringValue(&NSString::from_str(user));
-        form.password.setStringValue(ns_string!(""));
-        form.timeout
-            .setStringValue(&NSString::from_str(&server.timeout.as_secs().to_string()));
-        self.enable_form(true);
-        self.enable_auth_fields(basic_auth);
-        self.show_details();
-    }
-
-    /// Saves the form into the selected server through the model; a typed password goes to
-    /// the secret store and the field is emptied. Nothing is written if nothing changed.
-    pub fn commit_form(&self) {
-        let Some(current) = self
-            .selected()
-            .map(|row| self.ivars().servers.borrow()[row].clone())
-        else {
-            return;
-        };
-        let form = self.form();
-        let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
-        self.enable_auth_fields(basic_auth);
-        let mut server = current.clone();
-        server.name = form.name.stringValue().to_string();
-        server.url = form.url.stringValue().to_string();
-        server.ignore_tls_errors = form.ignore_tls.state() == NSControlStateValueOn;
-        server.auth = if basic_auth {
-            Auth::Basic {
-                username: form.user.stringValue().to_string(),
-            }
-        } else {
-            Auth::None
-        };
-        // An unparsable or zero timeout keeps the stored one.
-        if let Ok(secs) = form.timeout.stringValue().to_string().trim().parse::<u64>()
-            && secs > 0
-        {
-            server.timeout = Duration::from_secs(secs);
-        }
-        let password = form.password.stringValue().to_string();
-        let password = (basic_auth && !password.is_empty()).then_some(password);
-        if server == current && password.is_none() {
-            return;
-        }
-        let key = self.ivars().key;
-        let saved = self
-            .command("Could not save the server", |app| {
-                app.update_server(key, &server, password.as_deref())
-            })
-            .is_some();
-        if saved && password.is_some() {
-            form.password.setStringValue(ns_string!(""));
-        }
-    }
-
-    pub fn add_server(&self) {
-        let key = self.ivars().key;
-        if let Some(id) = self.command("Could not add a server", |app| app.add_server(key)) {
-            self.select_id(id);
-        }
-    }
-
-    pub fn remove_selected(&self) {
-        let (Some(row), Some(id)) = (self.selected(), self.ivars().selected.get()) else {
-            return;
-        };
-        let key = self.ivars().key;
-        self.ivars().selected.set(None);
-        self.command("Could not delete the server", |app| {
-            app.delete_server(key, id)
-        });
-        let remaining = self.ivars().servers.borrow().len();
-        if remaining > 0 {
-            self.select(row.min(remaining - 1));
-        }
-    }
-
-    /// Adds suggestion `row` as a server with its address as suggested, and selects it for
-    /// editing.
-    pub fn confirm_suggestion(&self, row: usize) {
-        let Some(url) = self
-            .ivars()
-            .suggested
-            .borrow()
-            .get(row)
-            .map(|s| s.url.clone())
-        else {
-            return;
-        };
-        let key = self.ivars().key;
-        let before: Vec<ServerId> = self.ivars().servers.borrow().iter().map(|s| s.id).collect();
-        self.command("Could not add the server", |app| {
-            app.confirm_suggested_server(key, row, &url)
-        });
-        let added = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .map(|s| s.id)
-            .find(|id| !before.contains(id));
-        if let Some(id) = added {
-            self.select_id(id);
-        }
-    }
-
-    fn select_id(&self, id: ServerId) {
-        let row = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .position(|s| s.id == id);
-        if let Some(row) = row {
-            self.select(row);
-        }
-    }
-
-    fn form(&self) -> &ServerForm {
-        self.ivars().form.get().expect("set in new()")
-    }
-
-    fn reload_table(&self) {
-        let rows = self
-            .ivars()
-            .servers
-            .borrow()
-            .iter()
-            .map(|s| vec![s.name.clone()])
-            .collect();
-        self.table().set_rows(rows);
-        if let Some(row) = self.selected() {
-            self.table()
-                .table()
-                .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
-        }
-    }
-
-    /// One row per suggestion: its port and address, and an Add button.
-    fn show_suggestions(&self, suggested: &[SuggestedServer]) {
-        let mtm = self.mtm();
-        let (section, rows) = self.ivars().suggestions.get().expect("set in new()");
-        form::set_shown(section, !suggested.is_empty());
-        let rows_now = suggested
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let add = target_button("Add", self, sel!(confirmSuggestion:), mtm);
-                add.setTag(NSInteger::try_from(i).unwrap_or(0));
-                form::subtitle_row(&s.port, &s.url, &add, mtm)
-            })
-            .collect();
-        form::set_rows(rows, rows_now, mtm);
-    }
-
-    /// Shows the form for the selected server, titled with its name, or hides it when none is.
-    fn show_details(&self) {
-        let (section, title) = self.ivars().details.get().expect("set in new()");
-        let name = self
-            .selected()
-            .map(|row| self.ivars().servers.borrow()[row].name.clone());
-        if let Some(name) = &name {
-            let name = if name.trim().is_empty() {
-                "Server"
-            } else {
-                name
-            };
-            title.setStringValue(&NSString::from_str(name));
-        }
-        form::set_shown(section, name.is_some());
-    }
-
-    fn enable_form(&self, enabled: bool) {
-        let form = self.form();
-        for field in [&form.name, &form.url, &form.timeout] {
-            field.setEnabled(enabled);
-        }
-        form.ignore_tls.setEnabled(enabled);
-        for button in [&form.auth_none, &form.auth_basic] {
-            button.setEnabled(enabled);
-        }
-        if !enabled {
-            self.enable_auth_fields(false);
-        }
-    }
-
-    fn enable_auth_fields(&self, basic_auth: bool) {
-        let form = self.form();
-        form.user.setEnabled(basic_auth);
-        form.password.setEnabled(basic_auth);
-    }
-
-    fn server_form(&self, mtm: MainThreadMarker) -> ServerForm {
-        let text = |placeholder: &str| {
-            let field = NSTextField::textFieldWithString(ns_string!(""), mtm);
-            field.setPlaceholderString(Some(&NSString::from_str(placeholder)));
-            // SAFETY: the settings window owns this pane and the field, so the pane outlives
-            // the field's weak delegate reference.
-            unsafe { field.setDelegate(Some(ProtocolObject::from_ref(self))) };
-            field
-        };
-        let ignore_tls = NSSwitch::new(mtm);
-        let target: &AnyObject = self;
-        // SAFETY (controls): the settings window owns this pane and its controls, so the pane
-        // outlives their weak target references; `formChanged:` takes the sender.
-        let (auth_none, auth_basic) = unsafe {
-            ignore_tls.setTarget(Some(target));
-            ignore_tls.setAction(Some(sel!(formChanged:)));
-            (
-                NSButton::radioButtonWithTitle_target_action(
-                    ns_string!("None"),
-                    Some(target),
-                    Some(sel!(formChanged:)),
-                    mtm,
-                ),
-                NSButton::radioButtonWithTitle_target_action(
-                    ns_string!("Basic"),
-                    Some(target),
-                    Some(sel!(formChanged:)),
-                    mtm,
-                ),
-            )
-        };
-        let password = NSSecureTextField::new(mtm);
-        password.setPlaceholderString(Some(ns_string!("Saved to the Keychain")));
-        // SAFETY: as for the text fields above.
-        unsafe { password.setDelegate(Some(ProtocolObject::from_ref(self))) };
-        ServerForm {
-            name: text("Name"),
-            url: text("https://"),
-            ignore_tls,
-            auth_none,
-            auth_basic,
-            user: text("User"),
-            password,
-            timeout: text("60"),
-        }
-    }
-}
-
-impl ModelAccess for ServersPane {}
-
 /// The WSDL files under `dir`, relative to it, the entry first.
 fn wsdl_files(dir: &Path, entry: Option<&Path>) -> Vec<String> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
@@ -1399,7 +847,7 @@ fn wsdl_files(dir: &Path, entry: Option<&Path>) -> Vec<String> {
     files
 }
 
-fn state(on: bool) -> NSControlStateValue {
+pub(crate) fn state(on: bool) -> NSControlStateValue {
     if on {
         NSControlStateValueOn
     } else {
@@ -1416,7 +864,7 @@ fn symbol(name: &str) -> Option<Retained<NSImage>> {
 
 /// Each project pane opens by saying whose settings these are and where they are kept, so
 /// nobody takes them for the app's.
-fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSView> {
+pub(crate) fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     form::Section::new(mtm)
         .text(&format!(
             "These settings belong to the project “{project}” and are saved in its folder. \
@@ -1425,7 +873,7 @@ fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSView> {
         .build()
 }
 
-fn target_button(
+pub(crate) fn target_button(
     title: &str,
     target: &NSObject,
     action: Sel,
@@ -1442,24 +890,6 @@ fn target_button(
             mtm,
         )
     }
-}
-
-/// The small +/− buttons under a list.
-fn square_button(
-    title: &str,
-    target: &NSObject,
-    action: Sel,
-    mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let button = target_button(title, target, action, mtm);
-    button.setBezelStyle(NSBezelStyle::SmallSquare);
-    button.setBordered(false);
-    form::set_width(&button, SQUARE_BUTTON, NSLayoutPriorityRequired);
-    button
-        .heightAnchor()
-        .constraintEqualToConstant(SQUARE_BUTTON)
-        .setActive(true);
-    view(button)
 }
 
 fn settings_window(mtm: MainThreadMarker) -> Retained<NSWindow> {
