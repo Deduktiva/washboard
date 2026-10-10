@@ -68,8 +68,8 @@ mod checks {
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor, NSColorSpace,
-        NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
+        NSColorSpace, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
         NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSView,
         NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
@@ -2364,6 +2364,13 @@ mod checks {
         );
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
+        let first = window
+            .initialFirstResponder()
+            .expect("an initial first responder");
+        assert!(
+            std::ptr::eq(&*first, &**sheet.name_field() as &NSView),
+            "New Project starts with the name"
+        );
 
         // A long location is shortened in the form instead of widening it past the window.
         let deep = (0..12).fold(tmp.path().to_path_buf(), |p, i| {
@@ -2573,6 +2580,12 @@ mod checks {
         assert!(window.attachedSheet().is_none(), "on the Settings window");
         let sheet = project.replace_sheet().expect("created by replaceWsdl:");
         assert_eq!(sheet.finish_button().title().to_string(), "Replace");
+        let first = sheet
+            .window()
+            .initialFirstResponder()
+            .and_then(|v| v.downcast::<NSButton>().ok())
+            .expect("a button first");
+        assert_eq!(first.title().to_string(), "Choose…", "not the path control");
         assert!(!sheet.finish_button().isEnabled());
 
         let customer = fixtures().join("customer");

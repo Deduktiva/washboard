@@ -156,6 +156,8 @@ impl ImportSheetController {
             let control = NSPathControl::new(mtm);
             control.setPathStyle(NSPathStyle::Standard);
             control.setPlaceholderString(Some(ns_string!("Not chosen")));
+            // It only shows the choice; focus goes to the Choose… button beside it.
+            control.setRefusesFirstResponder(true);
             shrinkable(&control);
             control
         };
@@ -178,15 +180,10 @@ impl ImportSheetController {
                 ),
             ]);
         }
+        let choose_wsdl = button("Choose…", sel!(chooseWsdl:));
         rows.push(vec![
             label("WSDL:", mtm),
-            value_row(
-                vec![
-                    view(wsdl.clone()),
-                    view(button("Choose…", sel!(chooseWsdl:))),
-                ],
-                mtm,
-            ),
+            value_row(vec![view(wsdl.clone()), view(choose_wsdl.clone())], mtm),
         ]);
         rows.push(vec![
             label("Other files:", mtm),
@@ -253,6 +250,12 @@ impl ImportSheetController {
             window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         }
         window.setContentView(Some(&content));
+        // New Project starts with the name; Replace WSDL with choosing the WSDL.
+        if new_project {
+            window.setInitialFirstResponder(Some(&name));
+        } else {
+            window.setInitialFirstResponder(Some(&choose_wsdl));
+        }
 
         let _ = this.ivars().views.set(ImportViews {
             window,
