@@ -42,6 +42,7 @@ use washboard_core::xml::{TokenBuffer, TokenKind};
 use washboard_ui_model::{Completions, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
+use crate::colors;
 use crate::text::{completion_kinds, hover_text};
 
 const FONT_SIZE: f64 = 12.0;
@@ -193,7 +194,7 @@ impl LineNumberRuler {
             );
             let is_error = errors.binary_search(&line).is_ok();
             let color = if is_error {
-                NSColor::systemRedColor()
+                colors::error()
             } else {
                 NSColor::secondaryLabelColor()
             };
@@ -659,8 +660,7 @@ impl EditorController {
             layout.removeTemporaryAttribute_forCharacterRange(key, NSRange::new(0, len));
         }
         let single = NSNumber::new_isize(NSUnderlineStyle::Single.0);
-        // Red like the issues bar's error count; orange is for warnings.
-        let red = NSColor::systemRedColor();
+        let error = colors::error();
         for range in ranges {
             let start = range.start.min(len);
             let end = range.end.max(start + 1).min(len);
@@ -671,7 +671,7 @@ impl EditorController {
             // SAFETY: the underline style is an `NSNumber`, the underline colour an `NSColor`.
             unsafe {
                 layout.addTemporaryAttribute_value_forCharacterRange(style, &single, range);
-                layout.addTemporaryAttribute_value_forCharacterRange(color, &red, range);
+                layout.addTemporaryAttribute_value_forCharacterRange(color, &error, range);
             }
         }
     }

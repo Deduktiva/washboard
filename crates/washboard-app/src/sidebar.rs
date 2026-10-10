@@ -28,6 +28,7 @@ use washboard_core::wsdl::Protocol;
 use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
+use crate::colors;
 use crate::layout;
 use crate::menu::menu_item;
 use crate::text::port_chip;
@@ -894,8 +895,7 @@ impl SidebarController {
             views.push(Retained::into_super(chip.clone()));
         }
         let marker = match node.markers() {
-            // Red like every other error marker; the request failed validation.
-            (_, true) => Some(("⚠", NSColor::systemRedColor())),
+            (_, true) => Some(("⚠", colors::error())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
             (false, false) => None,
         };
