@@ -707,13 +707,7 @@ impl SettingsWindowController {
         form::page(
             vec![
                 project_note(&name, mtm),
-                form::Section::new(mtm)
-                    .group(&group)
-                    .text(
-                        "Replace WSDL checks the new files as New Project does. Requests are \
-                         kept as they are and validated against the new WSDL.",
-                    )
-                    .build(),
+                form::Section::new(mtm).group(&group).build(),
             ],
             mtm,
         )
@@ -867,8 +861,7 @@ fn symbol(name: &str) -> Option<Retained<NSImage>> {
 pub(crate) fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     form::Section::new(mtm)
         .text(&format!(
-            "These settings belong to the project “{project}” and are saved in its folder. \
-             They do not change other projects."
+            "These settings affect only the project “{project}”."
         ))
         .build()
 }
