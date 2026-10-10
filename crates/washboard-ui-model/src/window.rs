@@ -295,7 +295,7 @@ impl ProjectWindow {
         rows.sort_by(|a, b| finder_order(&a.name, &b.name));
         self.sidebar.requests = rows;
         if let Some(sel) = self.selected_request()
-            && !self.sidebar.requests.iter().any(|r| r.id == sel)
+            && self.sidebar.request(sel).is_none()
         {
             self.restore.last_selected_request = None;
         }
