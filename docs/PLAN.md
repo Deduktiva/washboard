@@ -113,7 +113,7 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
   welcome-window condition, the HTTP log ring buffer (50).
 - Per project window: the sidebar tree (folders, requests with dirty/invalid markers), the
   operations incl. unsupported ones for the New picker, selection, the server popup's items and selection, the response
-  pane's state, history list, issues list, project settings form state.
+  pane's state, history list, issues list, the Settings window's project panes.
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
   completion and hover requests answered from `schema::SchemaModel`.
@@ -381,8 +381,8 @@ Errors: list in the issues bar under the editor (click → jump to line), plus g
     Latest** (default button, Esc). Its background is a yellow tint that works in light and dark.
     While it shows, the toolbar's own items (server popup, Send, HTTP Log) are hidden. A unified
     toolbar cannot be coloured itself; the accessory is AppKit's way to attach a bar to it.
-  - Send (⌘↩) and Project ▸ Validate (⌘B) are disabled, in the menu too, and the model refuses
-    to send in this state, so an old exchange is never sent by a shortcut.
+  - Send (⌘↩), Edit ▸ Validate (⌘B) and Format XML are disabled, in the menu too, and the
+    model refuses to send in this state, so an old exchange is never sent by a shortcut.
 - **Back to the latest.** Show Latest, Esc, selecting the newest row, switching requests and a
   finished send all return to the newest exchange and the editor. Restore Request puts the sent
   request into the editor as one undo step (applied through the widget, like Format XML) and
@@ -618,7 +618,9 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 Each milestone ends in something runnable.
 
 M0 (libxml2 and ureq spikes), M1 (core library and the `washboard` CLI) and M2–M4 are done;
-M5 is under way. Follow-up work and what is left of M5 are in `docs/TASKS.md`.
+M5 is under way: Replace WSDL and the Dark Mode check are done, the replace report,
+FSEvents, accessibility, the icon and distribution are left. Follow-up work and what is left of
+M5 are in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),

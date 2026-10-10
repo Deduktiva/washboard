@@ -168,17 +168,36 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .btn[disabled] { opacity: .45; cursor: not-allowed; }
 .hint { color: var(--muted); font-size: 12px; }
 
-.settings { width: 720px; }
-.settings .split { display: grid; grid-template-columns: 180px 1fr; gap: 16px; }
-.list { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; display: grid; align-content: start; background: var(--code-bg); }
-.list .row { border-radius: 0; }
 .radio { display: inline-flex; gap: 14px; }
 .check { display: inline-flex; gap: 6px; align-items: center; }
 .box { width: 14px; height: 14px; border: 1px solid var(--line); border-radius: 3px; display: inline-grid; place-items: center; font-size: 10px; background: var(--code-bg); }
 .box.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); display: inline-block; vertical-align: -3px; margin-right: 4px; background: var(--code-bg); }
+.dot { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); display: inline-block; vertical-align: -3px; margin-right: 4px; background: var(--code-bg); }
 .dot.on { border: 4px solid var(--accent); }
-.seg2 { display: flex; justify-content: center; }
+
+.win.prefs { width: 860px; height: 540px; display: grid; grid-template-columns: 200px minmax(0, 1fr); grid-template-rows: 46px minmax(0, 1fr); }
+.prefs .titlebar { grid-column: 1 / -1; }
+.prefs .side { grid-template-rows: 1fr; }
+.prefs .row.pane { cursor: pointer; }
+.prefs .row .ico { width: 16px; text-align: center; opacity: .7; }
+.prefs .row.sel .ico { opacity: 1; }
+.ppane { overflow: auto; padding: 16px 20px 20px; display: grid; align-content: start; gap: 6px; max-width: 640px; }
+.ppane .owner { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.ghead { font-weight: 600; font-size: 12px; margin-top: 10px; }
+.group { border: 1px solid var(--line); border-radius: 9px; background: var(--code-bg); display: grid; }
+.grow { display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-height: 40px; }
+.grow + .grow { border-top: 1px solid var(--line); }
+.grow .what { display: grid; min-width: 0; }
+.grow .what small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grow .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+.grow .btn { margin-left: auto; }
+.grow .val { margin-left: auto; color: var(--muted); }
+.grow.foot { justify-content: flex-end; }
+.grow.foot .btn { margin-left: 0; }
+.gnote { color: var(--muted); font-size: 11.5px; padding: 0 2px; }
+.prefs .sheetlayer { position: absolute; inset: 46px 0 0 200px; background: color-mix(in srgb, var(--desk) 35%, transparent); display: grid; justify-items: center; align-items: start; }
+.prefs .sheet { margin-top: 0; width: 440px; }
+.prefs .sheet .form { grid-template-columns: 90px 1fr; }
 
 .win.log { width: 1000px; height: 560px; display: grid; grid-template-rows: 38px 150px 1fr; }
 .log .panes { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; border-top: 1px solid var(--line); }
@@ -209,7 +228,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
   <div class="seg" role="tablist" aria-label="Screens">
     <button role="tab" aria-selected="true" data-screen="main">Project window</button>
     <button role="tab" aria-selected="false" data-screen="newproj">New project</button>
-    <button role="tab" aria-selected="false" data-screen="settings">Servers</button>
+    <button role="tab" aria-selected="false" data-screen="settings">Settings</button>
     <button role="tab" aria-selected="false" data-screen="log">HTTP log</button>
     <button role="tab" aria-selected="false" data-screen="welcome">Welcome</button>
   </div>
@@ -272,7 +291,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
       <ol>
         <li><span>Requests list (<code>NSOutlineView</code>, source-list style). Dot = unsaved buffer, ⚠ = last validation failed. Return renames inline; ⌘D duplicates; ⌘⌫ deletes.</span></li>
         <li><span>Server popup. Defaults to this request's last-used server; changing it is stored immediately.</span></li>
-        <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Project ▸ Validate (⌘B) skips the wait.</span></li>
+        <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Edit ▸ Validate (⌘B) skips the wait.</span></li>
         <li><span>HTTP Log (⌥⌘L). Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
         <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
         <li><span>Folders: plain subfolders of the project's <code>requests/</code>. New Request (⌘N) picks the operation from a searchable list and files the request, named <code>&lt;Operation&gt; &lt;n&gt;</code>, in that operation's folder, created on first use. Drag to move.</span></li>
@@ -299,7 +318,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
           <div class="hint">References found in the WSDL. Nothing is downloaded: supply every referenced file.</div>
           <div class="refs">
 <div><span class="ok">✓</span> xs:import  urn:example:common  → common/types.xsd</div><div><span class="ok">✓</span> xs:import  urn:example:faults  → faults.xsd</div><div><span class="ok">✓</span> xs:import  inline schema #2    → (inline)</div><div><span class="bad">✗</span> xs:include addresses.xsd       — not supplied</div></div>
-          <div class="hint">Files are copied to <code>Customer API/wsdl/</code>. Default server will be pre-filled from <code>soap:address</code> but stays disabled until you confirm it.</div>
+          <div class="hint">Files are copied to <code>Customer API/wsdl/</code>. The WSDL's <code>soap:address</code> is offered in Settings ▸ Servers; it is not a server until you add it.</div>
           <div class="actions"><button class="btn">Cancel</button><button class="btn primary" disabled title="Resolve all references first">Create</button></div>
         </div>
       </div>
@@ -307,10 +326,10 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
     <aside class="notes">
       <h2>Notes</h2>
       <ol>
-        <li><span>Sheet on the welcome window or File ▸ New Project… (⇧⌘N). The project folder is <em>Location / Name</em>.</span></li>
-        <li><span>The reference check runs as soon as the WSDL is picked and again when XSDs are added. Remote <code>schemaLocation</code> URLs are matched by file name only.</span></li>
+        <li><span>Its own window, from the welcome window or File ▸ New Project… (⇧⌘N). The project folder is <em>Location / Name</em>.</span></li>
+        <li><span>The reference check runs as soon as the WSDL is picked and again when XSDs are added. Remote <code>schemaLocation</code> URLs are never fetched; they are matched against the supplied files by the longest matching path suffix. Relative locations found next to the importing file are added.</span></li>
         <li><span>Create stays disabled while any reference is unresolved or the schema set fails to compile.</span></li>
-        <li><span>Replace WSDL… in the project's General settings reuses this sheet and ends with a report of added/removed operations and requests that no longer validate.</span></li>
+        <li><span>Replace WSDL… in the project's General settings reuses this check and ends with a report of added/removed operations and requests that no longer validate.</span></li>
       </ol>
     </aside>
   </section>
@@ -318,41 +337,77 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
   <!-- SETTINGS -->
   <section class="stage" data-panel="settings" hidden>
     <div class="scroller">
-      <div class="sheetwrap">
-        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle">Customer API</div></div>
-        <div class="sheet settings">
-          <div class="seg2"><div class="seg"><button aria-selected="false">General</button><button aria-selected="true">Servers</button></div></div>
-          <div class="split">
-            <div>
-              <div class="list">
-                <div class="row">Production</div>
-                <div class="row sel">Staging</div>
-                <div class="row">Local mock</div>
-              </div>
-              <div style="display:flex;gap:4px;margin-top:6px"><button class="btn icon">+</button><button class="btn icon">−</button></div>
-            </div>
-            <div class="form" style="grid-template-columns: 80px 1fr">
-              <label>Name</label><div class="field">Staging</div>
-              <label>URL</label><div class="field">https://stg.example.com/ws/customer</div>
-              <label>TLS</label><span class="check"><span class="box on">✓</span>Ignore certificate errors</span>
-              <label>Auth</label><span class="radio"><span><span class="dot"></span>None</span><span><span class="dot on"></span>Basic</span></span>
-              <label>User</label><div class="field">svc-tester</div>
-              <label>Password</label><div class="field">••••••••••</div>
-              <label>Timeout</label><div class="field" style="width:60px">60 s</div>
-              <span></span><span class="hint">Password is stored in the macOS Keychain. Basic credentials are sent with the first request, without waiting for a 401.</span>
-            </div>
+      <div class="win prefs">
+        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle" id="prefsTitle">Servers</div></div>
+        <div class="side"><div class="scroll">
+          <div class="sect">Washboard</div>
+          <div class="row pane" tabindex="0" data-pane="app"><span class="ico">⚙</span>General</div>
+          <div class="sect">Customer API</div>
+          <div class="row pane" tabindex="0" data-pane="general"><span class="ico">▤</span>General</div>
+          <div class="row pane sel" tabindex="0" data-pane="servers"><span class="ico">⇄</span>Servers</div>
+        </div></div>
+
+        <div class="ppane" data-pp="app" hidden>
+          <div class="ghead">Format XML</div>
+          <div class="group">
+            <div class="grow">Indent width<span class="val">2 spaces ⌃</span></div>
+            <div class="grow">Format on Save All<span class="check" style="margin-left:auto"><span class="box"></span></span></div>
           </div>
-          <div class="actions"><button class="btn primary">Done</button></div>
+          <div class="gnote">Also used for new requests and the response. Autosave and Send never format.</div>
+        </div>
+
+        <div class="ppane" data-pp="general" hidden>
+          <div class="owner">These settings belong to Customer API and are saved in its folder.</div>
+          <div class="group">
+            <div class="grow">Name<span class="val">Customer API</span></div>
+            <div class="grow"><span class="what">Folder<small>~/Projects/Customer API</small></span><button class="btn">Show in Finder</button></div>
+          </div>
+          <div class="ghead">WSDL</div>
+          <div class="group">
+            <div class="grow">CustomerService.wsdl</div>
+            <div class="grow">common/types.xsd</div>
+            <div class="grow">faults.xsd</div>
+            <div class="grow foot"><button class="btn">Show in Finder</button><button class="btn">Replace WSDL…</button></div>
+          </div>
+        </div>
+
+        <div class="ppane" data-pp="servers">
+          <div class="owner">These settings belong to Customer API and are saved in its folder.</div>
+          <div class="ghead">Servers</div>
+          <div class="group">
+            <div class="grow"><span class="what">Production<small>https://api.example.com/ws/customer</small></span><button class="btn" data-edit="Production">Edit…</button></div>
+            <div class="grow"><span class="what">Staging<small>https://stg.example.com/ws/customer</small></span><button class="btn" data-edit="Staging">Edit…</button></div>
+            <div class="grow"><span class="what">Local mock<small>http://localhost:8088/mock</small></span><button class="btn" data-edit="Local mock">Edit…</button></div>
+            <div class="grow" title="From the WSDL's soap:address. Add it as a server to use it."><span class="what">CustomerPort<small>https://api.example.com/ws/customer</small></span><span class="tag">From WSDL</span><button class="btn" data-edit="CustomerPort" data-new>Add as Server…</button></div>
+            <div class="grow foot"><button class="btn" data-edit="" data-new>Add Server…</button></div>
+          </div>
+        </div>
+
+        <div class="sheetlayer" id="serverSheet" hidden>
+          <div class="sheet">
+            <h3 id="sheetTitle">Staging</h3>
+            <div class="form">
+              <label>Name</label><div class="field" id="sheetName">Staging</div>
+              <label>URL</label><div class="field" id="sheetUrl">https://stg.example.com/ws/customer</div>
+              <label>TLS</label><span class="check"><span class="box on" id="sheetTls">✓</span>Ignore certificate errors</span>
+              <label>Auth</label><span class="radio"><span><span class="dot" id="sheetNone"></span>None</span><span><span class="dot on" id="sheetBasic"></span>Basic</span></span>
+              <label data-basic>User</label><div class="field" data-basic>svc-tester</div>
+              <label data-basic>Password</label><div class="field dim" data-basic>Stored in the Keychain</div>
+              <label>Timeout</label><div class="field" style="width:60px">60 s</div>
+            </div>
+            <div class="actions"><button class="btn" id="sheetDelete" style="margin-right:auto">Delete Server</button><button class="btn" id="sheetCancel">Cancel</button><button class="btn primary" id="sheetSave">Save</button></div>
+          </div>
         </div>
       </div>
     </div>
     <aside class="notes">
       <h2>Notes</h2>
       <ol>
-        <li><span>Project ▸ Settings… (⌘,  while a project window is key). General tab: name, WSDL info, Replace WSDL…, history limit.</span></li>
-        <li><span>Changes save immediately; there is no Apply button.</span></li>
+        <li><span>Washboard ▸ Settings… (⌘,). One window for the app and every open project; a closed project's section leaves it.</span></li>
+        <li><span>Changes apply as they are made; there is no Done button. A server is edited in a sheet with Save and Cancel; Delete Server asks first.</span></li>
+        <li><span>The WSDL's SOAP 1.1 addresses are listed as read-only rows. Add as Server… opens the same sheet, filled in; nothing is stored or contacted before Save.</span></li>
+        <li><span>User and Password show only with Basic auth. Switching auth off removes the stored password.</span></li>
         <li><span>Ignoring certificate errors disables both chain and hostname checks for this server only. The HTTP log marks such exchanges.</span></li>
-        <li><span>Deleting a server clears it as "last server" on requests that used it.</span></li>
       </ol>
     </aside>
   </section>
@@ -624,6 +679,31 @@ Date: Tue, 06 Oct 2026 14:03:12 GMT
   });
   window.addEventListener("resize", placePins);
 
+  const PANES = { app: "General", general: "General", servers: "Servers" };
+  document.querySelectorAll(".prefs [data-pane]").forEach(r => {
+    const go = () => {
+      document.querySelectorAll(".prefs [data-pane]").forEach(x => x.classList.toggle("sel", x === r));
+      document.querySelectorAll(".prefs [data-pp]").forEach(p => p.hidden = p.dataset.pp !== r.dataset.pane);
+      $("prefsTitle").textContent = PANES[r.dataset.pane];
+      $("serverSheet").hidden = true;
+    };
+    r.addEventListener("click", go);
+    r.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+  document.querySelectorAll(".prefs [data-edit]").forEach(b => b.addEventListener("click", () => {
+    const row = b.closest(".grow"), name = b.dataset.edit, isNew = b.hasAttribute("data-new");
+    const url = row.querySelector("small");
+    $("sheetTitle").textContent = isNew ? "New Server" : name;
+    $("sheetName").textContent = name;
+    $("sheetUrl").textContent = url ? url.textContent : "";
+    $("sheetDelete").hidden = isNew;
+    // A new server starts from the defaults: certificate checks on, no authentication.
+    $("sheetTls").classList.toggle("on", !isNew); $("sheetTls").textContent = isNew ? "" : "✓";
+    $("sheetNone").classList.toggle("on", isNew); $("sheetBasic").classList.toggle("on", !isNew);
+    document.querySelectorAll("[data-basic]").forEach(e => e.hidden = isNew);
+    $("serverSheet").hidden = false;
+  }));
+  ["sheetCancel", "sheetSave", "sheetDelete"].forEach(id => $(id).addEventListener("click", () => { $("serverSheet").hidden = true; }));
   document.querySelectorAll('[data-screen]').forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll('[data-screen]').forEach(x => x.setAttribute("aria-selected", x === b));
     document.querySelectorAll('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.screen);
