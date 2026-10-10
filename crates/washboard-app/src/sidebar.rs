@@ -866,7 +866,7 @@ impl SidebarController {
             }
             NodeKind::Service | NodeKind::Port => {}
         }
-        let mut views = vec![Retained::into_super(Retained::into_super(name.clone()))];
+        let mut views = vec![layout::view(name.clone())];
         let chip = node.chip().map(|text| layout::chip(text, mtm));
         if let Some((chip, label)) = &chip {
             if node.is_soap12() {
@@ -883,7 +883,7 @@ impl SidebarController {
         if let Some((text, color)) = marker {
             let marker = layout::small_label(text, mtm);
             marker.setTextColor(Some(&color));
-            views.push(Retained::into_super(Retained::into_super(marker)));
+            views.push(layout::view(marker));
         }
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);

@@ -177,10 +177,7 @@ impl IssuesBar {
         };
         hide.setControlSize(NSControlSize::Small);
         let header = layout::row(
-            &[
-                Retained::into_super(Retained::into_super(summary.clone())),
-                Retained::into_super(Retained::into_super(hide.clone())),
-            ],
+            &[layout::view(summary.clone()), layout::view(hide.clone())],
             mtm,
         );
         header.setEdgeInsets(layout::insets(4.0, 8.0, 4.0, 8.0));
@@ -394,12 +391,7 @@ impl ResponsePane {
             item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
-        let status = layout::row(
-            &[Retained::into_super(Retained::into_super(
-                this.ivars().status.clone(),
-            ))],
-            mtm,
-        );
+        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
         status.setEdgeInsets(layout::insets(6.0, 8.0, 2.0, 8.0));
         let view = layout::fill_column(
             &[

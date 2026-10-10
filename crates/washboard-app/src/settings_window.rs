@@ -33,7 +33,7 @@ use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
 
 use crate::app::{ModelAccess, with_delegate};
-use crate::layout;
+use crate::layout::{self, view};
 use crate::table::TextTable;
 
 /// Which pane the window shows.
@@ -610,16 +610,16 @@ impl SettingsWindowController {
                 NSLayoutPriorityDefaultHigh,
                 NSLayoutConstraintOrientation::Horizontal,
             );
-            views.push(into_view(icon));
+            views.push(view(icon));
         }
-        views.push(into_view(title.clone()));
+        views.push(view(title.clone()));
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
         stack.setSpacing(6.0);
         if item.pane().is_some() {
             title.setToolTip(Some(&NSString::from_str(item.title())));
         }
-        into_view(layout::cell(&stack, Some(&title), mtm))
+        view(layout::cell(&stack, Some(&title), mtm))
     }
 
     /// A project's name, folder and WSDL files, read when the pane is shown.
@@ -643,9 +643,9 @@ impl SettingsWindowController {
                 project_note(&name, mtm),
                 section(
                     vec![
-                        form_row("Name", into_view(value_label(&name, mtm)), mtm),
-                        form_row("Folder", into_view(folder_label), mtm),
-                        form_row("WSDL files", into_view(files), mtm),
+                        form_row("Name", view(value_label(&name, mtm)), mtm),
+                        form_row("Folder", view(folder_label), mtm),
+                        form_row("WSDL files", view(files), mtm),
                     ],
                     mtm,
                 ),
@@ -740,10 +740,10 @@ fn app_pane(
             heading("Formatting", mtm),
             section(
                 vec![
-                    form_row("Indent", into_view(indent.clone()), mtm),
+                    form_row("Indent", view(indent.clone()), mtm),
                     form_row(
                         "Format the open request on Save All (⌘S)",
-                        into_view(on_save.clone()),
+                        view(on_save.clone()),
                         mtm,
                     ),
                 ],
@@ -887,32 +887,29 @@ impl ServersPane {
         set_width(&form.password, FIELD_WIDTH);
         set_width(&form.timeout, TIMEOUT_WIDTH);
         let auth = layout::row(
-            &[
-                into_view(form.auth_none.clone()),
-                into_view(form.auth_basic.clone()),
-            ],
+            &[view(form.auth_none.clone()), view(form.auth_basic.clone())],
             mtm,
         );
         let timeout = layout::row(
             &[
-                into_view(form.timeout.clone()),
-                into_view(NSTextField::labelWithString(ns_string!("seconds"), mtm)),
+                view(form.timeout.clone()),
+                view(NSTextField::labelWithString(ns_string!("seconds"), mtm)),
             ],
             mtm,
         );
         let fields = section(
             vec![
-                form_row("Name", into_view(form.name.clone()), mtm),
-                form_row("URL", into_view(form.url.clone()), mtm),
+                form_row("Name", view(form.name.clone()), mtm),
+                form_row("URL", view(form.url.clone()), mtm),
                 form_row(
                     "Ignore certificate errors",
-                    into_view(form.ignore_tls.clone()),
+                    view(form.ignore_tls.clone()),
                     mtm,
                 ),
-                form_row("Authentication", into_view(auth), mtm),
-                form_row("User", into_view(form.user.clone()), mtm),
-                form_row("Password", into_view(form.password.clone()), mtm),
-                form_row("Timeout", into_view(timeout), mtm),
+                form_row("Authentication", view(auth), mtm),
+                form_row("User", view(form.user.clone()), mtm),
+                form_row("Password", view(form.password.clone()), mtm),
+                form_row("Timeout", view(timeout), mtm),
             ],
             mtm,
         );
@@ -922,7 +919,7 @@ impl ServersPane {
         let suggestions = column(
             vec![
                 heading("Suggested by the WSDL", mtm),
-                section(vec![into_view(suggestion_rows.clone())], mtm),
+                section(vec![view(suggestion_rows.clone())], mtm),
                 note(
                     "Servers named by the WSDL's addresses. Add one to edit and use it.",
                     mtm,
@@ -931,16 +928,13 @@ impl ServersPane {
             mtm,
         );
         suggestions.setAlignment(NSLayoutAttribute::Width);
-        let suggestions = into_view(suggestions);
+        let suggestions = view(suggestions);
 
         let view = page(
             vec![
                 project_note(project, mtm),
                 heading("Servers", mtm),
-                section(
-                    vec![into_view(table.view().retain()), into_view(buttons)],
-                    mtm,
-                ),
+                section(vec![view(table.view().retain()), view(buttons)], mtm),
                 heading("Selected server", mtm),
                 fields,
                 note(
@@ -1222,16 +1216,16 @@ impl ServersPane {
             address.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
             let text = column(
                 vec![
-                    into_view(NSTextField::labelWithString(
+                    view(NSTextField::labelWithString(
                         &NSString::from_str(&s.port),
                         mtm,
                     )),
-                    into_view(address),
+                    view(address),
                 ],
                 mtm,
             );
             text.setSpacing(2.0);
-            rows.addArrangedSubview(&padded_row(into_view(text), into_view(add), mtm));
+            rows.addArrangedSubview(&padded_row(view(text), view(add), mtm));
         }
     }
 
@@ -1347,11 +1341,6 @@ fn symbol(name: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
 }
 
-fn into_view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
-    let v: &NSView = (*v).as_ref();
-    v.retain()
-}
-
 fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSStackView> {
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
@@ -1389,7 +1378,7 @@ fn page(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView>
     ] {
         constraint.setActive(true);
     }
-    into_view(scroll)
+    view(scroll)
 }
 
 /// Pins `view` to `container`'s edges.
@@ -1436,7 +1425,7 @@ fn section(rows: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSVie
     if let Some(content) = section.contentView() {
         fill(&content, &stack);
     }
-    into_view(section)
+    view(section)
 }
 
 /// A hairline between a section's rows, inset from the leading edge.
@@ -1464,7 +1453,7 @@ fn separator(mtm: MainThreadMarker) -> Retained<NSView> {
 /// One setting: its label on the leading edge, its control on the trailing edge.
 fn form_row(label: &str, control: Retained<NSView>, mtm: MainThreadMarker) -> Retained<NSView> {
     let label = NSTextField::labelWithString(&NSString::from_str(label), mtm);
-    padded_row(into_view(label), control, mtm)
+    padded_row(view(label), control, mtm)
 }
 
 fn padded_row(
@@ -1479,14 +1468,14 @@ fn padded_row(
     stack.addView_inGravity(&trailing, NSStackViewGravity::Trailing);
     stack.setEdgeInsets(layout::insets(8.0, 12.0, 8.0, 12.0));
     layout::hug_vertically(&stack);
-    into_view(stack)
+    view(stack)
 }
 
 /// A section's title, above it.
 fn heading(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
     label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
-    into_view(label)
+    view(label)
 }
 
 /// An explanation in secondary text, under a section.
@@ -1494,7 +1483,7 @@ fn note(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
     label.setTextColor(Some(&NSColor::secondaryLabelColor()));
     label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-    into_view(label)
+    view(label)
 }
 
 /// Each project pane opens by saying whose settings these are and where they are kept, so
@@ -1559,7 +1548,7 @@ fn square_button(
         .heightAnchor()
         .constraintEqualToConstant(SQUARE_BUTTON)
         .setActive(true);
-    into_view(button)
+    view(button)
 }
 
 fn settings_window(mtm: MainThreadMarker) -> Retained<NSWindow> {

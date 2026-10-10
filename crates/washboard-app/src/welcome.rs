@@ -211,17 +211,17 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
             .heightAnchor()
             .constraintEqualToConstant(ICON)
             .setActive(true);
-        views.push(Retained::into_super(Retained::into_super(image)));
+        views.push(layout::view(image));
     }
     let name = NSTextField::labelWithString(ns_string!("Washboard"), mtm);
     name.setFont(Some(&NSFont::boldSystemFontOfSize(20.0)));
-    views.push(Retained::into_super(Retained::into_super(name)));
+    views.push(layout::view(name));
     let version = NSTextField::labelWithString(
         &NSString::from_str(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
         mtm,
     );
     version.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    let version: Retained<NSView> = Retained::into_super(Retained::into_super(version));
+    let version: Retained<NSView> = layout::view(version);
     views.push(version.clone());
     for (title, action) in [
         ("New Project…", sel!(newProject:)),
@@ -241,7 +241,7 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
             .widthAnchor()
             .constraintEqualToConstant(BUTTON_WIDTH)
             .setActive(true);
-        views.push(Retained::into_super(Retained::into_super(button)));
+        views.push(layout::view(button));
     }
 
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
@@ -291,10 +291,7 @@ fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSTableC
     layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
     // Long paths keep both ends: the folder's name is at the end.
     layout::truncating(&path, NSLineBreakMode::ByTruncatingMiddle);
-    let views = [
-        Retained::into_super(Retained::into_super(name.clone())),
-        Retained::into_super(Retained::into_super(path)),
-    ];
+    let views = [layout::view(name.clone()), layout::view(path)];
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::Leading);

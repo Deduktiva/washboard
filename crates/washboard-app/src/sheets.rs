@@ -23,7 +23,7 @@ use objc2_foundation::{
 use washboard_ui_model::{App, CheckState, ImportSheet, ImportTarget};
 
 use crate::app::{ModelAccess, with_delegate};
-use crate::layout;
+use crate::layout::{self, view};
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
 
@@ -605,11 +605,6 @@ fn target_button(
 
 fn label(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     view(NSTextField::labelWithString(&NSString::from_str(text), mtm))
-}
-
-fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
-    let v: &NSView = (*v).as_ref();
-    v.retain()
 }
 
 /// Dialog buttons, pushed to the trailing edge.

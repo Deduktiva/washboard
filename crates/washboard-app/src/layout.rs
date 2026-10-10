@@ -5,7 +5,7 @@
 //! scroll views use `Fill`, where the views that hug least (scroll views) take the slack.
 
 use objc2::rc::Retained;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSFont,
     NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
@@ -14,6 +14,12 @@ use objc2_app_kit::{
     NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
+
+/// `v` as a plain `NSView`, for stacks and grids, whatever its class's depth below `NSView`.
+pub fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
+    let v: &NSView = (*v).as_ref();
+    v.retain()
+}
 
 /// A vertical stack whose views span its width and fill its height.
 pub fn fill_column(views: &[Retained<NSView>], mtm: MainThreadMarker) -> Retained<NSStackView> {
