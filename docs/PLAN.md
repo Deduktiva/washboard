@@ -207,40 +207,23 @@ Customer API/
 - On WSDL replace the previous set moves to `wsdl/.previous/<timestamp>/` (one level kept).
 - All writes are atomic (temp file in same dir + `rename`).
 
-### `washboard.sqlite` schema (v1)
-```sql
-PRAGMA user_version = 1;                -- migrations keyed off this
-CREATE TABLE project  (id TEXT PRIMARY KEY,           -- uuid, also the Keychain key prefix
-                       name TEXT NOT NULL,
-                       wsdl_path TEXT NOT NULL,       -- relative to project root
-                       wsdl_imported_at TEXT NOT NULL,
-                       history_limit INTEGER NOT NULL DEFAULT 20);
-CREATE TABLE server   (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL,
-                       ignore_tls_errors INTEGER NOT NULL DEFAULT 0,
-                       auth_kind TEXT NOT NULL CHECK (auth_kind IN ('none','basic')),
-                       username TEXT,                 -- password lives in Keychain
-                       timeout_secs INTEGER NOT NULL DEFAULT 60,
-                       sort_order INTEGER NOT NULL);
-CREATE TABLE request  (id TEXT PRIMARY KEY,
-                       file_name TEXT NOT NULL UNIQUE,  -- relative to requests/, `/`-separated
-                       operation TEXT,                  -- "{ns}Port#Operation" hint, may go stale
-                       last_server_id TEXT REFERENCES server(id) ON DELETE SET NULL,
-                       created_at TEXT NOT NULL, sort_order INTEGER NOT NULL);
-CREATE TABLE history  (id TEXT PRIMARY KEY,
-                       request_id TEXT NOT NULL REFERENCES request(id) ON DELETE CASCADE,
-                       server_id TEXT, url TEXT NOT NULL, sent_at TEXT NOT NULL,
-                       duration_ms INTEGER, http_status INTEGER, soap_fault INTEGER,
-                       error TEXT,                       -- transport error, if any
-                       response_headers TEXT,            -- JSON
-                       file_stem TEXT NOT NULL);
-CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT);  -- split positions, selection, …
-```
+### `washboard.sqlite`
+Tables for the project, its servers, request metadata, history and UI state; the columns are
+the migrations in `crates/washboard-core/src/project/db.rs`, keyed off `PRAGMA user_version`.
+What the schema decides:
+- The project id is a UUID and the Keychain key prefix; passwords live only in the Keychain.
+- A request row names its file by a `/`-separated path relative to `requests/`; its operation
+  is a hint that may go stale when the WSDL changes.
+- History rows point at their `history/` files and keep the request's start line and headers
+  and the response's headers as JSON, with `Authorization` masked before it is stored.
 - Rollback journal, not WAL: write volume is tiny and WAL side files behave badly on
   synced/network folders.
 - **Reconciliation on open**: request files without a row get a row; rows without a file are
   dropped (history kept until pruned). Handles files added/removed in Finder or via git.
 - **Same folder opened twice** (two windows or two app instances): `flock` on
-  `washboard.sqlite`; second open is refused with a clear message.
+  `.washboard.lock` beside it (not on the database: on macOS `flock` and SQLite's own `fcntl`
+  locks interfere); the second open is refused with a clear message. Read-only CLI commands
+  open without the lock.
 
 ### App-level state
 `~/Library/Application Support/Washboard/state.json`: list of open projects (path +
@@ -623,8 +606,8 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 Each milestone ends in something runnable.
 
 M0 (libxml2 and ureq spikes), M1 (core library and the `washboard` CLI) and M2–M4 are done;
-M5 is under way: Replace WSDL and the Dark Mode check are done, the replace report,
-FSEvents, accessibility, the icon and distribution are left. Follow-up work and what is left of
+M5 is under way: Replace WSDL with its report and the Dark Mode check are done; FSEvents,
+accessibility, the icon and distribution are left. Follow-up work and what is left of
 M5 are in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**

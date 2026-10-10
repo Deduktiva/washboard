@@ -52,6 +52,11 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 | WP-DARK-MODE | `crates/washboard-app/**` | PLAN M5 "Dark Mode check": the editor's highlighting palette (`highlight_palette`) with explicit text and background colours on the text views; `tests/appkit.rs` measures each palette colour's contrast in darkAqua (at least 3:1) and prints the aqua values. The look in both appearances is left to the manual checks on a Mac. |
 | WP-RESPONSE-LAYOUT | `crates/washboard-app/**`; older exchanges, Show Latest and the History drawer's state in `crates/washboard-ui-model` | PLAN §4 "Response pane and history": response beside the request, a History drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items; Send refused while it shows; Restore Request is one undo step. |
 | WP-STATUS-COLORS | `crates/washboard-app/src/colors.rs` and the status-colour call sites; the colour rule in `CLAUDE.md` | `error()`, `warning()`, `success()`: functions, not cached values, since the system colours resolve per appearance. `NSColor::system*Color` appears only there and in the editor's highlighting palette. |
+| WP-WSDL-SERVERS | the WSDL servers in `crates/washboard-ui-model` (`WsdlServer`, `ProjectWindow::wsdl_servers`); the Servers pane in `settings_window.rs`; `tagged_subtitle_row` in `form.rs` | The WSDL's SOAP 1.1 addresses are read-only "From WSDL" rows after the project's servers, read from the loaded WSDL each time, never stored or sendable. Add as Server… opens the server sheet filled in; nothing is stored before Save. Replaces the "Suggested by the WSDL" section. legacy-rpc lists its rpc/encoded port too, since its binding is SOAP 1.1. |
+| WP-SENT-HEADERS | the Headers tab in `crates/washboard-app/**`; `ResponseView::headers_text` in `crates/washboard-ui-model`; `history.request_headers` (schema v2) in `crates/washboard-core/src/project/`; `RawMessage::masked_headers` | The Headers tab shows the request's start line and headers as sent, then the response's. `Authorization` is masked before it is stored, so credentials never reach the database. Projects migrate to v2 on open; older builds refuse them. Rows from before say "not recorded". `history --show` in the CLI prints them too. |
+| WP-OPERATION-PICKER | `crates/washboard-app/src/operation_picker.rs`; `pick_operations` and `OperationNode::input` in `crates/washboard-ui-model` | New Request… (⌘N, the REQUESTS header) opens a sheet with a focused search field; ↑/↓ move while typing, Return or a double-click creates, Esc cancels. Prefix matches first; "Service › Port" headers only with more than one supported port; unsupported operations greyed at the end. `App::default_operation` is gone. Until WP-REQUEST-FOLDERS-APP, an operation row still creates directly. |
+| WP-RULER-HOVER | the ruler, its tool tips and the underline tool tips in `crates/washboard-app/**`; `text::{line_markers, text_tool_tip}` | Error lines read `!12` in `colors::error()`, warning-only lines `⚠12` in `colors::warning()`. Hovering a marker lists the line's messages, errors first; hovering an underlined error shows its message, then the element's hover. |
+| WP-REPLACE-REPORT | `crates/washboard-core/src/project/replace_report.rs`; `project replace-wsdl` in the CLI; the outcome in `crates/washboard-ui-model/src/import.rs` | One `ReplaceReport` (operations added and removed, requests that no longer validate) used by the app and the CLI; `ReplaceOutcome` is an alias. The CLI now lists every request that fails against the new WSDL. Requests are never rewritten. |
 
 ## Open
 
@@ -72,69 +77,11 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 
 | Package | Depends on | Owns | Scope |
 |---|---|---|---|
-| WP-REPLACE-REPORT | VALIDATE, UI-MODEL (done) | new `crates/washboard-core/src/project/replace_report.rs`, `crates/washboard-cli/src/commands/project.rs`, the outcome code in `crates/washboard-ui-model/src/import.rs` | PLAN §4 "Replace WSDL". The report exists twice today: `ui-model`'s `ReplaceOutcome` (operations added/removed, requests that no longer validate) and the CLI's own diff, which only lists requests whose operation is gone. Move the computation into `core`, use it from both, and have `project replace-wsdl` print requests that no longer validate. Requests are never rewritten. |
 | WP-DIST | APP-SHELL (done) | `[package.metadata.packager]` and `icons/` in `crates/washboard-app/`, a release workflow in `.github/workflows/`, `Makefile` | The unsigned `.app` already builds (`make app`, CI artifact) with a placeholder icon. Left: the real icon, DMG via `cargo-packager`, codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
 | WP-FSEVENTS | UI-MODEL (done) | file watching in `crates/washboard-ui-model`, `notify` in its `Cargo.toml`, the binding in `crates/washboard-app/**` | PLAN M5 and §2 (`notify`, FSEvents backend): notice request files edited outside the app. The PLAN does not say what happens to an open buffer; decide that first (proposal: reload a clean buffer, keep a dirty one and ask). |
 | WP-A11Y | APP-INTEGRATION (done) | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
-| WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (`colors::warning()`, errors stay `colors::error()`); today only errors are marked. |
-| WP-SENT-HEADERS | RESPONSE-LAYOUT (done) | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
-| WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
 | WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
-| WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
-| WP-WSDL-SERVERS | the Servers pane redesign (#85, done), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
-
-### WP-OPERATION-PICKER in detail
-
-Today File ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
-else the first supported one (`App::default_operation`), so creating a request for any other
-operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
-scrolling, not typing. The picker becomes the only way to create a request for an operation:
-WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
-
-- **Where.** File ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
-  both titles gain the ellipsis, since they now ask something first. Until WP-REQUEST-FOLDERS-APP
-  removes the OPERATIONS list, an operation row's New Request and a double-click on an
-  operation still create directly.
-- **Window.** A sheet on the project window, like the import sheet: a search field on top,
-  focused, and a list below. Return (default button "Create") creates the request for the
-  highlighted row; Esc or Cancel closes the sheet and creates nothing; a double-click on a row
-  creates. ↑/↓ move the highlight while the focus stays in the search field, as in Xcode's
-  Open Quickly, so the hands never leave the keyboard. The sheet's size is remembered (user
-  defaults), not its search text.
-- **Rows.** One per operation: its name, and in secondary text the input element's QName
-  (`cus:GetCustomer`) or, for rpc/literal, "rpc". Grouped under "Service › Port" section headers
-  in WSDL order. A header is left out when the project has only one supported port, and then
-  the list is just the operations. Only supported ports count: many WSDLs have one SOAP 1.1
-  port next to a SOAP 1.2 or rpc/encoded one (both fixtures do), and those should get the
-  flat list. Unsupported operations sit in an "Unsupported" section at the end,
-  greyed, with their reason as the tooltip (PLAN §1: shown, never dropped); they can be
-  highlighted but not created, so Create is disabled on them.
-- **Search.** Case-insensitive; a row matches when every space-separated word of the query is a
-  substring of the operation name, the input element's local name, or its service or port name.
-  Rows whose operation name starts with the query come first, then the rest, each in WSDL order.
-  An empty query shows everything. Sections with no match disappear; with no match at all, the
-  list says "No operation matches" and Create is disabled.
-- **Initial highlight.** The operation selected in the sidebar (while the OPERATIONS list
-  exists); else the operation of the selected request (another request for the same operation
-  is the common case); else the first supported operation. The search field starts empty.
-- **When there is nothing to pick.** New Request is disabled while the WSDL loads or when it
-  failed to load, in the menu and in the context menu, rather than opening a sheet that cannot
-  do anything. A WSDL with no supported operation opens the sheet with only the Unsupported
-  section, so the user sees why.
-- **After Create.** As today: the request is created with the template, selected, and enters
-  inline rename (`Event::BeginRename`).
-- **Model.** The filtering and ordering is a pure function in `washboard-ui-model` over the
-  sidebar's `ServiceNode`s and the query, returning the sections and rows to show, so it is
-  tested on Linux; the app only draws it. The first supported row of its unfiltered result is
-  the initial highlight's fallback, so `App::default_operation` and its call in
-  `sidebar.rs`'s `new_request` are removed.
-- **Tests:** on Linux, the filter: words in any order, matching on service, port and element
-  names, prefix matches first, unsupported operations kept in their section, headers left out
-  with one supported port (both fixtures) and kept with two (a synthetic tree). In
-  `tests/appkit.rs`: ⌘N opens the sheet with the sidebar's operation highlighted; typing
-  filters; ↓ then Return creates a request for that operation and starts rename; Esc creates
-  nothing; Create is disabled on an unsupported row; New Request is disabled while the schema
-  loads.
+| WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS; OPERATION-PICKER (done) | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 
 ### WP-REQUEST-FOLDERS in detail
 
@@ -190,8 +137,9 @@ would leave folders for removed operations behind.
 ### WP-REQUEST-FOLDERS-APP in detail
 
 - **Sidebar.** One section, REQUESTS: the folder tree, folders with a folder icon and a
-  disclosure triangle, requests as today. The OPERATIONS section is removed; unsupported
-  operations are still shown in the picker (PLAN §1).
+  disclosure triangle, requests as today. The OPERATIONS section is removed, and with it an
+  operation row's New Request and double-click; unsupported operations are still shown in the
+  picker (PLAN §1).
 - **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
   The REQUESTS header: New Request…, New Folder. File ▸ New Folder (⌥⌘N) creates one in the
   selected folder, or the selected request's folder, and starts inline rename.
@@ -206,42 +154,3 @@ would leave folders for removed operations behind.
   operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
   move by the model's command shows in the tree; collapsed folders survive reopening the
   project.
-
-### WP-WSDL-SERVERS in detail
-
-Today the WSDL's `soap:address`es are offered as servers once: New Project keeps them in memory
-(`ProjectWindow::suggested_servers`), the Servers pane shows them in a "Suggested by the WSDL"
-section with Add, and they are gone after Add or when the project is reopened. A WSDL address
-is useful later too (a second server for the same port, after a Replace WSDL, after deleting a
-server), so it should always be there, without becoming a server nobody configured.
-
-- **Source.** The loaded WSDL's `Wsdl::soap11_addresses()` (port name and address of every
-  SOAP 1.1 port), read whenever the schema loads: on open, after New Project, after Replace
-  WSDL. Not stored in the database; the WSDL is the record. A port without an address gives
-  no row. The model exposes them as `ProjectWindow::wsdl_servers()`, empty while the schema
-  loads or when it failed.
-- **In the server list** (#85's Servers group), after the project's own servers: one row per
-  WSDL address, with the port name and the address like a server row, a "From WSDL" tag in
-  secondary text, and the tooltip "From the WSDL's soap:address. Add it as a server to use
-  it." The row's button is **Add as Server…** instead of Edit…; there is no way to edit or
-  delete it. Rows stay even when a server already has the same address: the list says what
-  the WSDL offers, and the user decides.
-- **Add as Server…** opens #85's server sheet for a new server, filled in with the port name as
-  its name and the address as its URL, other fields at their defaults. Save adds the server;
-  Cancel adds nothing. Nothing connects before Save, so the rule that a WSDL address is never
-  used until the user has confirmed it (PLAN §4 "Create project", step 4) holds as before.
-- **Never sendable.** WSDL rows are not servers: not in the toolbar's server popup, not
-  stored, not in the HTTP code's reach. Only `Server`s are.
-- **Goes:** the "Suggested by the WSDL" section, `suggested_servers` and
-  `confirm_suggested_server` in the model. New Project still opens the project's Servers pane
-  when its WSDL has an address (the import check already knows them, before the schema has
-  loaded), so the first server is one Add as Server… away.
-- **Not changed:** the CLI (`server add` takes a URL; it has never offered WSDL addresses).
-- **Docs:** PLAN §4 "Settings" and its §8 sketch lose the suggestions section and show the
-  WSDL rows.
-- **Tests:** model on Linux: `wsdl_servers()` after New Project, after reopening the project
-  and after Replace WSDL (`customer` has one SOAP 1.1 address, `legacy-rpc` its own); none
-  while loading. In `tests/appkit.rs`: the Servers pane lists the WSDL row after the servers,
-  with Add as Server… and no Edit…; Add as Server… then Cancel adds nothing; Add as
-  Server… then Save adds a server with the port name and address, and the WSDL row stays;
-  the toolbar's server popup never lists a WSDL row; reopening the project still shows it.
