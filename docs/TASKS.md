@@ -257,11 +257,11 @@ server), so it should always be there, without becoming a server nobody configur
   loads or when it failed.
 - **In the server list** (#85's Servers group), after the project's own servers: one row per
   WSDL address, with the port name and the address like a server row, a "From WSDL" tag in
-  secondary text, and the tooltip "From the WSDL's soap:address. Duplicate it to use it." The
-  row's button is **Add as Server…** instead of Edit…; there is no way to edit or delete it. Rows
-  stay even when a server already has the same address: the list says what the WSDL offers,
-  and the user decides.
-- **Duplicate…** opens #85's server sheet for a new server, filled in with the port name as
+  secondary text, and the tooltip "From the WSDL's soap:address. Add it as a server to use
+  it." The row's button is **Add as Server…** instead of Edit…; there is no way to edit or
+  delete it. Rows stay even when a server already has the same address: the list says what
+  the WSDL offers, and the user decides.
+- **Add as Server…** opens #85's server sheet for a new server, filled in with the port name as
   its name and the address as its URL, other fields at their defaults. Save adds the server;
   Cancel adds nothing. Nothing connects before Save, so the rule that a WSDL address is never
   used until the user has confirmed it (PLAN §4 "Create project", step 4) holds as before.
@@ -270,13 +270,13 @@ server), so it should always be there, without becoming a server nobody configur
 - **Goes:** the "Suggested by the WSDL" section, `suggested_servers` and
   `confirm_suggested_server` in the model. New Project still opens the project's Servers pane
   when its WSDL has an address (the import check already knows them, before the schema has
-  loaded), so the first server is one Duplicate… away.
+  loaded), so the first server is one Add as Server… away.
 - **Not changed:** the CLI (`server add` takes a URL; it has never offered WSDL addresses).
 - **Docs:** PLAN §4 "Settings" and its §8 sketch lose the suggestions section and show the
   WSDL rows (they are #85's text until it merges).
 - **Tests:** model on Linux: `wsdl_servers()` after New Project, after reopening the project
   and after Replace WSDL (`customer` has one SOAP 1.1 address, `legacy-rpc` its own); none
   while loading. In `tests/appkit.rs`: the Servers pane lists the WSDL row after the servers,
-  with Duplicate… and no Edit…; Duplicate… then Cancel adds nothing; Duplicate… then Save adds
-  a server with the port name and address, and the WSDL row stays; the toolbar's server popup
-  never lists a WSDL row; reopening the project still shows it.
+  with Add as Server… and no Edit…; Add as Server… then Cancel adds nothing; Add as
+  Server… then Save adds a server with the port name and address, and the WSDL row stays;
+  the toolbar's server popup never lists a WSDL row; reopening the project still shows it.
