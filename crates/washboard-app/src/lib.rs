@@ -28,6 +28,8 @@ mod layout;
 #[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
+mod operation_picker;
+#[cfg(target_os = "macos")]
 mod panes;
 #[cfg(target_os = "macos")]
 mod project_window;
@@ -57,6 +59,8 @@ pub use editor::{EditorController, LineNumberRuler, highlight_palette};
 pub use form::{GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, ROW_INSET, TEXT_ID};
 #[cfg(target_os = "macos")]
 pub use http_log::HttpLog;
+#[cfg(target_os = "macos")]
+pub use operation_picker::OperationPicker;
 #[cfg(target_os = "macos")]
 pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
