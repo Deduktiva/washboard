@@ -18,7 +18,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
-    NSDateFormatterStyle, NSIndexSet, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -827,13 +827,11 @@ impl ResponsePane {
         let shown = older
             .and_then(|id| entries.iter().position(|(e, _)| e.id == id))
             .unwrap_or(0);
-        let table = self.ivars().history.table();
-        let selection = if entries.is_empty() {
-            NSIndexSet::new()
-        } else {
-            NSIndexSet::indexSetWithIndex(shown)
-        };
-        table.selectRowIndexes_byExtendingSelection(&selection, false);
+        // Through `select`, which the table does not report as the user's pick: reporting it
+        // would show that exchange again and come back here. Reloaded rows start unselected.
+        if !entries.is_empty() {
+            self.ivars().history.select(shown);
+        }
         let earlier = entries.len().saturating_sub(1);
         let earlier = if earlier == 0 {
             "no earlier exchanges".to_owned()
