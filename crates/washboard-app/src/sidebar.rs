@@ -28,6 +28,7 @@ use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout;
+use crate::menu::menu_item;
 use crate::text::port_chip;
 
 /// On a SOAP 1.2 port's row; its operations give their own reason.
@@ -595,16 +596,7 @@ impl SidebarController {
         };
         let object: &AnyObject = node.as_ref();
         for &(title, action) in items {
-            // SAFETY: each action is one of this controller's context menu methods above,
-            // which take the sender.
-            let item = unsafe {
-                NSMenuItem::initWithTitle_action_keyEquivalent(
-                    NSMenuItem::alloc(self.mtm()),
-                    &NSString::from_str(title),
-                    Some(action),
-                    ns_string!(""),
-                )
-            };
+            let item = menu_item(title, Some(action), "", self.mtm());
             // SAFETY: the target is this controller, which implements every action used here
             // and outlives the menu (the outline view owns it); the represented object is a
             // `SidebarNode`, which is what `menu_node` expects back.
