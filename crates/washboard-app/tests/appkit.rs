@@ -28,6 +28,7 @@ fn main() {
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
+        ("dark_mode", checks::dark_mode),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
         ("http_log", checks::http_log),
@@ -65,7 +66,8 @@ mod checks {
     use objc2::runtime::{AnyObject, Sel};
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor, NSColorSpace,
         NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
         NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSView,
@@ -1607,6 +1609,95 @@ mod checks {
             text_view.insertText_replacementRange(&NSString::from_str("x"), NSRange::new(at, 0))
         };
         print!("(keystroke {} ms) ", started.elapsed().as_millis());
+    }
+
+    /// The editor's colours against its background, in both appearances, and the project
+    /// window under Dark Mode. Contrast is the WCAG ratio of the colours as AppKit resolves
+    /// them for each appearance; secondary label colours are blended over the background.
+    pub fn dark_mode(ctx: &Ctx) {
+        // SAFETY: immutable AppKit constants.
+        let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+        let mut colours: Vec<(String, Retained<NSColor>)> = washboard_app::highlight_palette()
+            .into_iter()
+            .map(|(kind, colour)| (format!("{kind:?}"), colour))
+            .collect();
+        colours.push(("text".into(), NSColor::textColor()));
+        colours.push(("ruler line number".into(), NSColor::secondaryLabelColor()));
+        colours.push(("error marker".into(), NSColor::systemOrangeColor()));
+        for (name, minimum) in [(aqua, None), (dark, Some(3.0))] {
+            let appearance = NSAppearance::appearanceNamed(name).expect("a system appearance");
+            let ratios = RefCell::new(Vec::new());
+            let block = RcBlock::new(|| {
+                let background = srgb(&NSColor::textBackgroundColor());
+                for (what, colour) in &colours {
+                    ratios
+                        .borrow_mut()
+                        .push((what.clone(), contrast(srgb(colour), background)));
+                }
+            });
+            appearance.performAsCurrentDrawingAppearance(&block);
+            drop(block);
+            let ratios = ratios.into_inner();
+            print!("({name}: ");
+            for (what, ratio) in &ratios {
+                print!("{what} {ratio:.1} ");
+            }
+            print!(") ");
+            if let Some(minimum) = minimum {
+                for (what, ratio) in &ratios {
+                    assert!(*ratio >= minimum, "{what} in {name}: contrast {ratio:.2}");
+                }
+            }
+        }
+
+        // The project window follows the app into Dark Mode while open.
+        let project = ctx.open();
+        wait_loaded(&project);
+        let text_view = project.editor().text_view();
+        ctx.app
+            .setAppearance(NSAppearance::appearanceNamed(dark).as_deref());
+        let window = project.project_window();
+        window.displayIfNeeded();
+        let shown = text_view.effectiveAppearance().name().to_string();
+        ctx.app.setAppearance(None);
+        assert_eq!(
+            shown,
+            dark.to_string(),
+            "the editor follows the app's appearance"
+        );
+        autoreleasepool(|_| window.performClose(None));
+    }
+
+    /// Red, green, blue and alpha of `colour` in sRGB, as resolved for the current drawing
+    /// appearance.
+    fn srgb(colour: &NSColor) -> [f64; 4] {
+        let c = colour
+            .colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())
+            .expect("an sRGB colour");
+        [
+            c.redComponent(),
+            c.greenComponent(),
+            c.blueComponent(),
+            c.alphaComponent(),
+        ]
+    }
+
+    /// WCAG 2 contrast ratio of `fg` drawn over the opaque `bg`.
+    fn contrast(fg: [f64; 4], bg: [f64; 4]) -> f64 {
+        let blend = |i: usize| fg[i] * fg[3] + bg[i] * (1.0 - fg[3]);
+        let linear = |c: f64| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let luminance = |rgb: [f64; 3]| {
+            0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+        };
+        let a = luminance([blend(0), blend(1), blend(2)]);
+        let b = luminance([bg[0], bg[1], bg[2]]);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
     }
 
     /// An invalid value in a fixture request is listed, marked in the gutter and on the
