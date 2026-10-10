@@ -11,14 +11,13 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashSet;
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags,
-    NSLayoutAttribute, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView,
-    NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn,
-    NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource,
+    NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn, NSTableView, NSTableViewStyle,
+    NSTextField, NSTextFieldDelegate, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
@@ -30,7 +29,7 @@ use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 use crate::app::{ModelAccess, with_delegate};
 use crate::colors;
 use crate::layout;
-use crate::menu::menu_item;
+use crate::menu::{self, BACKSPACE, CMD, Entry, NONE, item};
 use crate::text::port_chip;
 
 /// On a SOAP 1.2 port's row; its operations give their own reason.
@@ -332,8 +331,20 @@ pub struct SidebarIvars {
     stale: Cell<bool>,
 }
 
-const MODIFIER_NONE: NSEventModifierFlags = NSEventModifierFlags(0);
-const MODIFIER_CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
+/// A request's context menu. The Project menu keeps the same commands for the selected
+/// request, with the same shortcuts.
+const REQUEST_MENU: &[Entry] = &[
+    item("Rename", c"sidebarRenameRequest:", "", NONE),
+    item("Duplicate", c"sidebarDuplicateRequest:", "d", CMD),
+    item("Validate", c"sidebarValidateRequest:", "b", CMD),
+    item("Delete", c"sidebarDeleteRequest:", BACKSPACE, CMD),
+];
+
+/// An operation's context menu.
+const NEW_REQUEST_MENU: &[Entry] = &[item("New Request", c"sidebarNewRequest:", "n", CMD)];
+
+/// The REQUESTS header's context menu, which asks for the operation.
+const PICK_REQUEST_MENU: &[Entry] = &[item("New Request…", c"sidebarNewRequest:", "n", CMD)];
 
 define_class!(
     // SAFETY:
@@ -577,50 +588,30 @@ impl SidebarController {
 
     /// The context menu for `row`: Rename, Duplicate, Validate and Delete on a request; New
     /// Request on an operation and on the REQUESTS header; nothing elsewhere, so no menu opens.
-    /// The Project menu keeps the same commands for the selected request, with shortcuts.
     pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
-        menu.removeAllItems();
-        let Some(clicked) = self.outline().and_then(|o| o.itemAtRow(row)) else {
-            return;
-        };
-        let node = node(&clicked);
-        let items: &[(&str, Sel, &str, NSEventModifierFlags)] = match node.kind() {
-            NodeKind::Request => &[
-                ("Rename", sel!(sidebarRenameRequest:), "", MODIFIER_NONE),
-                (
-                    "Duplicate",
-                    sel!(sidebarDuplicateRequest:),
-                    "d",
-                    MODIFIER_CMD,
-                ),
-                ("Validate", sel!(sidebarValidateRequest:), "b", MODIFIER_CMD),
-                ("Delete", sel!(sidebarDeleteRequest:), "\u{8}", MODIFIER_CMD),
-            ],
-            NodeKind::Operation => &[("New Request", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)],
-            NodeKind::Group if node.ivars().path == "group:requests" => {
-                &[("New Request…", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)]
-            }
+        let clicked = self.outline().and_then(|o| o.itemAtRow(row));
+        let node = clicked.as_deref().map(node);
+        let entries = match node.map(|n| (n.kind(), n.ivars().path.as_str())) {
+            Some((NodeKind::Request, _)) => REQUEST_MENU,
+            Some((NodeKind::Operation, _)) => NEW_REQUEST_MENU,
+            Some((NodeKind::Group, "group:requests")) => PICK_REQUEST_MENU,
             _ => &[],
         };
-        let object: &AnyObject = node.as_ref();
-        for &(title, action, key, modifiers) in items {
-            let item = menu_item(title, Some(action), key, self.mtm());
-            // SAFETY: the target is this controller, which implements every action used here
-            // and outlives the menu (the outline view owns it); the represented object is a
-            // `SidebarNode`, which is what `menu_node` expects back.
-            unsafe {
-                item.setTarget(Some(self));
-                item.setKeyEquivalentModifierMask(modifiers);
-                item.setRepresentedObject(Some(object));
-            }
-            // An unsupported operation gets no request, as a double-click shows; the header's
-            // picker needs the loaded WSDL.
-            item.setEnabled(match node.kind() {
-                NodeKind::Group => self.schema_ready(),
-                _ => node.unsupported().is_none(),
-            });
-            menu.addItem(&item);
-        }
+        let object: Option<&AnyObject> = node.map(AsRef::as_ref);
+        // An unsupported operation gets no request, as a double-click shows; the header's
+        // picker needs the loaded WSDL.
+        let enabled = node.is_some_and(|n| match n.kind() {
+            NodeKind::Group => self.schema_ready(),
+            _ => n.unsupported().is_none(),
+        });
+        let configure = |item: &NSMenuItem| {
+            // SAFETY: a `SidebarNode`, which is what `menu_node` expects back.
+            unsafe { item.setRepresentedObject(object) };
+            item.setEnabled(enabled);
+        };
+        // SAFETY: this controller implements every action in the tables and outlives the menu
+        // (the outline view owns it).
+        unsafe { menu::fill_context_menu(menu, entries, self, configure) };
     }
 
     /// Selects the context menu's request, as clicking its row would, so a command on the

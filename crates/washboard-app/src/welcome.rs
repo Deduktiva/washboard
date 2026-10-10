@@ -5,7 +5,7 @@ use std::cell::{OnceCell, RefCell};
 use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControl,
@@ -22,7 +22,7 @@ use objc2_foundation::{
 
 use crate::app::with_delegate;
 use crate::layout;
-use crate::menu::menu_item;
+use crate::menu::{self, Entry, NONE, item};
 
 /// A recent project as the welcome window and File ▸ Open Recent list it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +53,14 @@ const HEIGHT: f64 = 400.0;
 const LEFT: f64 = 250.0;
 const ICON: f64 = 96.0;
 const BUTTON_WIDTH: f64 = 160.0;
+
+/// A recent project's context menu; each item's tag is the row.
+const RECENT_MENU: &[Entry] = &[
+    item("Open", c"openRecent:", "", NONE),
+    item("Show in Finder", c"showRecentInFinder:", "", NONE),
+    Entry::Separator,
+    item("Remove from List", c"removeRecent:", "", NONE),
+];
 
 define_class!(
     // SAFETY:
@@ -198,28 +206,11 @@ impl WelcomeController {
 
     /// The context menu for `row`: Open, Show in Finder, Remove from List; none off the rows.
     pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
-        menu.removeAllItems();
-        if row < 0 || self.folder(row as usize).is_none() {
-            return;
-        }
-        let items: [Option<(&str, Sel)>; 4] = [
-            Some(("Open", sel!(openRecent:))),
-            Some(("Show in Finder", sel!(showRecentInFinder:))),
-            None,
-            Some(("Remove from List", sel!(removeRecent:))),
-        ];
-        for entry in items {
-            let Some((title, action)) = entry else {
-                menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
-                continue;
-            };
-            let item = menu_item(title, Some(action), "", self.mtm());
-            // SAFETY: the target is this controller, which implements every action used here
-            // and owns the window the menu belongs to.
-            unsafe { item.setTarget(Some(self)) };
-            item.setTag(row);
-            menu.addItem(&item);
-        }
+        let on_row = row >= 0 && self.folder(row as usize).is_some();
+        let entries = if on_row { RECENT_MENU } else { &[] };
+        // SAFETY: this controller implements every action in the table and owns the window the
+        // menu belongs to.
+        unsafe { menu::fill_context_menu(menu, entries, self, |item| item.setTag(row)) };
     }
 
     /// The row an action is for: a context menu item's tag, else the clicked row (a
