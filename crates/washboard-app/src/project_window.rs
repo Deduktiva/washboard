@@ -187,11 +187,8 @@ define_class!(
 
         #[unsafe(method(duplicateRequest:))]
         fn duplicate_request(&self, _sender: Option<&AnyObject>) {
-            let key = self.key();
             if let Some(request) = self.selected_request() {
-                self.command("Could not duplicate the request", |app| {
-                    app.duplicate_request(key, request)
-                });
+                self.sidebar().duplicate_request(request);
             }
         }
 
@@ -205,11 +202,8 @@ define_class!(
 
         #[unsafe(method(deleteRequest:))]
         fn delete_request(&self, _sender: Option<&AnyObject>) {
-            let key = self.key();
             if let Some(request) = self.selected_request() {
-                self.command("Could not delete the request", |app| {
-                    app.delete_request(key, request)
-                });
+                self.sidebar().delete_request(request);
             }
         }
 

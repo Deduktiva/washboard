@@ -468,13 +468,9 @@ define_class!(
 
         #[unsafe(method(sidebarDuplicateRequest:))]
         fn context_duplicate(&self, sender: Option<&AnyObject>) {
-            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
-                return;
-            };
-            let key = self.ivars().key;
-            self.command("Could not duplicate the request", |app| {
-                app.duplicate_request(key, request)
-            });
+            if let Some(request) = menu_node(sender).and_then(|n| n.request()) {
+                self.duplicate_request(request);
+            }
         }
 
         #[unsafe(method(sidebarValidateRequest:))]
@@ -487,13 +483,9 @@ define_class!(
 
         #[unsafe(method(sidebarDeleteRequest:))]
         fn context_delete(&self, sender: Option<&AnyObject>) {
-            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
-                return;
-            };
-            let key = self.ivars().key;
-            self.command("Could not delete the request", |app| {
-                app.delete_request(key, request)
-            });
+            if let Some(request) = menu_node(sender).and_then(|n| n.request()) {
+                self.delete_request(request);
+            }
         }
     }
 
@@ -759,6 +751,22 @@ impl SidebarController {
                 None => app.default_operation(key)?,
             };
             app.new_request(key, &operation)
+        });
+    }
+
+    /// Project ▸ Duplicate, and Duplicate in a request's context menu.
+    pub fn duplicate_request(&self, request: RequestId) {
+        let key = self.ivars().key;
+        self.command("Could not duplicate the request", |app| {
+            app.duplicate_request(key, request)
+        });
+    }
+
+    /// Project ▸ Delete, and Delete in a request's context menu.
+    pub fn delete_request(&self, request: RequestId) {
+        let key = self.ivars().key;
+        self.command("Could not delete the request", |app| {
+            app.delete_request(key, request)
         });
     }
 
