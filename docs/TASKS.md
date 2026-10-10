@@ -50,6 +50,8 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 | WP-SIDEBAR-MENU | `crates/washboard-app/src/sidebar.rs`, the sidebar footer in `project_window.rs` (removed); request order in `crates/washboard-ui-model` | Context menus on sidebar rows instead of the +/−/⋯ footer: a request gets Rename, Duplicate, Validate, Delete; an operation gets New Request (disabled when unsupported); the REQUESTS header gets New Request. The menu acts on the clicked row; Rename and Validate select it first. Requests sort by name in Finder order; `sort_order` stays in the database, unused. |
 | WP-SETTINGS-WINDOW | `crates/washboard-app/src/settings_window.rs`; the project settings sheet in `sheets.rs` (removed); the Settings… item in `menu.rs` | One Settings window (⌘,) laid out like System Settings: a "Washboard" section for the app settings (user defaults) and one section per open project (General, Servers; stored in the project). Changes apply as made, no Done button. New Project's server confirmation opens it on the project's Servers pane. Selected pane in `SettingsPane`; the frame autosaves. Replaces the Project Settings sheet and WP-FORMAT-XML's small window; `app_settings.rs` keeps only the defaults keys. |
 | WP-DARK-MODE | `crates/washboard-app/**` | PLAN M5 "Dark Mode check": the editor's highlighting palette (`highlight_palette`) with explicit text and background colours on the text views; `tests/appkit.rs` measures each palette colour's contrast in darkAqua (at least 3:1) and prints the aqua values. The look in both appearances is left to the manual checks on a Mac. |
+| WP-RESPONSE-LAYOUT | `crates/washboard-app/**`; older exchanges, Show Latest and the History drawer's state in `crates/washboard-ui-model` | PLAN §4 "Response pane and history": response beside the request, a History drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items; Send refused while it shows; Restore Request is one undo step. |
+| WP-STATUS-COLORS | `crates/washboard-app/src/colors.rs` and the status-colour call sites; the colour rule in `CLAUDE.md` | `error()`, `warning()`, `success()`: functions, not cached values, since the system colours resolve per appearance. `NSColor::system*Color` appears only there and in the editor's highlighting palette. |
 
 ## Open
 
@@ -59,7 +61,7 @@ those one at a time, or split the paths before handing them out in parallel.
 ### Manual checks on a Mac
 Not a coding package: what CI cannot see, done by a person from `make app` or the CI artifact.
 - The whole loop on a real project: restore on launch, edit, autosave, validate, send, history,
-  HTTP log, New Project, Replace WSDL, Project Settings, the Keychain prompt (the only check of
+  HTTP log, New Project, Replace WSDL, the Settings window, the Keychain prompt (the only check of
   `KeychainSecretStore` so far; it is type-checked on Linux).
 - Typing stays responsive in a 1 MB request; completion and hover appear where expected.
 - Layout and light/dark appearance against `docs/gui-draft.html`. Findings become app fixes.
@@ -74,24 +76,22 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-DIST | APP-SHELL (done) | `[package.metadata.packager]` and `icons/` in `crates/washboard-app/`, a release workflow in `.github/workflows/`, `Makefile` | The unsigned `.app` already builds (`make app`, CI artifact) with a placeholder icon. Left: the real icon, DMG via `cargo-packager`, codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
 | WP-FSEVENTS | UI-MODEL (done) | file watching in `crates/washboard-ui-model`, `notify` in its `Cargo.toml`, the binding in `crates/washboard-app/**` | PLAN M5 and §2 (`notify`, FSEvents backend): notice request files edited outside the app. The PLAN does not say what happens to an open buffer; decide that first (proposal: reload a clean buffer, keep a dirty one and ask). |
 | WP-A11Y | APP-INTEGRATION (done) | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
-| WP-RESPONSE-LAYOUT | APP-INTEGRATION, DRAFT-GAPS (done) | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | PLAN §4 "Response pane and history" and `docs/gui-draft.html`: response beside the request, History tab replaced by a drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items. The model needs: which history entry is shown (none = latest), the sent request's text, Send refused while an older one is shown, Restore Request returning text for the app to apply as one undo step, drawer state in `ui_state`. Tests: model side on Linux (send refused, request switch and send return to latest); in `tests/appkit.rs`, selecting an older row shows the accessory and hides Send, Esc returns, ⌘Z after Restore Request brings back the editor's text. |
-| WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
-| WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
+| WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (`colors::warning()`, errors stay `colors::error()`); today only errors are marked. |
+| WP-SENT-HEADERS | RESPONSE-LAYOUT (done) | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
 | WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
 | WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
-| WP-STATUS-COLORS | DARK-MODE (done); the UI review fixes (#81), which change the same lines; coordinate with WP-RULER-HOVER, whose warning markers use the new warning colour | new `crates/washboard-app/src/colors.rs`; the status-colour call sites in `panes.rs`, `editor.rs` (ruler markers, underlines), `sidebar.rs`, `http_log.rs`; a colour rule in `CLAUDE.md` | One function per meaning (error, warning, success) instead of `NSColor::system*Color()` at each call site with a comment saying what it means. Below. |
-| WP-WSDL-SERVERS | the Servers pane redesign (#85), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
+| WP-WSDL-SERVERS | the Servers pane redesign (#85, done), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
 
 ### WP-OPERATION-PICKER in detail
 
-Today Project ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
+Today File ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
 else the first supported one (`App::default_operation`), so creating a request for any other
 operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
 scrolling, not typing. The picker becomes the only way to create a request for an operation:
 WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
 
-- **Where.** Project ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
+- **Where.** File ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
   both titles gain the ellipsis, since they now ask something first. Until WP-REQUEST-FOLDERS-APP
   removes the OPERATIONS list, an operation row's New Request and a double-click on an
   operation still create directly.
@@ -193,7 +193,7 @@ would leave folders for removed operations behind.
   disclosure triangle, requests as today. The OPERATIONS section is removed; unsupported
   operations are still shown in the picker (PLAN §1).
 - **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
-  The REQUESTS header: New Request…, New Folder. Project ▸ New Folder (⌥⌘N) creates one in the
+  The REQUESTS header: New Request…, New Folder. File ▸ New Folder (⌥⌘N) creates one in the
   selected folder, or the selected request's folder, and starts inline rename.
 - **Rename** by Return or double-click on a request or folder (PLAN §4); a double-click on a
   folder's triangle still only toggles it.
@@ -206,41 +206,6 @@ would leave folders for removed operations behind.
   operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
   move by the model's command shows in the tree; collapsed folders survive reopening the
   project.
-
-### WP-STATUS-COLORS in detail
-
-The app picks a status colour at each call site: once the UI review fixes (#81) are in,
-`systemRedColor` for errors in six places, `systemOrangeColor` for warnings in three and
-`systemGreenColor` for success in two. #81 also adds comments like "red like the issues bar's
-error count" to keep them consistent. A name says that once, and a change of mind is one line.
-
-- **`colors.rs`**, one function per meaning, each returning `Retained<NSColor>`: `error()`
-  (`systemRedColor`), `warning()` (`systemOrangeColor`), `success()` (`systemGreenColor`).
-  Functions, not cached values: the system colours are dynamic and resolve per appearance and
-  Increase Contrast, so each call returns AppKit's shared object, which costs nothing. The doc
-  comment of each says where it is used.
-- **Call sites on main today:**
-  - Error: the request bar's "XML error" (`panes.rs`); the issues bar's error count (twice,
-    `panes.rs`); after #81, the ruler's error marker and the error underline (`editor.rs`) and
-    the sidebar's invalid-request marker (`sidebar.rs`).
-  - Warning: the issues bar's "schema not checked" and warning count (`panes.rs`); the HTTP
-    log's skipped certificate check (`http_log.rs`). WP-RULER-HOVER's warning markers and
-    underlines join these.
-  - Success: "Well-formed" in the request bar and "✓ Valid" in the issues bar (`panes.rs`).
-  - The comments that only say which colour means what go.
-- **Not status colours:**
-  - The editor's syntax highlighting stays one palette in `editor.rs` (`highlight_palette`
-    since WP-DARK-MODE), keyed by token kind. Attribute values stay `systemRedColor`, as in
-    Xcode, although that is also the error colour: in the editor an error is an underline or a
-    ruler marker, never coloured text, so the two do not meet there.
-  - AppKit's semantic colours (`labelColor`, `secondaryLabelColor`, `separatorColor`, the
-    fills) already name a meaning and stay as they are.
-- **Rule** for `CLAUDE.md`, added with the package: "Colours: status colours come from
-  `colors.rs` (`error`, `warning`, `success`); `NSColor::system*Color` appears only there and in
-  the editor's highlighting palette. AppKit's semantic colours are used directly."
-- **Tests:** the Dark Mode contrast check from WP-DARK-MODE (`tests/appkit.rs`) also measures
-  the three status colours against the window background in both appearances. Nothing else
-  changes behaviour, so the existing checks cover the call sites.
 
 ### WP-WSDL-SERVERS in detail
 
@@ -273,7 +238,7 @@ server), so it should always be there, without becoming a server nobody configur
   loaded), so the first server is one Add as Server… away.
 - **Not changed:** the CLI (`server add` takes a URL; it has never offered WSDL addresses).
 - **Docs:** PLAN §4 "Settings" and its §8 sketch lose the suggestions section and show the
-  WSDL rows (they are #85's text until it merges).
+  WSDL rows.
 - **Tests:** model on Linux: `wsdl_servers()` after New Project, after reopening the project
   and after Replace WSDL (`customer` has one SOAP 1.1 address, `legacy-rpc` its own); none
   while loading. In `tests/appkit.rs`: the Servers pane lists the WSDL row after the servers,
