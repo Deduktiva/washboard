@@ -109,7 +109,7 @@ impl Sources {
     }
 }
 
-fn read_file(path: &Path) -> Result<SourceFile, SourceError> {
+pub(crate) fn read_file(path: &Path) -> Result<SourceFile, SourceError> {
     let abs = std::path::absolute(path).map_err(|source| SourceError::Io {
         path: path.to_owned(),
         source,
