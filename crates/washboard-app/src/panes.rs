@@ -13,8 +13,8 @@ use objc2_app_kit::{
     NSTabView, NSTabViewItem, NSTextField, NSView,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
-    ns_string,
+    NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -587,8 +587,8 @@ pub(crate) fn date_text(formatter: &NSDateFormatter, time: SystemTime) -> String
     formatter.stringFromDate(&date).to_string()
 }
 
-/// `200 · 120 ms · 1.2 KB`, `500 · SOAP Fault: soapenv:Server: no such customer`, or
-/// `Failed: connection refused`.
+/// `200 · 120 ms · 1 KB`, `500 · SOAP Fault: soapenv:Server: no such customer`, or
+/// `Failed: connection refused`. The size is in the user's locale and Finder's units.
 fn status_line(response: &ResponseView) -> String {
     if let Some(error) = &response.error {
         return format!("Failed: {error}");
@@ -601,7 +601,14 @@ fn status_line(response: &ResponseView) -> String {
     if let Some(duration) = response.duration {
         parts.push(format!("{} ms", duration.as_millis()));
     }
-    parts.push(format!("{:.1} KB", response.size as f64 / 1024.0));
+    let size = i64::try_from(response.size).unwrap_or(i64::MAX);
+    parts.push(
+        NSByteCountFormatter::stringFromByteCount_countStyle(
+            size,
+            NSByteCountFormatterCountStyle::File,
+        )
+        .to_string(),
+    );
     if let Some(fault) = &response.fault {
         parts.push(format!("SOAP Fault: {}: {}", fault.code, fault.string));
     }
