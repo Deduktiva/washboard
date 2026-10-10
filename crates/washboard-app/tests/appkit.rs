@@ -781,16 +781,8 @@ mod checks {
     pub fn port_chips(ctx: &Ctx) {
         let tmp = TempDir::new().expect("temp dir");
         let from = fixtures().join("customer");
-        let files = [
-            "CustomerService.wsdl",
-            "CustomerBinding.wsdl",
-            "xsd/customer.xsd",
-            "xsd/common/party.xsd",
-            "xsd/common/party-ids.xsd",
-            "xsd/ext/audit.xsd",
-        ];
         let set = WsdlSet {
-            files: files
+            files: CUSTOMER_FILES
                 .iter()
                 .map(|f| WsdlFile {
                     source: from.join(f),
@@ -1329,23 +1321,22 @@ mod checks {
 
     /// The file of the request selected in `project`.
     fn selected_file(ctx: &Ctx, project: &ProjectWindowController) -> PathBuf {
-        let id = project.selected_request().expect("a selected request");
-        let name = all_nodes(&project.sidebar().roots())
-            .into_iter()
-            .find(|n| n.request() == Some(id))
-            .expect("the selected request's row")
-            .title();
+        let name = selected_row(project).title();
         ctx.project.join("requests").join(format!("{name}.xml"))
     }
 
-    /// The (unsaved, invalid) markers of the selected request's row.
-    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+    /// The sidebar row of the request selected in `project`.
+    fn selected_row(project: &ProjectWindowController) -> Retained<SidebarNode> {
         let id = project.selected_request().expect("a selected request");
         all_nodes(&project.sidebar().roots())
             .into_iter()
             .find(|n| n.request() == Some(id))
             .expect("the selected request's row")
-            .markers()
+    }
+
+    /// The (unsaved, invalid) markers of the selected request's row.
+    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+        selected_row(project).markers()
     }
 
     /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
@@ -1414,12 +1405,7 @@ mod checks {
         // The request bar names the open request and its operation, and says the text is
         // well-formed.
         let bar = project.request_bar();
-        let id = project.selected_request().expect("a selected request");
-        let row = all_nodes(&project.sidebar().roots())
-            .into_iter()
-            .find(|n| n.request() == Some(id))
-            .expect("the selected request's row");
-        assert_eq!(bar.name(), row.title());
+        assert_eq!(bar.name(), selected_row(&project).title());
         assert_eq!(bar.operation().as_deref(), Some("SOAP 1.1 · Lookup"));
         assert_eq!(bar.state(), "Well-formed");
         project.project_window().layoutIfNeeded();
@@ -1925,17 +1911,24 @@ mod checks {
         });
     }
 
+    /// `fixtures/customer`'s WSDLs and schemas, entry first.
+    const CUSTOMER_FILES: [&str; 6] = [
+        "CustomerService.wsdl",
+        "CustomerBinding.wsdl",
+        "xsd/customer.xsd",
+        "xsd/common/party.xsd",
+        "xsd/common/party-ids.xsd",
+        "xsd/ext/audit.xsd",
+    ];
+
     /// `fixtures/customer`'s WSDLs and schemas without `xsd/common/party-ids.xsd`, which
     /// `party.xsd` includes.
     fn customer_without_include(dir: &Path) -> PathBuf {
         let from = fixtures().join("customer");
-        for file in [
-            "CustomerService.wsdl",
-            "CustomerBinding.wsdl",
-            "xsd/customer.xsd",
-            "xsd/common/party.xsd",
-            "xsd/ext/audit.xsd",
-        ] {
+        for file in CUSTOMER_FILES
+            .into_iter()
+            .filter(|f| *f != "xsd/common/party-ids.xsd")
+        {
             let to = dir.join(file);
             std::fs::create_dir_all(to.parent().expect("a parent")).expect("mkdir");
             std::fs::copy(from.join(file), &to).expect("copy fixture");
