@@ -67,7 +67,7 @@ mod checks {
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
         NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
-        NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode, NSView,
+        NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSView,
         NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
@@ -419,6 +419,7 @@ mod checks {
                 ("-", "", 0, ""),
                 ("Validate", "b", C, "validateRequest:"),
                 ("Send", "\r", C, "sendRequest:"),
+                ("Cancel Send", ".", C, "cancelSend:"),
                 ("-", "", 0, ""),
                 ("Project Settings…", "", 0, "projectSettings:"),
             ],
@@ -434,6 +435,7 @@ mod checks {
                 ("Bring All to Front", "", 0, "arrangeInFront:"),
             ],
         ),
+        ("Help", &[]),
     ];
 
     fn rows(menu: &NSMenu) -> Vec<(String, String, usize, String)> {
@@ -499,6 +501,33 @@ mod checks {
             .servicesMenu()
             .expect("the Services menu is registered");
         assert_eq!(services.title().to_string(), "Services");
+        // Registered as the Help menu, it gets the system's menu search field.
+        let help = ctx.app.helpMenu().expect("the Help menu is registered");
+        assert_eq!(help.title().to_string(), "Help");
+        let find = main
+            .itemWithTitle(&NSString::from_str("Edit"))
+            .and_then(|i| i.submenu())
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Find")))
+            .and_then(|i| i.submenu())
+            .expect("Edit ▸ Find");
+        let find_rows = rows(&find);
+        let expected: Vec<(String, String, usize, String)> = [
+            ("Find…", "f", C, "performFindPanelAction:"),
+            ("Find and Replace…", "f", O | C, "performFindPanelAction:"),
+            ("Find Next", "g", C, "performFindPanelAction:"),
+            ("Find Previous", "g", S | C, "performFindPanelAction:"),
+            ("Use Selection for Find", "e", C, "performFindPanelAction:"),
+            ("Jump to Selection", "j", C, "centerSelectionInVisibleArea:"),
+        ]
+        .iter()
+        .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
+        .collect();
+        assert_eq!(find_rows, expected, "Find menu");
+        let replace = find
+            .itemWithTitle(&NSString::from_str("Find and Replace…"))
+            .expect("Find and Replace");
+        // `NSTextFinderActionShowReplaceInterface`.
+        assert_eq!(replace.tag(), 12);
 
         // Settings is answered by the app delegate, so it is enabled with no window open.
         let app_menu = items
@@ -600,8 +629,43 @@ mod checks {
         assert!(labels[1].ends_with("Customer API"), "{labels:?}");
         assert_eq!(open_recent_titles(ctx), ["Customer API", "Clear Menu"]);
 
-        welcome.open_recent(0);
-        assert_eq!(ctx.delegate.projects().len(), 1, "reopened");
+        // A row's context menu; none off the rows.
+        let menu = NSMenu::new(MainThreadMarker::new().expect("main thread"));
+        welcome.fill_context_menu(&menu, 0);
+        let titles: Vec<String> = menu
+            .itemArray()
+            .iter()
+            .filter(|i| !i.isSeparatorItem())
+            .map(|i| i.title().to_string())
+            .collect();
+        assert_eq!(titles, ["Open", "Show in Finder", "Remove from List"]);
+        welcome.fill_context_menu(&menu, -1);
+        assert_eq!(menu.numberOfItems(), 0, "no menu off the rows");
+
+        // The most recent project is selected, and Return opens it.
+        assert_eq!(
+            table.selectedRow(),
+            0,
+            "the most recent project is selected"
+        );
+        let window = welcome.window();
+        let key = |chars: &str| {
+            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                NSEventType::KeyDown,
+                NSPoint::new(0.0, 0.0),
+                NSEventModifierFlags::empty(),
+                0.0,
+                window.windowNumber(),
+                None,
+                &NSString::from_str(chars),
+                &NSString::from_str(chars),
+                false,
+                36,
+            )
+            .expect("a key event")
+        };
+        table.keyDown(&key("\r"));
+        assert_eq!(ctx.delegate.projects().len(), 1, "reopened by Return");
         assert!(!welcome.window().isVisible(), "welcome window hidden again");
         welcome.open_recent(0);
         assert_eq!(
@@ -1788,11 +1852,30 @@ mod checks {
         assert_eq!(response.history().rows().len(), history, "nothing sent");
 
         replace(start, "someday".len(), &date);
+        let project_menu = ctx
+            .app
+            .mainMenu()
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|i| i.submenu())
+            .expect("Project menu");
+        let enabled = |title: &str| -> bool {
+            let item = project_menu
+                .itemWithTitle(&NSString::from_str(title))
+                .expect("a Project menu item");
+            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+            unsafe { msg_send![&*project, validateMenuItem: &*item] }
+        };
+        assert!(enabled("Send") && !enabled("Cancel Send"), "idle");
+        assert!(!response.is_spinning());
         action("sendRequest:");
         assert_eq!(send_label().as_deref(), Some("Cancel"));
         assert_eq!(response.status(), "Sending…");
+        assert!(response.is_spinning(), "the spinner shows while sending");
+        // The menu's Send doesn't cancel: ⌘↩ twice must not stop the first send.
+        assert!(!enabled("Send") && enabled("Cancel Send"), "sending");
         wait_until("the response", || response.status().starts_with("200"));
         assert_eq!(send_label().as_deref(), Some("Send"));
+        assert!(!response.is_spinning());
         let body = response.body().text_view().string().to_string();
         assert!(body.contains("LookupResponse"), "{body}");
         // The pane shows the model's headers; what they are is the HTTP client's business,
@@ -1803,6 +1886,13 @@ mod checks {
             .flatten()
             .expect("a response");
         assert!(!headers.is_empty());
+        let headers_font = response
+            .headers_view()
+            .documentView()
+            .and_then(|v| v.downcast::<NSTextView>().ok())
+            .and_then(|v| v.font())
+            .expect("the Headers tab has a font");
+        assert!(headers_font.isFixedPitch(), "headers in the code font");
         for (name, value) in &headers {
             let line = format!("{name}: {value}");
             assert!(
@@ -1854,6 +1944,15 @@ mod checks {
         assert_eq!(send_label().as_deref(), Some("Cancel"));
         action("sendRequest:");
         assert_eq!(send_label().as_deref(), Some("Send"), "cancelled");
+        // Project ▸ Cancel Send (⌘.) does the same.
+        action("sendRequest:");
+        assert_eq!(send_label().as_deref(), Some("Cancel"));
+        action("cancelSend:");
+        assert_eq!(
+            send_label().as_deref(),
+            Some("Send"),
+            "cancelled from the menu"
+        );
         assert!(
             response.status().starts_with("200"),
             "the last response stays"

@@ -173,9 +173,15 @@ define_class!(
         // SAFETY: the signature matches `validateMenuItem:`.
         #[unsafe(method(validateMenuItem:))]
         fn validate_menu_item(&self, item: &NSMenuItem) -> bool {
-            // Every other item this controller answers is always enabled, as before it
-            // validated anything.
-            item.action() != Some(sel!(formatXML:)) || self.has_editor()
+            // The menu's Send only sends and Cancel Send only cancels; the toolbar item, which
+            // AppKit does not validate here, toggles. Every other item this controller answers
+            // is always enabled, as before it validated anything.
+            match item.action() {
+                Some(action) if action == sel!(formatXML:) => self.has_editor(),
+                Some(action) if action == sel!(sendRequest:) => !self.is_sending(),
+                Some(action) if action == sel!(cancelSend:) => self.is_sending(),
+                _ => true,
+            }
         }
     }
 
@@ -237,17 +243,18 @@ define_class!(
         #[unsafe(method(sendRequest:))]
         fn send_request(&self, _sender: Option<&AnyObject>) {
             // The toolbar's Send is Cancel while a send is in flight.
-            let key = self.key();
-            let sending = self
-                .read(|app| app.project(key).is_some_and(|w| w.sending()))
-                .unwrap_or(false);
-            if sending {
-                with_delegate(self.mtm(), |d| {
-                    d.update(|app| app.cancel_send(key));
-                    d.sync();
-                });
+            if self.is_sending() {
+                self.cancel_send();
             } else {
+                let key = self.key();
                 self.command("Could not send the request", |app| app.send(key));
+            }
+        }
+
+        #[unsafe(method(cancelSend:))]
+        fn cancel_send_action(&self, _sender: Option<&AnyObject>) {
+            if self.is_sending() {
+                self.cancel_send();
             }
         }
 
@@ -474,6 +481,21 @@ impl ProjectWindowController {
         }
     }
 
+    /// Whether this window's request is being sent.
+    pub fn is_sending(&self) -> bool {
+        let key = self.key();
+        self.read(|app| app.project(key).is_some_and(|w| w.sending()))
+            .unwrap_or(false)
+    }
+
+    fn cancel_send(&self) {
+        let key = self.key();
+        with_delegate(self.mtm(), |d| {
+            d.update(|app| app.cancel_send(key));
+            d.sync();
+        });
+    }
+
     fn has_editor(&self) -> bool {
         let key = self.key();
         self.read(|app| app.project(key).is_some_and(|w| w.editor().is_some()))
@@ -501,10 +523,7 @@ impl ProjectWindowController {
 
     /// Send ↔ Cancel in the toolbar, and the response pane's status (`SendStateChanged`).
     pub fn show_send_state(&self) {
-        let key = self.key();
-        let sending = self
-            .read(|app| app.project(key).is_some_and(|w| w.sending()))
-            .unwrap_or(false);
+        let sending = self.is_sending();
         if let Some(item) = self.send_item() {
             let (label, symbol) = if sending {
                 ("Cancel", "xmark.circle")
