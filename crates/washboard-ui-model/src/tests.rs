@@ -629,6 +629,35 @@ fn server_passwords_go_to_the_secret_store() {
 }
 
 #[test]
+fn a_server_is_deleted_after_confirmation_and_its_password_can_be_cleared() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let id = app.add_server(key).expect("add");
+    let mut server = app.project(key).expect("open").servers()[0].clone();
+    server.auth = Auth::Basic {
+        username: "alice".into(),
+    };
+    app.update_server(key, &server, Some("s3cret"))
+        .expect("update");
+
+    app.clear_server_password(key, id).expect("clear");
+    assert_eq!(app.server_password(key, id).expect("pw"), None);
+    assert_eq!(
+        app.project(key).expect("open").servers()[0].auth,
+        server.auth,
+        "clearing keeps Basic auth"
+    );
+
+    app.ask_delete_server(key, id).expect("ask");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(confirm.title, "Delete “New Server”?");
+    assert_eq!(app.project(key).expect("open").servers().len(), 1);
+    app.ask_delete_server(key, id).expect("ask");
+    fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert!(app.project(key).expect("open").servers().is_empty());
+}
+
+#[test]
 fn commands_on_a_closed_project_fail_softly() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");

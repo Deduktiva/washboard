@@ -222,6 +222,54 @@ impl App {
         self.servers_changed(key)
     }
 
+    /// Settings ▸ Servers ▸ Delete Server: asks first, since the server's stored password goes
+    /// with it and requests that used it fall back to the popup's default.
+    pub fn ask_delete_server(
+        &mut self,
+        key: ProjectKey,
+        server: ServerId,
+    ) -> Result<(), ModelError> {
+        let name = self
+            .window(key)?
+            .servers()
+            .iter()
+            .find(|s| s.id == server)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let id = DialogId(self.next());
+        self.dialogs.insert(
+            id,
+            PendingDialog::DeleteServer {
+                project: key,
+                server,
+            },
+        );
+        self.front.dialogs.confirm(
+            id,
+            Confirm {
+                title: format!("Delete “{name}”?"),
+                message: "Requests that used it will use another server. Its password is \
+                          removed from the Keychain."
+                    .into(),
+                action: "Delete".into(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Removes the server's stored password, so that Basic auth sends an empty one.
+    pub fn clear_server_password(
+        &mut self,
+        key: ProjectKey,
+        server: ServerId,
+    ) -> Result<(), ModelError> {
+        let secrets = self.front.secrets.clone();
+        self.window(key)?
+            .project
+            .set_server_password(server, None, secrets.as_ref())?;
+        self.servers_changed(key)
+    }
+
     /// For the settings form's password field.
     pub fn server_password(
         &self,
