@@ -162,6 +162,8 @@ pub struct SettingsWindowIvars {
     indent: OnceCell<Retained<NSPopUpButton>>,
     on_save: OnceCell<Retained<NSSwitch>>,
     servers: RefCell<Vec<(ProjectKey, Retained<ServersPane>)>>,
+    /// The shown General pane's list of WSDL files.
+    wsdl_files: RefCell<Option<Retained<NSTextField>>>,
 }
 
 define_class!(
@@ -459,6 +461,19 @@ impl SettingsWindowController {
         })
     }
 
+    /// The WSDL files a project's General pane lists, once one was shown.
+    pub fn wsdl_files_shown(&self) -> Option<Vec<String>> {
+        let label = self.ivars().wsdl_files.borrow().clone()?;
+        Some(
+            label
+                .stringValue()
+                .to_string()
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        )
+    }
+
     /// The sidebar's rows, in order: section headers and panes.
     pub fn sidebar_titles(&self) -> Vec<String> {
         let outline = self.outline();
@@ -626,8 +641,10 @@ impl SettingsWindowController {
             .read(|app| {
                 let window = app.project(key)?;
                 let project = window.project();
-                let entry = project.wsdl_path().ok();
-                let files = wsdl_files(&project.wsdl_dir(), entry.as_deref());
+                let dir = project.wsdl_dir();
+                let entry = project.entry_wsdl().ok();
+                let entry = entry.as_deref().and_then(|e| e.strip_prefix(&dir).ok());
+                let files = wsdl_files(&dir, entry);
                 Some((window.name().to_owned(), window.path().to_owned(), files))
             })
             .flatten()
@@ -635,6 +652,7 @@ impl SettingsWindowController {
         let folder_label = value_label(&folder.display().to_string(), mtm);
         folder_label.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
         let files = value_label(&wsdl.join("\n"), mtm);
+        *self.ivars().wsdl_files.borrow_mut() = Some(files.clone());
         page(
             vec![
                 project_note(&name, mtm),
@@ -1292,12 +1310,17 @@ impl ServersPane {
 impl ModelAccess for ServersPane {}
 
 /// The WSDL files under `dir`, relative to it, the entry first.
-fn wsdl_files(dir: &Path, entry: Option<&str>) -> Vec<String> {
+fn wsdl_files(dir: &Path, entry: Option<&Path>) -> Vec<String> {
     fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
+            // Hidden names in `wsdl/` are Washboard's: `.previous` holds the set before the
+            // last Replace WSDL.
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
             let path = entry.path();
             if path.is_dir() {
                 walk(&path, root, out);
@@ -1309,8 +1332,8 @@ fn wsdl_files(dir: &Path, entry: Option<&str>) -> Vec<String> {
     let mut files = Vec::new();
     walk(dir, dir, &mut files);
     files.sort();
-    if let Some(entry) = entry
-        && let Some(i) = files.iter().position(|f| f == entry)
+    if let Some(entry) = entry.map(|e| e.display().to_string())
+        && let Some(i) = files.iter().position(|f| *f == entry)
     {
         let first = files.remove(i);
         files.insert(0, first);

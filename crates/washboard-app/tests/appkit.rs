@@ -2304,6 +2304,13 @@ mod checks {
                 .iter()
                 .any(|n| n.title() == "CustomerService")
         });
+        // The General pane lists the new set, the entry WSDL first, and not the previous set
+        // kept in `wsdl/.previous`.
+        let settings = ctx.delegate.show_settings(Some(Pane::ProjectGeneral(key)));
+        let files = settings.wsdl_files_shown().expect("the General pane");
+        assert_eq!(files[0], "CustomerService.wsdl", "{files:?}");
+        assert!(files.iter().all(|f| !f.starts_with('.')), "{files:?}");
+        autoreleasepool(|_| settings.window().performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
 
