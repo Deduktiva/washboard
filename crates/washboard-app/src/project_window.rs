@@ -32,11 +32,12 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, SchemaState, WellFormedness};
+use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, WellFormedness};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
+use crate::operation_picker::OperationPicker;
 use crate::panes::{IssuesBar, RequestBar, ResponsePane, date_text, sent_formatter};
 use crate::servers_pane::ServersPane;
 use crate::settings_window::Pane;
@@ -101,6 +102,7 @@ pub struct ProjectIvars {
     /// "Older exchange · …" under the toolbar, hidden while the latest is shown.
     accessory: OnceCell<Retained<NSTitlebarAccessoryViewController>>,
     older_label: OnceCell<Retained<NSTextField>>,
+    picker: RefCell<Option<Retained<OperationPicker>>>,
     replace: RefCell<Option<Retained<ImportSheetController>>>,
     /// The window the Replace WSDL sheet was attached to, for the alert after it.
     replace_parent: RefCell<Option<Weak<NSWindow>>>,
@@ -202,7 +204,7 @@ define_class!(
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(newRequest:))]
         fn new_request(&self, _sender: Option<&AnyObject>) {
-            self.sidebar().new_request(None);
+            self.show_operation_picker();
         }
 
         #[unsafe(method(duplicateRequest:))]
@@ -315,6 +317,7 @@ impl ProjectWindowController {
             content_split: OnceCell::new(),
             accessory: OnceCell::new(),
             older_label: OnceCell::new(),
+            picker: RefCell::new(None),
             replace: RefCell::new(None),
             replace_parent: RefCell::new(None),
             replace_summary: RefCell::new(None),
@@ -565,7 +568,7 @@ impl ProjectWindowController {
             self.is_sending()
         } else if action == sel!(newRequest:) {
             // A request needs an operation from the loaded WSDL.
-            self.schema_ready()
+            self.sidebar().schema_ready()
         } else {
             true
         }
@@ -577,16 +580,6 @@ impl ProjectWindowController {
         self.project_window()
             .firstResponder()
             .is_some_and(|r| r.downcast::<NSTextView>().is_ok())
-    }
-
-    /// Whether the WSDL is loaded, so new requests have operations to use.
-    fn schema_ready(&self) -> bool {
-        let key = self.key();
-        self.read(|app| {
-            app.project(key)
-                .is_some_and(|w| matches!(w.schema(), SchemaState::Ready(_)))
-        })
-        .unwrap_or(false)
     }
 
     /// Shows the latest exchange and the editor, or an older exchange whole: its request as
@@ -837,6 +830,32 @@ impl ProjectWindowController {
             d.sync();
         });
         Some(sheet)
+    }
+
+    /// New Request…: the operation picker on this window, unless the WSDL has not loaded or
+    /// the window already has a sheet. It starts on the operation selected in the sidebar, else
+    /// on the selected request's.
+    pub fn show_operation_picker(&self) -> Option<Retained<OperationPicker>> {
+        let window = self.project_window();
+        if window.attachedSheet().is_some() || !self.sidebar().schema_ready() {
+            return None;
+        }
+        let key = self.key();
+        let (services, request_operation) = self.read(|app| {
+            let window = app.project(key)?;
+            let operation = window.request_summary().and_then(|r| r.operation);
+            Some((window.sidebar().services.clone(), operation))
+        })??;
+        let preferred = self.sidebar().selected_operation().or(request_operation);
+        let picker = OperationPicker::new(key, services, preferred, self.mtm());
+        picker.present(&window);
+        *self.ivars().picker.borrow_mut() = Some(picker.clone());
+        Some(picker)
+    }
+
+    /// The most recent operation picker, if one was shown.
+    pub fn operation_picker(&self) -> Option<Retained<OperationPicker>> {
+        self.ivars().picker.borrow().clone()
     }
 
     /// The most recent Replace WSDL sheet, if one was shown.

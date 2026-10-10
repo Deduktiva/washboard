@@ -12,7 +12,7 @@ use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, Serve
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
-use washboard_core::wsdl::{self, Protocol, Sources, Wsdl};
+use washboard_core::wsdl::{self, Direction, Protocol, Sources, Style, Wsdl};
 
 use crate::app::ModelError;
 use crate::diagnostics::WellFormedness;
@@ -147,6 +147,10 @@ pub struct OperationNode {
     pub operation: OperationRef,
     /// Why the operation can't be used (SOAP 1.2, rpc/encoded, …); shown, never hidden.
     pub unsupported: Option<String>,
+    /// The input element, as the operation picker shows it: `prefix:local` with the prefix the
+    /// schemas use, or "rpc" for rpc style, whose wrapper is named after the operation. Empty
+    /// for an operation without an input element.
+    pub input: String,
 }
 
 impl OperationNode {
@@ -350,7 +354,7 @@ fn digits(chars: &mut Peekable<Chars<'_>>) -> String {
 }
 
 /// The operations section from the WSDL's services, in document order.
-pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
+pub(crate) fn operation_tree(wsdl: &Wsdl, model: &SchemaModel) -> Vec<ServiceNode> {
     wsdl.definitions
         .services
         .iter()
@@ -371,6 +375,7 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                                     .map(|op| OperationNode {
                                         operation: b.operation_ref(op),
                                         unsupported: op.support.reason().map(ToString::to_string),
+                                        input: input_label(op, model),
                                     })
                                     .collect()
                             })
@@ -380,4 +385,21 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                 .collect(),
         })
         .collect()
+}
+
+fn input_label(op: &wsdl::Operation, model: &SchemaModel) -> String {
+    if op.style == Style::Rpc {
+        return "rpc".into();
+    }
+    let Some(element) = op.body_elements(Direction::Input).into_iter().next() else {
+        return String::new();
+    };
+    match model
+        .prefix_hints()
+        .iter()
+        .find(|(ns, _)| *ns == element.ns)
+    {
+        Some((_, prefix)) => format!("{prefix}:{}", element.local),
+        None => element.local,
+    }
 }

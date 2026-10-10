@@ -403,22 +403,6 @@ fn new_request_creates_selects_and_starts_rename() {
 }
 
 #[test]
-fn the_default_operation_is_the_first_supported_one() {
-    let setup = Setup::new();
-    let folder = make_project(&setup.tmp, "Legacy");
-    let (fake, mut app) = setup.launch();
-    app.open_project(&folder).expect("open");
-    let key = app.projects().next().expect("open").0;
-    assert!(matches!(
-        app.default_operation(key),
-        Err(ModelError::SchemaNotReady)
-    ));
-    fake.pump_after_wakes(&mut app, 1);
-    let op = app.default_operation(key).expect("an operation");
-    assert_eq!(op, lookup(&app, key, "LegacyPort").operation);
-}
-
-#[test]
 fn unsupported_operations_get_no_request() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");

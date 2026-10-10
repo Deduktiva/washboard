@@ -34,9 +34,6 @@ pub enum ModelError {
     SchemaNotReady,
     #[error("the WSDL could not be loaded: {0}")]
     SchemaFailed(String),
-    /// Every operation in the WSDL is unsupported (SOAP 1.2, rpc/encoded, …).
-    #[error("the WSDL has no operation Washboard can call")]
-    NoSupportedOperation,
     #[error(transparent)]
     Envelope(#[from] EnvelopeError),
     /// Send needs a server; the project has none.
@@ -386,7 +383,7 @@ impl App {
         };
         match loaded {
             Ok(schema) => {
-                window.sidebar.services = operation_tree(&schema.wsdl);
+                window.sidebar.services = operation_tree(&schema.wsdl, &schema.model);
                 window.schema = SchemaState::Ready(std::sync::Arc::new(schema));
             }
             Err(message) => window.schema = SchemaState::Failed(message),
