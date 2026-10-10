@@ -460,8 +460,14 @@ define_class!(
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(sidebarNewRequest:))]
         fn context_new_request(&self, sender: Option<&AnyObject>) {
-            let operation = menu_node(sender).and_then(|n| n.operation().cloned());
-            self.new_request(operation);
+            match menu_node(sender).and_then(|n| n.operation().cloned()) {
+                Some(operation) => self.new_request(operation),
+                // The REQUESTS header's New Request…
+                None => {
+                    let key = self.ivars().key;
+                    with_delegate(self.mtm(), |d| d.project(key)?.show_operation_picker());
+                }
+            }
         }
 
         #[unsafe(method(sidebarRenameRequest:))]
@@ -505,7 +511,7 @@ define_class!(
                 return;
             };
             if let Some(operation) = node(&item).operation() {
-                self.new_request(Some(operation.clone()));
+                self.new_request(operation.clone());
             }
         }
     }
@@ -592,7 +598,7 @@ impl SidebarController {
             ],
             NodeKind::Operation => &[("New Request", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)],
             NodeKind::Group if node.ivars().path == "group:requests" => {
-                &[("New Request", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)]
+                &[("New Request…", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)]
             }
             _ => &[],
         };
@@ -607,8 +613,12 @@ impl SidebarController {
                 item.setKeyEquivalentModifierMask(modifiers);
                 item.setRepresentedObject(Some(object));
             }
-            // An unsupported operation gets no request, as a double-click shows.
-            item.setEnabled(node.unsupported().is_none());
+            // An unsupported operation gets no request, as a double-click shows; the header's
+            // picker needs the loaded WSDL.
+            item.setEnabled(match node.kind() {
+                NodeKind::Group => self.schema_ready(),
+                _ => node.unsupported().is_none(),
+            });
             menu.addItem(&item);
         }
     }
@@ -751,18 +761,23 @@ impl SidebarController {
         node(&item).operation().cloned()
     }
 
-    /// Project ▸ New Request: for `operation`, else the selected operation, else the model's
-    /// default.
-    pub fn new_request(&self, operation: Option<OperationRef>) {
+    /// A request for `operation`: the operation picker's Create, an operation's New Request
+    /// and a double-click on it.
+    pub fn new_request(&self, operation: OperationRef) {
         let key = self.ivars().key;
-        let operation = operation.or_else(|| self.selected_operation());
         self.command("Could not create a request", |app| {
-            let operation = match operation {
-                Some(operation) => operation,
-                None => app.default_operation(key)?,
-            };
             app.new_request(key, &operation)
         });
+    }
+
+    /// Whether the WSDL has loaded, so New Request… has operations to pick from.
+    pub fn schema_ready(&self) -> bool {
+        let key = self.ivars().key;
+        self.read(|app| {
+            app.project(key)
+                .is_some_and(|w| matches!(w.schema(), SchemaState::Ready(_)))
+        })
+        .unwrap_or(false)
     }
 
     /// Project ▸ Duplicate, and Duplicate in a request's context menu.

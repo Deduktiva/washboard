@@ -65,7 +65,7 @@ mod checks {
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::{AnyObject, Sel};
-    use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
+    use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send, sel};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
@@ -94,6 +94,7 @@ mod checks {
     use washboard_core::secrets::MemorySecretStore;
     use washboard_ui_model::{
         Alert, Confirm, DialogAnswer, DialogId, Dialogs, FormatSettings, ImportTarget, ProjectKey,
+        SchemaState,
     };
 
     const DEFAULTS_SUITE: &str = "at.deduktiva.washboard.appkit-checks";
@@ -162,6 +163,18 @@ mod checks {
                 .children()
                 .first()
                 .is_some_and(|n| n.kind() == NodeKind::Service)
+        });
+    }
+
+    /// New Request… and Create on the operation the picker starts on.
+    fn new_request(project: &ProjectWindowController) {
+        let picker = project.show_operation_picker().expect("the picker opens");
+        wait_until("the picker to attach", || {
+            picker.window().sheetParent().is_some()
+        });
+        picker.create();
+        wait_until("the picker to end", || {
+            project.project_window().attachedSheet().is_none()
         });
     }
 
@@ -597,6 +610,41 @@ mod checks {
         );
         assert_eq!(window.title().to_string(), "Customer API");
 
+        // While the WSDL loads, New Request… is disabled and opens nothing.
+        let key = project.key();
+        let loading = ctx.delegate.read(|app| {
+            app.project(key)
+                .is_some_and(|w| matches!(w.schema(), SchemaState::Loading))
+        });
+        if loading == Some(true) {
+            let item = ["File", "New"]
+                .iter()
+                .try_fold(ctx.app.mainMenu().expect("a main menu"), |menu, title| {
+                    menu.itemWithTitle(&NSString::from_str(title))?.submenu()
+                })
+                .and_then(|m| m.itemWithTitle(ns_string!("New Request…")))
+                .expect("File ▸ New ▸ New Request…");
+            // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+            let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*item] };
+            assert!(!enabled, "New Request… waits for the WSDL");
+            assert!(project.show_operation_picker().is_none());
+            let outline = project.sidebar().outline().expect("outline built");
+            let header = (0..outline.numberOfRows())
+                .find(|&row| {
+                    outline.itemAtRow(row).is_some_and(|i| {
+                        i.downcast_ref::<SidebarNode>()
+                            .is_some_and(|n| n.title() == "REQUESTS")
+                    })
+                })
+                .expect("the REQUESTS header");
+            assert_eq!(
+                context_menu(&project, header),
+                [("New Request…".to_string(), false)]
+            );
+        } else {
+            print!("(the WSDL had loaded, loading checks skipped) ");
+        }
+
         let toolbar = window.toolbar().expect("a toolbar");
         let ids: Vec<String> = toolbar
             .items()
@@ -727,7 +775,7 @@ mod checks {
         let requests_header = row_of(&|n| n.title() == "REQUESTS");
         assert_eq!(
             context_menu(&project, requests_header),
-            [("New Request".to_string(), true)]
+            [("New Request…".to_string(), true)]
         );
         let ops_header = row_of(&|n| n.title() == "OPERATIONS");
         assert!(context_menu(&project, ops_header).is_empty());
@@ -921,7 +969,51 @@ mod checks {
             "reload restores the list"
         );
 
+        // New Request… starts on the operation selected in the sidebar: here the unsupported
+        // one, which cannot be created.
+        let encoded_row = (0..outline.numberOfRows())
+            .find(|&row| {
+                outline.itemAtRow(row).is_some_and(|i| {
+                    i.downcast_ref::<SidebarNode>()
+                        .is_some_and(|n| n.unsupported().is_some())
+                })
+            })
+            .expect("the unsupported operation");
+        outline.selectRowIndexes_byExtendingSelection(
+            &NSIndexSet::indexSetWithIndex(encoded_row as usize),
+            false,
+        );
+        let encoded = project.sidebar().selected_operation();
+        assert!(encoded.is_some());
         send("newRequest:");
+        let picker = project
+            .operation_picker()
+            .expect("New Request… opens the picker");
+        wait_until("the picker to attach", || {
+            picker.window().sheetParent().is_some()
+        });
+        assert_eq!(picker.shown(), ["Lookup", "Unsupported", "Lookup"]);
+        assert_eq!(picker.highlighted(), encoded);
+        assert!(!picker.create_button().isEnabled());
+        assert!(picker.key_command(sel!(insertNewline:)));
+        assert!(request_names(&project).is_empty(), "Return creates nothing");
+        // Typing filters; an empty search highlights the first operation that can be created.
+        picker.search("ENCODED look");
+        assert_eq!(picker.shown(), ["Unsupported", "Lookup"]);
+        picker.search("nothing");
+        assert!(picker.shown().is_empty());
+        assert!(!picker.create_button().isEnabled());
+        picker.search("");
+        let lookup = picker.highlighted();
+        assert!(lookup.is_some() && lookup != encoded);
+        // ↓ skips the header to the unsupported row, ↑ comes back; Return creates.
+        assert!(picker.key_command(sel!(moveDown:)));
+        assert_eq!(picker.highlighted(), encoded);
+        assert!(picker.key_command(sel!(moveUp:)));
+        assert_eq!(picker.highlighted(), lookup);
+        assert!(picker.create_button().isEnabled());
+        assert!(picker.key_command(sel!(insertNewline:)));
+        wait_until("the picker to end", || window.attachedSheet().is_none());
         assert_eq!(request_names(&project), ["Lookup 1"]);
         assert_eq!(request_files(&ctx.project), ["Lookup 1"]);
         assert!(
@@ -931,6 +1023,15 @@ mod checks {
         assert_eq!(selected_row(), Some(outline.selectedRow()), "and its row");
         // End the inline rename that New Request starts, without renaming.
         window.makeFirstResponder(Some(&outline));
+        assert_eq!(request_names(&project), ["Lookup 1"]);
+        // Esc closes the picker and creates nothing.
+        send("newRequest:");
+        let picker = project.operation_picker().expect("the picker");
+        wait_until("the picker to attach", || {
+            picker.window().sheetParent().is_some()
+        });
+        assert!(picker.key_command(sel!(cancelOperation:)));
+        wait_until("the picker to end", || window.attachedSheet().is_none());
         assert_eq!(request_names(&project), ["Lookup 1"]);
 
         // Inline rename: what the field holds when editing ends.
@@ -1218,8 +1319,7 @@ mod checks {
         // The editor shows the selected request as saved.
         wait_loaded(&project);
         if project.selected_request().is_none() {
-            // SAFETY: `newRequest:` takes the sender.
-            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+            new_request(&project);
         }
         let window = project.project_window();
         window.makeFirstResponder(Some(text_view));
@@ -1303,8 +1403,7 @@ mod checks {
         let project = ctx.open();
         wait_loaded(&project);
         if project.selected_request().is_none() {
-            // SAFETY: `newRequest:` takes the sender.
-            let _: () = unsafe { msg_send![&*project, newRequest: None::<&AnyObject>] };
+            new_request(&project);
         }
         let editor = project.editor();
         let text_view = editor.text_view();
@@ -2164,12 +2263,7 @@ mod checks {
         let project = ctx.open();
         wait_loaded(&project);
         let key = project.key();
-        ctx.delegate
-            .command("new request", |app| {
-                let op = app.default_operation(key)?;
-                app.new_request(key, &op)
-            })
-            .expect("a Lookup request");
+        new_request(&project);
         let editor = project.editor();
         let text_view = editor.text_view();
         project

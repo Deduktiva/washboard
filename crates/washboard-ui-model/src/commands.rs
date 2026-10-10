@@ -62,22 +62,6 @@ impl App {
         Ok(meta.id)
     }
 
-    /// What Project ▸ New Request creates a request for when no operation is selected in the
-    /// sidebar: the first supported operation, in the sidebar's order.
-    pub fn default_operation(&self, key: ProjectKey) -> Result<OperationRef, ModelError> {
-        let window = self.project(key).ok_or(ModelError::UnknownProject)?;
-        window.schema.ready()?;
-        window
-            .sidebar
-            .services
-            .iter()
-            .flat_map(|s| &s.ports)
-            .flat_map(|p| &p.operations)
-            .find(|o| o.unsupported.is_none())
-            .map(|o| o.operation.clone())
-            .ok_or(ModelError::NoSupportedOperation)
-    }
-
     /// Inline rename. Name errors (empty, taken, `/` …) come back for the front end to show
     /// next to the field; the old name stays.
     pub fn rename_request(
