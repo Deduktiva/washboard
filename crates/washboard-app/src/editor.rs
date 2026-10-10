@@ -146,8 +146,9 @@ impl LineNumberRuler {
         this
     }
 
-    /// Marks the lines of `issues`, errors in the error colour and lines with only warnings
-    /// in the warning colour; hovering a marker lists its line's messages.
+    /// Marks the lines of `issues`: a red `!` for errors, an orange `⚠` for lines with only
+    /// warnings, so the two differ in more than colour. Hovering a marker lists its line's
+    /// messages.
     pub fn set_issues(&self, issues: &[Issue]) {
         *self.ivars().markers.borrow_mut() = line_markers(issues);
         self.setNeedsDisplay(true);
@@ -283,10 +284,10 @@ impl LineNumberRuler {
                     ),
                 ));
             }
-            let label = NSString::from_str(&if marker.is_some() {
-                format!("⚠{line}")
-            } else {
-                line.to_string()
+            let label = NSString::from_str(&match marker {
+                Some(m) if m.error => format!("!{line}"),
+                Some(_) => format!("⚠{line}"),
+                None => line.to_string(),
             });
             let font_obj: &AnyObject = &font;
             let color_obj: &AnyObject = &color;
