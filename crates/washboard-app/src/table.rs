@@ -165,7 +165,8 @@ define_class!(
 );
 
 impl TextTable {
-    /// A table with one column per title. `titles` empty hides the header (one column).
+    /// A table with one column per title. With no titles, or only empty ones, the header is
+    /// hidden; no titles at all gives one column.
     pub fn new(titles: &[&str], mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(TableIvars {
             columns: titles.len().max(1),
@@ -189,7 +190,7 @@ impl TextTable {
             }
             table.addTableColumn(&column);
         }
-        if titles.is_empty() {
+        if titles.iter().all(|t| t.is_empty()) {
             table.setHeaderView(None);
         }
         // SAFETY: whoever owns this object owns the table's view hierarchy too, so it outlives

@@ -1743,6 +1743,19 @@ mod checks {
             !issues.rows().is_empty()
         });
         assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
+        // The list shows the message beside the line, not only the line.
+        let cell = issues
+            .table()
+            .viewAtColumn_row_makeIfNecessary(1, 0, true)
+            .expect("a message cell");
+        let shown = cell
+            .downcast_ref::<NSTableCellView>()
+            // SAFETY: a cell's text field is one of its subviews, so the cell keeps it alive.
+            .and_then(|c| unsafe { c.textField() })
+            .map(|label| label.stringValue().to_string());
+        assert!(!issues.rows()[0][1].is_empty(), "{:?}", issues.rows());
+        assert_eq!(shown.as_deref(), Some(issues.rows()[0][1].as_str()));
+        assert_fits(&cell, "an issue's message");
         let summary = project.issues().summary();
         assert!(summary.starts_with("⚠ "), "{summary}");
         assert!(
