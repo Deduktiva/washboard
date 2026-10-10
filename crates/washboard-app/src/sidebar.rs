@@ -14,10 +14,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute,
-    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder,
-    NSStackView, NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate,
-    NSTextView, NSUserInterfaceLayoutOrientation, NSView,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
+    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView,
+    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
@@ -755,9 +755,8 @@ impl SidebarController {
             (false, false) => None,
         };
         if let Some((text, color)) = marker {
-            let marker = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+            let marker = layout::small_label(text, mtm);
             marker.setTextColor(Some(&color));
-            marker.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             views.push(Retained::into_super(Retained::into_super(marker)));
         }
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);

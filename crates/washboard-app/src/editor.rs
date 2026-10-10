@@ -855,6 +855,36 @@ pub(crate) fn code_text(text_view: &NSTextView) {
     text_view.setWritingToolsBehavior(NSWritingToolsBehavior::None);
 }
 
+/// A scrolling, read-only code text view without highlighting, for messages as they went
+/// over the wire.
+pub(crate) fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
+    let scroll = NSTextView::scrollableTextView(mtm);
+    scroll.setAutohidesScrollers(true);
+    if let Some(text) = scroll_text_view(&scroll) {
+        text.setEditable(false);
+        code_text(&text);
+    }
+    scroll
+}
+
+fn scroll_text_view(scroll: &NSScrollView) -> Option<Retained<NSTextView>> {
+    scroll.documentView()?.downcast::<NSTextView>().ok()
+}
+
+/// Replaces the text of a [`read_only_text`] view.
+pub(crate) fn set_text(scroll: &NSScrollView, text: &str) {
+    if let Some(view) = scroll_text_view(scroll) {
+        view.setString(&NSString::from_str(text));
+    }
+}
+
+/// The text of a [`read_only_text`] view.
+pub(crate) fn text_of(scroll: &NSScrollView) -> String {
+    scroll_text_view(scroll)
+        .map(|v| v.string().to_string())
+        .unwrap_or_default()
+}
+
 /// Context menu actions whose submenus are for prose: Spelling and Grammar, Substitutions,
 /// Transformations, Font and Layout Orientation.
 const PROSE_ACTIONS: &[&str] = &[

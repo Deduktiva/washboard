@@ -133,12 +133,20 @@ pub fn truncating(label: &NSTextField, mode: NSLineBreakMode) {
     );
 }
 
+/// A label in the small (11 pt) system font, for summaries, markers and secondary lines.
+pub fn small_label(text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
+    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+    label.setFont(Some(&NSFont::systemFontOfSize(SMALL_FONT_SIZE)));
+    label
+}
+
+const SMALL_FONT_SIZE: f64 = 11.0;
+
 /// A chip, as `docs/gui-draft.html` draws them: small secondary text in a rounded outline. For
 /// facts beside a name (a port's SOAP version, a request's operation). Returns the chip and
 /// its label, whose text the caller may change; the chip follows the label's size.
 pub fn chip(text: &str, mtm: MainThreadMarker) -> (Retained<NSBox>, Retained<NSTextField>) {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    let label = small_label(text, mtm);
     label.setTextColor(Some(&NSColor::secondaryLabelColor()));
     let chip = NSBox::new(mtm);
     chip.setBoxType(NSBoxType::Custom);

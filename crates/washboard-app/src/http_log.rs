@@ -5,24 +5,25 @@
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt::Write as _;
-use std::time::UNIX_EPOCH;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBackingStoreType, NSButton, NSColor, NSFont, NSPanel, NSScrollView, NSSplitView, NSStackView,
-    NSTextField, NSTextView, NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
+    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindowStyleMask,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, ns_string,
+    NSArray, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint, NSRect,
+    NSSize, NSString, ns_string,
 };
 use washboard_core::xml;
 use washboard_ui_model::LogEntry;
 
 use crate::app::with_delegate;
+use crate::editor::{read_only_text, set_text, text_of};
 use crate::layout;
+use crate::panes::date_text;
 use crate::table::TextTable;
 use crate::text::tls_line;
 
@@ -162,18 +163,13 @@ impl HttpLog {
             .into_iter()
             .map(|entry| {
                 let exchange = &entry.exchange;
-                let since_epoch = exchange
-                    .started_at
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default();
-                let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
                 let status = match (&exchange.response, &exchange.error) {
                     (Some(response), _) => response.status_text().to_owned(),
                     (None, Some(error)) => format!("Failed: {error}"),
                     (None, None) => "—".to_owned(),
                 };
                 Row {
-                    time: formatter.stringFromDate(&date).to_string(),
+                    time: date_text(&formatter, exchange.started_at),
                     request_line: format!("{}: {}", entry.project, exchange.request.start_line),
                     status,
                     entry,
@@ -306,30 +302,4 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     panel.setHidesOnDeactivate(false);
     panel.center();
     panel
-}
-
-fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
-    let scroll = NSTextView::scrollableTextView(mtm);
-    scroll.setAutohidesScrollers(true);
-    if let Some(text) = text_view(&scroll) {
-        text.setEditable(false);
-        crate::editor::code_text(&text);
-    }
-    scroll
-}
-
-fn text_view(scroll: &NSScrollView) -> Option<Retained<NSTextView>> {
-    scroll.documentView()?.downcast::<NSTextView>().ok()
-}
-
-fn set_text(scroll: &NSScrollView, text: &str) {
-    if let Some(view) = text_view(scroll) {
-        view.setString(&NSString::from_str(text));
-    }
-}
-
-fn text_of(scroll: &NSScrollView) -> String {
-    text_view(scroll)
-        .map(|v| v.string().to_string())
-        .unwrap_or_default()
 }

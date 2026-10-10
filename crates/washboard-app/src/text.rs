@@ -120,7 +120,8 @@ pub(crate) fn replace_summary(outcome: &ReplaceOutcome) -> String {
     )
 }
 
-fn count(n: usize, noun: &str) -> String {
+/// `1 error`, `2 errors`.
+pub(crate) fn count(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
     } else {
