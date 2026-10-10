@@ -471,7 +471,7 @@ impl SettingsWindowController {
     /// What the General pane's Show in Finder selects: project `key`'s entry WSDL, in the
     /// project's `wsdl/` folder with the files it imports.
     pub fn wsdl_to_show(&self, key: ProjectKey) -> Option<PathBuf> {
-        self.read(|app| app.project(key)?.project().entry_wsdl().ok())
+        self.read_project(key, |w| w.project().entry_wsdl().ok())
             .flatten()
     }
 
@@ -538,13 +538,12 @@ impl SettingsWindowController {
     fn exists(&self, pane: Pane) -> bool {
         match pane.project() {
             None => true,
-            Some(key) => self.read(|app| app.project(key).is_some()).unwrap_or(false),
+            Some(key) => self.read_project(key, |_| ()).is_some(),
         }
     }
 
     fn project_name(&self, key: ProjectKey) -> String {
-        self.read(|app| app.project(key).map(|w| w.name().to_owned()))
-            .flatten()
+        self.read_project(key, |w| w.name().to_owned())
             .unwrap_or_default()
     }
 
@@ -665,16 +664,14 @@ impl SettingsWindowController {
     fn project_general(&self, key: ProjectKey) -> Retained<NSView> {
         let mtm = self.mtm();
         let (name, folder, wsdl) = self
-            .read(|app| {
-                let window = app.project(key)?;
+            .read_project(key, |window| {
                 let project = window.project();
                 let dir = project.wsdl_dir();
                 let entry = project.entry_wsdl().ok();
                 let entry = entry.as_deref().and_then(|e| e.strip_prefix(&dir).ok());
                 let files = wsdl_files(&dir, entry);
-                Some((window.name().to_owned(), window.path().to_owned(), files))
+                (window.name().to_owned(), window.path().to_owned(), files)
             })
-            .flatten()
             .unwrap_or_default();
         let folder_label = form::value_label(
             &folder.display().to_string(),
@@ -727,10 +724,7 @@ impl SettingsWindowController {
     }
 
     fn remember(&self, pane: Pane) {
-        let folder = |key| {
-            self.read(|app| app.project(key).map(|w| w.path().display().to_string()))
-                .flatten()
-        };
+        let folder = |key| self.read_project(key, |w| w.path().display().to_string());
         let value = match pane {
             Pane::App => Some("app".to_owned()),
             Pane::ProjectGeneral(key) => folder(key).map(|f| format!("general:{f}")),

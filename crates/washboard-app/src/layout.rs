@@ -235,6 +235,15 @@ pub fn button(
     }
 }
 
+/// Ends `window` as a sheet on whatever window it is attached to, or hides it without closing
+/// it when it stands alone.
+pub fn dismiss(window: &NSWindow) {
+    match window.sheetParent() {
+        Some(parent) => parent.endSheet(window),
+        None => window.orderOut(None),
+    }
+}
+
 /// Keeps `window`'s size and position in the user defaults under `name`; the first time, it
 /// starts centred.
 pub fn keep_frame(window: &NSWindow, name: &NSString) {

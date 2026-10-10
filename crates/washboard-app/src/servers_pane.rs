@@ -262,11 +262,7 @@ impl ServersPane {
     pub fn reload(&self) {
         let key = self.ivars().key;
         let (servers, wsdl) = self
-            .read(|app| {
-                app.project(key)
-                    .map(|w| (w.servers().to_vec(), w.wsdl_servers()))
-            })
-            .flatten()
+            .read_project(key, |w| (w.servers().to_vec(), w.wsdl_servers()))
             .unwrap_or_default();
         *self.ivars().wsdl.borrow_mut() = wsdl;
         *self.ivars().servers.borrow_mut() = servers;
@@ -345,10 +341,7 @@ impl ServersPane {
             },
         };
         let current = self
-            .read(|app| {
-                app.project(key)
-                    .and_then(|w| w.servers().iter().find(|s| s.id == id).cloned())
-            })
+            .read_project(key, |w| w.servers().iter().find(|s| s.id == id).cloned())
             .flatten();
         let Some(current) = current else {
             // Deleted elsewhere while the sheet was open.
@@ -459,10 +452,7 @@ impl ServersPane {
         let sheet = self.sheet();
         // Ending the field editor before the sheet goes.
         sheet.makeFirstResponder(None);
-        match sheet.sheetParent() {
-            Some(parent) => parent.endSheet(sheet),
-            None => sheet.orderOut(None),
-        }
+        layout::dismiss(sheet);
     }
 
     /// User and Password only with Basic auth; the sheet follows their height.

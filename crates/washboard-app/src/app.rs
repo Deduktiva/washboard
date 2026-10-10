@@ -25,7 +25,7 @@ use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString, NSU
 use washboard_core::secrets::SecretStore;
 use washboard_ui_model::{
     App, DialogAnswer, DialogId, Dialogs, Event, FormatSettings, FrontEnd, ImportTarget,
-    ModelError, ProjectKey, TimerId,
+    ModelError, ProjectKey, ProjectWindow, TimerId,
 };
 
 use crate::app_settings;
@@ -617,6 +617,11 @@ impl AppDelegate {
 pub(crate) trait ModelAccess: MainThreadOnly {
     fn read<R>(&self, f: impl FnOnce(&App) -> R) -> Option<R> {
         with_delegate(self.mtm(), |d| d.read(f)).flatten()
+    }
+
+    /// [`read`](Self::read) on project `key`'s window; `None` once the project is closed.
+    fn read_project<R>(&self, key: ProjectKey, f: impl FnOnce(&ProjectWindow) -> R) -> Option<R> {
+        self.read(|app| app.project(key).map(f)).flatten()
     }
 
     /// [`AppDelegate::command`]: alerts with `title` if `f` fails.

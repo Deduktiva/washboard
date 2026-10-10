@@ -676,8 +676,7 @@ impl ResponsePane {
 
     fn model_drawer(&self) -> HistoryDrawer {
         let key = self.ivars().key;
-        self.read(|app| app.project(key).map(|w| w.history_drawer()))
-            .flatten()
+        self.read_project(key, |w| w.history_drawer())
             .unwrap_or_default()
     }
 
@@ -731,17 +730,13 @@ impl ResponsePane {
     /// Shows the model's response for the window (`ResponseChanged`, `SendStateChanged`).
     pub fn show_response(&self) {
         let key = self.ivars().key;
-        let Some((response, server, sending)) = self
-            .read(|app| {
-                let window = app.project(key)?;
-                let response = window.response().cloned();
-                let server = response
-                    .as_ref()
-                    .map(|r| window.server_label(r.server, &r.url));
-                Some((response, server, window.sending()))
-            })
-            .flatten()
-        else {
+        let Some((response, server, sending)) = self.read_project(key, |window| {
+            let response = window.response().cloned();
+            let server = response
+                .as_ref()
+                .map(|r| window.server_label(r.server, &r.url));
+            (response, server, window.sending())
+        }) else {
             return;
         };
         let status = match (&response, server, sending) {
@@ -771,16 +766,14 @@ impl ResponsePane {
     pub fn show_history(&self) {
         let key = self.ivars().key;
         let (entries, older) = self
-            .read(|app| {
-                let window = app.project(key)?;
+            .read_project(key, |window| {
                 let entries = window.history().iter().map(|e| {
                     let server = window.server_label(e.server_id, &e.url);
                     (e.clone(), server)
                 });
                 let older = window.older_exchange().map(|o| o.entry);
-                Some((entries.collect::<Vec<_>>(), older))
+                (entries.collect::<Vec<_>>(), older)
             })
-            .flatten()
             .unwrap_or_default();
         let formatter = sent_formatter();
         let rows = entries

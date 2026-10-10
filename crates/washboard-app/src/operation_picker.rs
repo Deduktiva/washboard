@@ -361,9 +361,7 @@ impl OperationPicker {
 
     fn end(&self) {
         self.ivars().done.set(true);
-        if let Some(parent) = self.window().sheetParent() {
-            parent.endSheet(self.window());
-        }
+        layout::dismiss(self.window());
     }
 
     fn views(&self) -> &PickerViews {

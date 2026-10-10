@@ -13,9 +13,9 @@ use objc2_app_kit::{
     NSBorderType, NSButton, NSControlTextEditingDelegate, NSGridCellPlacement, NSGridRowAlignment,
     NSGridView, NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
     NSLayoutPriorityDefaultLow, NSLineBreakMode, NSModalResponse, NSModalResponseOK, NSOpenPanel,
-    NSPathControl, NSPathStyle, NSStackView, NSStackViewDistribution, NSStackViewGravity,
-    NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
-    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
+    NSPathControl, NSPathStyle, NSStackView, NSStackViewDistribution, NSTextField,
+    NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate,
+    NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{
     NSArray, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString, NSURL, ns_string,
@@ -23,6 +23,7 @@ use objc2_foundation::{
 use washboard_ui_model::{App, CheckState, ImportSheet, ImportTarget};
 
 use crate::app::{ModelAccess, with_delegate};
+use crate::form;
 use crate::layout::{self, view};
 use crate::table::TextTable;
 use crate::text::{import_files, import_messages, import_status, reference_row};
@@ -207,7 +208,7 @@ impl ImportSheetController {
             sel!(finish:),
         );
         finish.setKeyEquivalent(ns_string!("\r"));
-        let buttons = trailing_row(vec![view(cancel), view(finish.clone())], mtm);
+        let buttons = form::dialog_buttons(None, vec![view(cancel), view(finish.clone())], mtm);
         references.fix_column_width(0, MARK_WIDTH);
         messages.fix_column_width(0, MARK_WIDTH);
         // The references take the spare height; the findings keep a few rows.
@@ -236,7 +237,12 @@ impl ImportSheetController {
             "Replace WSDL"
         };
         let size = NSSize::new(640.0, 560.0);
-        let window = sheet_window(title, size, mtm);
+        let window = layout::owned_window(
+            &NSString::from_str(title),
+            size,
+            NSWindowStyleMask::Titled,
+            mtm,
+        );
         if new_project {
             // Its own window, so that open projects stay usable meanwhile.
             window.setStyleMask(
@@ -331,7 +337,7 @@ impl ImportSheetController {
             })
             .flatten();
         let Some(shown) = shown else {
-            dismiss(self.window());
+            layout::dismiss(self.window());
             return;
         };
         let views = self.views();
@@ -402,7 +408,7 @@ impl ImportSheetController {
             d.sync();
         });
         // Also when the model had no sheet left to cancel.
-        dismiss(self.window());
+        layout::dismiss(self.window());
     }
 
     /// Create or Replace; also called by tests. Does nothing while disabled. A new project
@@ -552,43 +558,8 @@ impl Shown {
     }
 }
 
-/// Ends `sheet` on whatever window it is attached to.
-fn end_sheet(sheet: &NSWindow) {
-    if let Some(parent) = sheet.sheetParent() {
-        parent.endSheet(sheet);
-    }
-}
-
-/// Ends a sheet, or hides a standalone window without closing it (closing means Cancel).
-fn dismiss(window: &NSWindow) {
-    if window.sheetParent().is_some() {
-        end_sheet(window);
-    } else {
-        window.orderOut(None);
-    }
-}
-
-fn sheet_window(title: &str, size: NSSize, mtm: MainThreadMarker) -> Retained<NSWindow> {
-    layout::owned_window(
-        &NSString::from_str(title),
-        size,
-        NSWindowStyleMask::Titled,
-        mtm,
-    )
-}
-
 fn label(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     view(NSTextField::labelWithString(&NSString::from_str(text), mtm))
-}
-
-/// Dialog buttons, pushed to the trailing edge.
-fn trailing_row(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
-    let stack = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
-    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-    for v in &views {
-        stack.addView_inGravity(v, NSStackViewGravity::Trailing);
-    }
-    view(stack)
 }
 
 /// Lets `v` take a form row's spare width and give it up first, so a long value is shortened
