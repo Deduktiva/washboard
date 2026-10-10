@@ -847,6 +847,8 @@ pub struct ServersIvars {
     table: OnceCell<Retained<TextTable>>,
     /// The suggestions' section and the group its rows go in.
     suggestions: OnceCell<(Retained<NSView>, Retained<NSBox>)>,
+    /// The selected server's section and its header.
+    details: OnceCell<(Retained<NSView>, Retained<NSTextField>)>,
     form: OnceCell<ServerForm>,
 }
 
@@ -914,6 +916,7 @@ impl ServersPane {
             view: OnceCell::new(),
             table: OnceCell::new(),
             suggestions: OnceCell::new(),
+            details: OnceCell::new(),
             form: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -967,8 +970,10 @@ impl ServersPane {
             ],
             mtm,
         );
+        // Titled with the server's name; hidden while no server is selected.
+        let title = form::header("", mtm);
         let details = form::Section::new(mtm)
-            .header(&form::header("Selected server", mtm))
+            .header(&title)
             .group(&fields)
             .text("A password is saved to the Keychain, not in the project folder.")
             .build();
@@ -987,7 +992,7 @@ impl ServersPane {
                     .header(&form::header("Servers", mtm))
                     .group(&list)
                     .build(),
-                details,
+                details.clone(),
                 suggestions.clone(),
             ],
             mtm,
@@ -997,6 +1002,7 @@ impl ServersPane {
         let _ = ivars.view.set(view);
         let _ = ivars.table.set(table);
         let _ = ivars.suggestions.set((suggestions, suggestion_rows));
+        let _ = ivars.details.set((details, title));
         let _ = ivars.form.set(form);
         this.reload();
         this
@@ -1026,6 +1032,17 @@ impl ServersPane {
         !self
             .ivars()
             .suggestions
+            .get()
+            .expect("set in new()")
+            .0
+            .isHidden()
+    }
+
+    /// Whether the selected server's form is shown; it is hidden while none is selected.
+    pub fn shows_details(&self) -> bool {
+        !self
+            .ivars()
+            .details
             .get()
             .expect("set in new()")
             .0
@@ -1088,6 +1105,7 @@ impl ServersPane {
             }
             None => self.select(0),
         }
+        self.show_details();
     }
 
     /// Loads server `row` into the form.
@@ -1114,6 +1132,7 @@ impl ServersPane {
             .setStringValue(&NSString::from_str(&server.timeout.as_secs().to_string()));
         self.enable_form(true);
         self.enable_auth_fields(basic_auth);
+        self.show_details();
     }
 
     /// Saves the form into the selected server through the model; a typed password goes to
@@ -1259,6 +1278,23 @@ impl ServersPane {
             })
             .collect();
         form::set_rows(rows, rows_now, mtm);
+    }
+
+    /// Shows the form for the selected server, titled with its name, or hides it when none is.
+    fn show_details(&self) {
+        let (section, title) = self.ivars().details.get().expect("set in new()");
+        let name = self
+            .selected()
+            .map(|row| self.ivars().servers.borrow()[row].name.clone());
+        if let Some(name) = &name {
+            let name = if name.trim().is_empty() {
+                "Server"
+            } else {
+                name
+            };
+            title.setStringValue(&NSString::from_str(name));
+        }
+        form::set_shown(section, name.is_some());
     }
 
     fn enable_form(&self, enabled: bool) {

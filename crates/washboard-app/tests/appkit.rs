@@ -2353,10 +2353,12 @@ mod checks {
         let suggested = settings.suggestion_rows();
         assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
         assert!(settings.shows_suggestions());
+        assert!(!settings.shows_details(), "no server form without a server");
         assert_form_layout(settings_window, "Servers, suggestions only");
         settings.confirm_suggestion(0);
         assert!(settings.suggestion_rows().is_empty());
         assert!(!settings.shows_suggestions(), "nothing left to suggest");
+        assert!(settings.shows_details(), "the added server's form");
         assert_settings_layout(&settings);
         assert_form_layout(settings_window, "Servers, one server");
         assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
