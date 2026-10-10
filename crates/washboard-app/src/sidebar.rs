@@ -624,9 +624,7 @@ impl SidebarController {
             app.select_request(key, Some(request))
         });
         self.show_selection(None);
-        let selected = self
-            .read(|app| app.project(key).and_then(|w| w.selected_request()))
-            .flatten();
+        let selected = self.read_project(key, |w| w.selected_request()).flatten();
         (selected == Some(request)).then_some(request)
     }
 
@@ -666,14 +664,9 @@ impl SidebarController {
 
     fn reload_now(&self) {
         let key = self.ivars().key;
-        let Some((sidebar, placeholder)) = with_delegate(self.mtm(), |d| {
-            d.read(|app| {
-                let window = app.project(key)?;
-                Some((window.sidebar().clone(), placeholder(window.schema())))
-            })
-        })
-        .flatten()
-        .flatten() else {
+        let Some((sidebar, placeholder)) = self.read_project(key, |window| {
+            (window.sidebar().clone(), placeholder(window.schema()))
+        }) else {
             return;
         };
         let collapsed = self.collapsed_paths();
@@ -705,11 +698,7 @@ impl SidebarController {
     /// an operation the user selected stays selected.
     pub fn show_selection(&self, operation: Option<&OperationRef>) {
         let key = self.ivars().key;
-        let request = with_delegate(self.mtm(), |d| {
-            d.read(|app| app.project(key).and_then(|w| w.selected_request()))
-        })
-        .flatten()
-        .flatten();
+        let request = self.read_project(key, |w| w.selected_request()).flatten();
         let Some(outline) = self.outline() else {
             return;
         };
@@ -764,11 +753,8 @@ impl SidebarController {
     /// Whether the WSDL has loaded, so New Request… has operations to pick from.
     pub fn schema_ready(&self) -> bool {
         let key = self.ivars().key;
-        self.read(|app| {
-            app.project(key)
-                .is_some_and(|w| matches!(w.schema(), SchemaState::Ready(_)))
-        })
-        .unwrap_or(false)
+        self.read_project(key, |w| matches!(w.schema(), SchemaState::Ready(_)))
+            .unwrap_or(false)
     }
 
     /// Project ▸ Duplicate, and Duplicate in a request's context menu.

@@ -399,15 +399,12 @@ impl ProjectWindowController {
     pub fn reload_servers(&self) {
         let key = self.key();
         let servers = self
-            .read(|app| {
-                app.project(key).map(|w| {
-                    w.servers()
-                        .iter()
-                        .map(|s| (s.id, s.name.clone()))
-                        .collect::<Vec<_>>()
-                })
+            .read_project(key, |w| {
+                w.servers()
+                    .iter()
+                    .map(|s| (s.id, s.name.clone()))
+                    .collect::<Vec<_>>()
             })
-            .flatten()
             .unwrap_or_default();
         let popup = &self.ivars().servers;
         popup.removeAllItems();
@@ -429,9 +426,7 @@ impl ProjectWindowController {
     /// Selects the model's server in the popup (`ServerSelectionChanged`).
     pub fn show_server_selection(&self) {
         let key = self.key();
-        let selected = self
-            .read(|app| app.project(key).and_then(|w| w.selected_server()))
-            .flatten();
+        let selected = self.read_project(key, |w| w.selected_server()).flatten();
         let index = selected.and_then(|id| {
             self.ivars()
                 .server_ids
@@ -458,9 +453,7 @@ impl ProjectWindowController {
     /// The window's edited dot follows the model (`EditedChanged`).
     pub fn show_edited(&self) {
         let key = self.key();
-        let edited = self
-            .read(|app| app.project(key).is_some_and(|w| w.edited()))
-            .unwrap_or(false);
+        let edited = self.read_project(key, |w| w.edited()).unwrap_or(false);
         self.project_window().setDocumentEdited(edited);
     }
 
@@ -469,8 +462,8 @@ impl ProjectWindowController {
     pub fn show_issues(&self) {
         let key = self.key();
         let (issues, basis, state) = self
-            .read(|app| {
-                app.project(key).and_then(|w| w.editor()).map(|e| {
+            .read_project(key, |w| {
+                w.editor().map(|e| {
                     (
                         e.issues().to_vec(),
                         Some(e.issues_basis()),
@@ -488,9 +481,7 @@ impl ProjectWindowController {
     /// (`EditorReplaced`, and `SidebarChanged` for a rename).
     pub fn show_request_bar(&self) {
         let key = self.key();
-        let summary = self
-            .read(|app| app.project(key)?.request_summary())
-            .flatten();
+        let summary = self.read_project(key, |w| w.request_summary()).flatten();
         self.ivars().request_bar.show(summary.as_ref());
     }
 
@@ -532,12 +523,8 @@ impl ProjectWindowController {
 
     /// An older exchange is shown in place of the latest.
     fn older_shown(&self) -> bool {
-        let key = self.key();
-        self.read(|app| {
-            app.project(key)
-                .is_some_and(|w| w.older_exchange().is_some())
-        })
-        .unwrap_or(false)
+        self.read_project(self.key(), |w| w.older_exchange().is_some())
+            .unwrap_or(false)
     }
 
     /// Whether the menu item sending `action` is enabled while this window is key.
@@ -584,8 +571,7 @@ impl ProjectWindowController {
     pub fn show_exchange(&self) {
         let key = self.key();
         let older = self
-            .read(|app| {
-                let window = app.project(key)?;
+            .read_project(key, |window| {
                 let older = window.older_exchange()?;
                 let response = window.response()?;
                 let server = window.server_label(response.server, &response.url);
@@ -719,8 +705,7 @@ impl ProjectWindowController {
 
     /// Whether this window's request is being sent.
     pub fn is_sending(&self) -> bool {
-        let key = self.key();
-        self.read(|app| app.project(key).is_some_and(|w| w.sending()))
+        self.read_project(self.key(), |w| w.sending())
             .unwrap_or(false)
     }
 
@@ -733,15 +718,13 @@ impl ProjectWindowController {
     }
 
     fn has_editor(&self) -> bool {
-        let key = self.key();
-        self.read(|app| app.project(key).is_some_and(|w| w.editor().is_some()))
+        self.read_project(self.key(), |w| w.editor().is_some())
             .unwrap_or(false)
     }
 
     /// The model's selected request.
     pub fn selected_request(&self) -> Option<RequestId> {
-        let key = self.key();
-        self.read(|app| app.project(key).and_then(|w| w.selected_request()))
+        self.read_project(self.key(), |w| w.selected_request())
             .flatten()
     }
 
@@ -825,11 +808,10 @@ impl ProjectWindowController {
             return None;
         }
         let key = self.key();
-        let (services, request_operation) = self.read(|app| {
-            let window = app.project(key)?;
+        let (services, request_operation) = self.read_project(key, |window| {
             let operation = window.request_summary().and_then(|r| r.operation);
-            Some((window.sidebar().services.clone(), operation))
-        })??;
+            (window.sidebar().services.clone(), operation)
+        })?;
         let preferred = self.sidebar().selected_operation().or(request_operation);
         let picker = OperationPicker::new(key, services, preferred, self.mtm());
         picker.present(&window);
@@ -852,7 +834,7 @@ impl ProjectWindowController {
     pub fn show_replace_outcome(&self) {
         let key = self.key();
         let Some(summary) = self
-            .read(|app| app.project(key)?.replace_outcome().map(replace_summary))
+            .read_project(key, |w| w.replace_outcome().map(replace_summary))
             .flatten()
         else {
             return;

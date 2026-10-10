@@ -625,11 +625,7 @@ impl EditorController {
             return;
         };
         let text = self
-            .read(|app| {
-                app.project(key)
-                    .and_then(|w| w.editor())
-                    .map(|e| e.text().to_owned())
-            })
+            .read_project(key, |w| w.editor().map(|e| e.text().to_owned()))
             .flatten();
         let text_view = self.text_view();
         self.ivars().pending.borrow_mut().clear();
@@ -657,11 +653,7 @@ impl EditorController {
         let end = range.end.clamp(start, len);
         let lines = Range::from(string.lineRangeForRange(NSRange::from(start..end)));
         let tokens = self
-            .read(|app| {
-                app.project(key)
-                    .and_then(|w| w.editor())
-                    .map(|e| e.tokens_utf16(lines.clone()))
-            })
+            .read_project(key, |w| w.editor().map(|e| e.tokens_utf16(lines.clone())))
             .flatten()
             .unwrap_or_default();
         self.paint(lines, tokens);
