@@ -2109,9 +2109,7 @@ mod checks {
         // Restore Request puts the sent request back.
         replace(start, date.len(), "2031-12-31");
         let history_table = response.history();
-        history_table
-            .table()
-            .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        history_table.select(0);
         history_table.click(0);
         // SAFETY: `restoreRequest:` takes the sender.
         let _: () = unsafe { msg_send![response, restoreRequest: None::<&AnyObject>] };
@@ -2196,7 +2194,7 @@ mod checks {
         table.on_click(move |row| log.borrow_mut().push(row));
         table.set_rows(vec![vec!["a".into()], vec!["b".into()], vec!["c".into()]]);
         let view = table.table();
-        view.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        table.select(0);
         assert!(
             picked.borrow().is_empty(),
             "selection by code is not reported"
