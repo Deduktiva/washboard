@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::diag::{DiagSource, Diagnostic, TextPos};
-use crate::model::QName;
+use crate::model::{OperationRef, QName};
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, WSDL_SOAP12_NS};
 
 use crate::diag::LineIndex;
@@ -68,6 +68,16 @@ pub struct Binding {
     pub style: Style,
     pub transport: Option<String>,
     pub operations: Vec<Operation>,
+}
+
+impl Binding {
+    /// How projects and the CLI name `operation` of this binding.
+    pub fn operation_ref(&self, operation: &Operation) -> OperationRef {
+        OperationRef {
+            binding: self.name.clone(),
+            operation: operation.name.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

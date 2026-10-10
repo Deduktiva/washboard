@@ -134,10 +134,7 @@ pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
     let supported: Vec<OperationRef> = matches
         .iter()
         .filter(|(_, o)| o.is_supported())
-        .map(|(b, o)| OperationRef {
-            binding: b.name.clone(),
-            operation: o.name.clone(),
-        })
+        .map(|(b, o)| b.operation_ref(o))
         .collect();
     if let [one] = supported.as_slice() {
         return Ok(one.clone());

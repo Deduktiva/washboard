@@ -368,10 +368,7 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
                                 b.operations
                                     .iter()
                                     .map(|op| OperationNode {
-                                        operation: OperationRef {
-                                            binding: b.name.clone(),
-                                            operation: op.name.clone(),
-                                        },
+                                        operation: b.operation_ref(op),
                                         unsupported: op.support.reason().map(ToString::to_string),
                                     })
                                     .collect()

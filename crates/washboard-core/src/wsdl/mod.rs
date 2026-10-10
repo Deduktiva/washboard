@@ -240,10 +240,7 @@ fn dispatch_index(defs: &Definitions) -> HashMap<QName, Vec<Dispatch>> {
                 })
                 .unwrap_or_default();
             let d = Dispatch {
-                operation: OperationRef {
-                    binding: b.name.clone(),
-                    operation: op.name.clone(),
-                },
+                operation: b.operation_ref(op),
                 style: op.style,
                 soap_action: op.soap_action.clone(),
                 header_elements,
@@ -291,10 +288,7 @@ impl Wsdl {
                 b.operations
                     .iter()
                     .filter(|o| o.is_supported())
-                    .map(|o| OperationRef {
-                        binding: b.name.clone(),
-                        operation: o.name.clone(),
-                    })
+                    .map(|o| b.operation_ref(o))
             })
             .collect()
     }
