@@ -617,9 +617,11 @@ mod checks {
     pub fn window_frames(ctx: &Ctx) {
         let project = ctx.open();
         let window = project.project_window();
+        // Smaller and moved, but still on the screen: AppKit constrains a restored frame to
+        // the screen, and the CI runner's screen is only as wide as the default window.
         let mut frame = window.frame();
         frame.origin.x += 37.0;
-        frame.size.width += 61.0;
+        frame.size.width -= 61.0;
         window.setFrame_display(frame, false);
         let split = project.split_view().splitView();
         split.setPosition_ofDividerAtIndex(233.0, 0);
