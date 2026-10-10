@@ -13,10 +13,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSBeep, NSButton, NSImage, NSMenu, NSMenuItem,
-    NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView, NSSplitView,
-    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView, NSToolbar,
-    NSToolbarDelegate, NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSAlert, NSBackingStoreType, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton,
+    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
+    NSSplitViewItem, NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
     NSWindowToolbarStyle,
@@ -262,20 +262,6 @@ define_class!(
         #[unsafe(method(projectSettings:))]
         fn project_settings(&self, _sender: Option<&AnyObject>) {
             self.show_settings();
-        }
-
-        #[unsafe(method(moreSidebarActions:))]
-        fn more_sidebar_actions(&self, sender: Option<&AnyObject>) {
-            let Some(button) = sender.and_then(|s| s.downcast_ref::<NSView>()) else {
-                return;
-            };
-            // Just below the button, like a pull-down.
-            let at = NSPoint::new(0.0, button.bounds().size.height + 4.0);
-            sidebar_actions_menu(self.mtm()).popUpMenuPositioningItem_atLocation_inView(
-                None,
-                at,
-                Some(button),
-            );
         }
     }
 );
@@ -665,26 +651,9 @@ impl ProjectWindowController {
         // Shown only when the content does not fit, also with legacy (always-on) scrollers.
         scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
-
-        let footer: Vec<Retained<NSView>> = [
-            ("+", sel!(newRequest:)),
-            ("−", sel!(deleteRequest:)),
-            ("⋯", sel!(moreSidebarActions:)),
-        ]
-        .into_iter()
-        .map(|(title, action)| {
-            Retained::into_super(Retained::into_super(footer_button(title, action, mtm)))
-        })
-        .collect();
-        let footer = layout::row(&footer, mtm);
-        footer.setSpacing(2.0);
-        footer.setEdgeInsets(layout::insets(4.0, 10.0, 8.0, 10.0));
-
-        let pane = layout::fill_column(
-            &[Retained::into_super(scroll), Retained::into_super(footer)],
-            mtm,
-        );
-        Retained::into_super(pane)
+        // No buttons under the list: each row has a context menu, and the Project menu has
+        // the same commands with shortcuts.
+        Retained::into_super(scroll)
     }
 }
 
@@ -763,40 +732,6 @@ fn server_popup(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
 
 const SERVER_POPUP_MIN_WIDTH: f64 = 120.0;
 const SERVER_POPUP_MAX_WIDTH: f64 = 220.0;
-
-fn footer_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NSButton> {
-    // SAFETY: no target: the action goes up the responder chain to the window controller,
-    // whose handlers take the sender as their only argument.
-    let button = unsafe {
-        NSButton::buttonWithTitle_target_action(&NSString::from_str(title), None, Some(action), mtm)
-    };
-    button.setBordered(false);
-    button
-}
-
-/// The sidebar's ⋯ menu: the request commands without a footer button of their own. The
-/// items go up the responder chain like the Project menu's, so they validate the same way.
-pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
-    let menu = NSMenu::new(mtm);
-    for (title, action) in [
-        ("Rename", sel!(renameRequest:)),
-        ("Duplicate", sel!(duplicateRequest:)),
-        ("Validate", sel!(validateRequest:)),
-    ] {
-        // SAFETY: no target: the action goes up the responder chain to this window's
-        // controller, whose handlers take the sender as their only argument.
-        let item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(title),
-                Some(action),
-                ns_string!(""),
-            )
-        };
-        menu.addItem(&item);
-    }
-    menu
-}
 
 /// The editor (with its issues bar) and the response pane each keep at least this much of the
 /// content split; the window's minimum size leaves room for both.
