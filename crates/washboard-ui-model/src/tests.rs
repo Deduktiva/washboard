@@ -629,6 +629,21 @@ fn server_passwords_go_to_the_secret_store() {
 }
 
 #[test]
+fn a_server_is_deleted_after_confirmation() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let id = app.add_server(key).expect("add");
+
+    app.ask_delete_server(key, id).expect("ask");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(confirm.title, "Delete “New Server”?");
+    assert_eq!(app.project(key).expect("open").servers().len(), 1);
+    app.ask_delete_server(key, id).expect("ask");
+    fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert!(app.project(key).expect("open").servers().is_empty());
+}
+
+#[test]
 fn commands_on_a_closed_project_fail_softly() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");

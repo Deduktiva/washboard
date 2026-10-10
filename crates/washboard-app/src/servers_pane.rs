@@ -15,7 +15,9 @@ use objc2_app_kit::{
     NSBox, NSButton, NSControlStateValueOn, NSLayoutPriorityRequired, NSSecureTextField, NSSwitch,
     NSTextField, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSInteger, NSObject, NSObjectProtocol, NSSize, NSString, ns_string};
+use objc2_foundation::{
+    NSInteger, NSNumber, NSNumberFormatter, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
+};
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{ProjectKey, SuggestedServer};
 
@@ -62,6 +64,8 @@ pub struct ServersIvars {
     form: OnceCell<ServerForm>,
     /// What the sheet edits while it is open: `Some(None)` for a server not added yet.
     editing: Cell<Option<Option<ServerId>>>,
+    /// Whether the edited server has a password in the secret store, for the placeholder.
+    stored_password: Cell<bool>,
 }
 
 define_class!(
@@ -129,6 +133,7 @@ impl ServersPane {
             body: OnceCell::new(),
             form: OnceCell::new(),
             editing: Cell::new(None),
+            stored_password: Cell::new(false),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -247,6 +252,10 @@ impl ServersPane {
         &self.form().password
     }
 
+    pub fn no_auth_button(&self) -> &NSButton {
+        &self.form().auth_none
+    }
+
     pub fn basic_auth_button(&self) -> &NSButton {
         &self.form().auth_basic
     }
@@ -269,6 +278,12 @@ impl ServersPane {
         *self.ivars().suggested.borrow_mut() = suggested;
         *self.ivars().servers.borrow_mut() = servers;
         self.show_list();
+        // Deleted, from the sheet's Delete Server or elsewhere.
+        if let Some(Some(id)) = self.ivars().editing.get()
+            && self.row_of(id).is_none()
+        {
+            self.close_sheet();
+        }
     }
 
     /// Opens the sheet on server `row`.
@@ -277,6 +292,11 @@ impl ServersPane {
             return;
         };
         self.ivars().editing.set(Some(Some(server.id)));
+        let key = self.ivars().key;
+        let stored = self
+            .read(|app| app.server_password(key, server.id).ok().flatten().is_some())
+            .unwrap_or(false);
+        self.ivars().stored_password.set(stored);
         self.load(&server, &server.name);
         self.form().delete.setHidden(false);
         self.present();
@@ -293,6 +313,7 @@ impl ServersPane {
             timeout: DEFAULT_TIMEOUT,
         };
         self.ivars().editing.set(Some(None));
+        self.ivars().stored_password.set(false);
         self.load(&server, "New Server");
         self.form().delete.setHidden(true);
         self.present();
@@ -345,16 +366,27 @@ impl ServersPane {
         self.close_sheet();
     }
 
-    /// Deletes the server the sheet edits and closes the sheet.
+    /// Asks to delete the server the sheet edits; the sheet closes once it is deleted.
     pub fn delete(&self) {
         let Some(Some(id)) = self.ivars().editing.get() else {
             return;
         };
         let key = self.ivars().key;
         self.command("Could not delete the server", |app| {
-            app.delete_server(key, id)
+            app.ask_delete_server(key, id)
         });
-        self.close_sheet();
+    }
+
+    pub fn password_placeholder(&self) -> String {
+        self.form()
+            .password
+            .placeholderString()
+            .map(|p| p.to_string())
+            .unwrap_or_default()
+    }
+
+    pub fn timeout_field(&self) -> &NSTextField {
+        &self.form().timeout
     }
 
     /// Adds suggestion `row` as a server with its address as suggested.
@@ -448,6 +480,13 @@ impl ServersPane {
     fn show_auth_rows(&self) {
         let form = self.form();
         let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
+        let stored = self.ivars().stored_password.get();
+        form.password
+            .setPlaceholderString(Some(&NSString::from_str(if stored {
+                "Stored in the Keychain"
+            } else {
+                "Not set"
+            })));
         form::set_row_shown(&form.user_row, basic_auth);
         form::set_row_shown(&form.password_row, basic_auth);
         form::fit_window(self.sheet(), self.sheet_body());
@@ -520,7 +559,11 @@ impl ServersPane {
         let user = text("User");
         let timeout = text("60");
         let password = NSSecureTextField::new(mtm);
-        password.setPlaceholderString(Some(ns_string!("Saved to the Keychain")));
+        // Whole seconds, at least one; the field refuses anything else.
+        let seconds = NSNumberFormatter::new();
+        seconds.setAllowsFloats(false);
+        seconds.setMinimum(Some(&NSNumber::new_u64(1)));
+        timeout.setFormatter(Some(&seconds));
         let ignore_tls = NSSwitch::new(mtm);
         let target: &AnyObject = self;
         // SAFETY: the pane owns the sheet and its controls, so it outlives their weak target

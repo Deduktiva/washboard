@@ -400,8 +400,9 @@ Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped form
 "Washboard" section holds the app settings (General: indent width, format on save); below it,
 one section per open project with General (name, folder, WSDL files with Show in Finder and
 Replace WSDL…) and Servers (server list, the WSDL's suggested servers). A server is edited
-in a sheet (Edit… on its row, Add Server… under the list) with Save, Cancel and Delete Server;
-User and Password show only with Basic auth. Project panes say that their settings belong to the project and are saved in its
+in a sheet (Edit… on its row, Add Server… under the list) with Save, Cancel and Delete Server,
+which asks first; User and Password show only with Basic auth, the password field says whether
+one is stored, and switching auth off removes it. Project panes say that their settings belong to the project and are saved in its
 folder. Layout follows System Settings, decided once in `crates/washboard-app/src/form.rs`:
 groups 20 pt from the content edges and at most 640 pt wide, every header, footnote and row
 label on one leading line inside the group, controls on the trailing edge, text fields one width.

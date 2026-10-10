@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use thiserror::Error;
-use washboard_core::model::RequestId;
+use washboard_core::model::{RequestId, ServerId};
 use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
 use washboard_core::soap::EnvelopeError;
 
@@ -70,6 +70,10 @@ pub(crate) enum PendingDialog {
     DeleteRequest {
         project: ProjectKey,
         request: RequestId,
+    },
+    DeleteServer {
+        project: ProjectKey,
+        server: ServerId,
     },
 }
 
@@ -308,6 +312,12 @@ impl App {
                     // The window was closed while the sheet was up.
                     Ok(()) | Err(ModelError::UnknownProject) => {}
                     Err(e) => self.alert_error("Could not delete the request", &e),
+                }
+            }
+            (PendingDialog::DeleteServer { project, server }, DialogAnswer::Confirmed) => {
+                match self.delete_server(project, server) {
+                    Ok(()) | Err(ModelError::UnknownProject) => {}
+                    Err(e) => self.alert_error("Could not delete the server", &e),
                 }
             }
             (_, DialogAnswer::Cancelled) => {}

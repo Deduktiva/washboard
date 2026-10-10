@@ -2702,6 +2702,12 @@ mod checks {
             "",
             "a stored password is not shown"
         );
+        assert_eq!(servers.password_placeholder(), "Stored in the Keychain");
+        assert!(
+            servers.timeout_field().formatter().is_some(),
+            "the timeout takes whole seconds only"
+        );
+        assert_server_sheet_layout(&servers, "server sheet, password stored");
         servers
             .name_field()
             .setStringValue(&NSString::from_str("Discarded"));
@@ -2710,6 +2716,7 @@ mod checks {
             settings_window.attachedSheet().is_none()
         });
         assert_eq!(server_names(ctx, key)[1], "Production EU");
+        assert_eq!(password(ctx, key).as_deref(), Some("hunter2"));
 
         // Add Server… adds nothing until Save; Delete Server removes it again.
         servers.add_server();
@@ -2732,9 +2739,19 @@ mod checks {
         servers.edit(names.len());
         assert!(!servers.delete_button().isHidden());
         servers.delete();
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("Delete Server asks first");
+        assert_eq!(confirm.title, "Delete “Local”?");
+        assert_eq!(server_names(ctx, key).len(), names.len() + 1, "not yet");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
         wait_until("the sheet to close", || {
             settings_window.attachedSheet().is_none()
         });
+        assert!(!servers.is_editing());
         assert_eq!(server_names(ctx, key).len(), names.len());
         assert_eq!(servers.server_rows().len(), names.len());
 
@@ -2770,6 +2787,16 @@ mod checks {
             settings_window.attachedSheet().is_none()
         });
         assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
+        // Turning auth off is how a stored password goes: Save removes it.
+        servers.edit(1);
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { servers.no_auth_button().performClick(None) };
+        servers.save();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(password(ctx, project.key()), None);
+        assert_eq!(servers.servers()[1].auth, Auth::None);
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
