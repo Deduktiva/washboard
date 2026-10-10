@@ -22,6 +22,7 @@ use washboard_ui_model::{
 };
 
 use crate::app::ModelAccess;
+use crate::colors;
 use crate::editor::{EditorController, read_only_text, set_text, text_of};
 use crate::layout;
 use crate::table::TextTable;
@@ -88,8 +89,8 @@ impl RequestBar {
             .setStringValue(&NSString::from_str(&well_formedness_text(state)));
         let colour = match state {
             WellFormedness::Pending => NSColor::secondaryLabelColor(),
-            WellFormedness::WellFormed => NSColor::systemGreenColor(),
-            WellFormedness::Error { .. } => NSColor::systemRedColor(),
+            WellFormedness::WellFormed => colors::success(),
+            WellFormedness::Error { .. } => colors::error(),
         };
         self.state.setTextColor(Some(&colour));
     }
@@ -592,19 +593,15 @@ fn summary(
     match (errors, warnings, basis) {
         (_, _, None) => (String::new(), NSColor::secondaryLabelColor()),
         (0, _, Some(IssuesBasis::Pending)) => ("Checking…".into(), NSColor::secondaryLabelColor()),
-        (0, _, Some(IssuesBasis::WellFormedOnly)) => (
-            "Well-formed · schema not checked".into(),
-            NSColor::systemOrangeColor(),
-        ),
-        (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), NSColor::systemGreenColor()),
-        (0, w, Some(IssuesBasis::Validated)) => (count(w, "warning"), NSColor::systemOrangeColor()),
-        (e, 0, _) => (
-            format!("⚠ {}", count(e, "error")),
-            NSColor::systemRedColor(),
-        ),
+        (0, _, Some(IssuesBasis::WellFormedOnly)) => {
+            ("Well-formed · schema not checked".into(), colors::warning())
+        }
+        (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), colors::success()),
+        (0, w, Some(IssuesBasis::Validated)) => (count(w, "warning"), colors::warning()),
+        (e, 0, _) => (format!("⚠ {}", count(e, "error")), colors::error()),
         (e, w, _) => (
             format!("⚠ {}, {}", count(e, "error"), count(w, "warning")),
-            NSColor::systemRedColor(),
+            colors::error(),
         ),
     }
 }

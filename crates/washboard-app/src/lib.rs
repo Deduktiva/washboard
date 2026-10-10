@@ -14,6 +14,8 @@ mod app;
 #[cfg(target_os = "macos")]
 mod app_settings;
 #[cfg(target_os = "macos")]
+mod colors;
+#[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
 mod form;

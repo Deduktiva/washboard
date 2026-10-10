@@ -21,6 +21,7 @@ use washboard_core::xml;
 use washboard_ui_model::LogEntry;
 
 use crate::app::with_delegate;
+use crate::colors;
 use crate::editor::{read_only_text, set_text, text_of};
 use crate::layout;
 use crate::panes::date_text;
@@ -252,7 +253,7 @@ impl HttpLog {
         // A skipped check is a warning, as in the draft; anything else is a plain fact.
         let (colour, font) = if exchange.tls.verification_skipped {
             (
-                NSColor::systemOrangeColor(),
+                colors::warning(),
                 NSFont::boldSystemFontOfSize(layout::STATUS_FONT_SIZE),
             )
         } else {
