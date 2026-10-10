@@ -247,14 +247,15 @@ from day one so we can enable the App Sandbox later without a migration.
 App settings (not per project) live in the user defaults (`NSUserDefaults`, domain
 `at.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
 and `FormatOnSave` so far. The app reads them and passes them to the model at launch and on
-change; the model stores no settings of its own, and the CLI reads none.
+change; the model stores no settings of its own, and the CLI reads none. The Settings window's
+selected pane (`SettingsPane`) is kept there too.
 
 ---
 
 ## 4. Feature behaviour
 
 ### Create project (File ▸ New Project…, ⇧⌘N)
-1. Sheet: project name, parent location (`NSOpenPanel` with "Create Folder"), WSDL file,
+1. New Project window (its own window, not a sheet): project name, parent location (`NSOpenPanel` with "Create Folder"), WSDL file,
    additional XSD files or a folder.
 2. **Import check** runs immediately (validation thread): parse WSDL, walk every
    `wsdl:import`, `xs:import`, `xs:include`, `xs:redefine`. Each reference is shown as
@@ -378,6 +379,16 @@ One panel for the app. Shows the last exchange in full: request line, headers, b
 status line, headers, body; timing; TLS info. Keeps the last 50 exchanges in memory in a list
 above (small extension of "last request and response"; trivially dropped if unwanted). Not
 persisted. Bodies over 5 MB are truncated in the view.
+
+### Settings (Washboard ▸ Settings…, ⌘,)
+One ordinary window (not a sheet) for the app and every open project, laid out like System
+Settings: a sidebar of panes, a title-only toolbar naming the pane, grouped forms. The
+"Washboard" section holds the app settings (General: indent width, format on save); below it,
+one section per open project with General (name, folder, WSDL files) and Servers (server list,
+the selected server's form, the WSDL's suggested servers). Project panes say that their
+settings belong to the project and are saved in its folder. Changes apply as they are made;
+there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
+the window on that project's Servers pane. A closed project's section leaves the window.
 
 ### Save / autosave
 - Each editor is a buffer with a dirty flag. Autosave 1 s after the last keystroke, and
@@ -663,7 +674,7 @@ An older history entry selected (drawer open):
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
 ```
 
-### New project sheet
+### New project window
 ```
 ┌ New Project ─────────────────────────────────────────────┐
 │ Name:      [Customer API                          ]       │
@@ -680,17 +691,30 @@ An older history entry selected (drawer open):
 └───────────────────────────────────────────────────────────┘
 ```
 
-### Project settings → Servers
+### Settings window → a project's Servers
 ```
-┌ Customer API — Settings ──────────[ General | Servers ]──┐
-│ ┌──────────────┐  Name:  [Staging                    ]   │
-│ │ Production   │  URL:   [https://stg.example.com/ws/c ]  │
-│ │▸Staging      │  TLS:   [x] Ignore certificate errors    │
-│ │ Local        │  Auth:  (•) None  ( ) Basic              │
-│ └──────────────┘  User:  [                ]  (disabled)    │
-│  [+] [−]          Pass:  [                ]  (Keychain)    │
-│                   Timeout: [60] s                         │
-└───────────────────────────────────────────────────────────┘
+┌ Servers ────────────────────────────────────────────────────────┐
+│ WASHBOARD          │ These settings belong to Customer API      │
+│  ⚙ General         │ and are saved in its folder.               │
+│ CUSTOMER API       │ ╭────────────────────────────────────────╮ │
+│  ▤ General         │ │ Production                             │ │
+│ ▸▤ Servers         │ │ Staging                              ✓ │ │
+│                    │ │ Local                                  │ │
+│                    │ │ [+] [−]                                │ │
+│                    │ ╰────────────────────────────────────────╯ │
+│                    │ ╭────────────────────────────────────────╮ │
+│                    │ │ Name               [Staging          ] │ │
+│                    │ │ URL       [https://stg.example.com/ws] │ │
+│                    │ │ Ignore certificate errors         [ ○] │ │
+│                    │ │ Auth                          [None ▾] │ │
+│                    │ │ Password                 (in Keychain) │ │
+│                    │ │ Timeout                         [60] s │ │
+│                    │ ╰────────────────────────────────────────╯ │
+│                    │ Suggested by the WSDL                      │
+│                    │ ╭────────────────────────────────────────╮ │
+│                    │ │ https://api.example.com/ws       [Add] │ │
+│                    │ ╰────────────────────────────────────────╯ │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### HTTP log panel
