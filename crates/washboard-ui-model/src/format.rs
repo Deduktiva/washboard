@@ -2,14 +2,13 @@
 //! computes the new text; the front end applies it through the text widget so it is one undo
 //! step, and the widget reports it back as an ordinary edit.
 
-use std::ops::{Range, RangeInclusive};
+use std::ops::Range;
 
 use washboard_core::xml::{self, utf16::Utf16Cursor, utf16::utf16_edit, utf16::utf16_to_byte};
 
 use crate::app::{App, ModelError, ProjectKey};
 
-/// Allowed indent widths, in spaces.
-pub const INDENT_RANGE: RangeInclusive<usize> = 1..=8;
+pub use washboard_core::xml::INDENT_RANGE;
 
 /// The app's formatting settings. The front end keeps them where its platform keeps settings
 /// (the user defaults on macOS) and hands them over at launch and on change; the model stores
@@ -25,7 +24,7 @@ pub struct FormatSettings {
 impl Default for FormatSettings {
     fn default() -> Self {
         FormatSettings {
-            indent: 2,
+            indent: xml::DEFAULT_INDENT,
             on_save: false,
         }
     }

@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
+use washboard_core::xml;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -144,8 +145,8 @@ enum RequestCommand {
     Format {
         name: String,
         /// Spaces per level. The app's own setting is not read.
-        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=8))]
-        indent: u8,
+        #[arg(long, default_value_t = xml::DEFAULT_INDENT, value_parser = indent_width)]
+        indent: usize,
         /// Write nothing; exit with 1 if the request is not formatted.
         #[arg(long)]
         check: bool,
@@ -289,7 +290,7 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
                 name,
                 indent,
                 check,
-            } => request::format(dir, &name, indent.into(), check),
+            } => request::format(dir, &name, indent, check),
             RequestCommand::Validate { name } => validation::command(dir, &name),
             RequestCommand::Send {
                 name,
@@ -334,4 +335,14 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
             ServerCommand::Remove { name } => server::remove(dir, &name),
         },
     }
+}
+
+/// `--indent`: a width in [`xml::INDENT_RANGE`], as the app's setting allows.
+fn indent_width(arg: &str) -> Result<usize, String> {
+    let width: usize = arg.parse().map_err(|e| format!("{e}"))?;
+    let range = xml::INDENT_RANGE;
+    if range.contains(&width) {
+        return Ok(width);
+    }
+    Err(format!("{width} is not in {range:?}"))
 }
