@@ -13,17 +13,16 @@ use std::time::Duration;
 
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBezelStyle, NSBox, NSBoxType, NSButton, NSColor, NSControlStateValue, NSControlStateValueOff,
-    NSControlStateValueOn, NSControlTextEditingDelegate, NSFont, NSImage, NSImageView,
-    NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLineBreakMode,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton, NSResponder,
-    NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView, NSStackViewGravity,
-    NSSwitch, NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTitlePosition,
-    NSToolbar, NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController,
-    NSWindow, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
-    NSWorkspace,
+    NSBezelStyle, NSBox, NSButton, NSColor, NSControlStateValue, NSControlStateValueOff,
+    NSControlStateValueOn, NSControlTextEditingDelegate, NSImage, NSImageView,
+    NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLayoutPriorityRequired,
+    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPopUpButton,
+    NSSecureTextField, NSSplitViewController, NSSplitViewItem, NSStackView, NSSwitch,
+    NSTableColumn, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSToolbar,
+    NSToolbarDisplayMode, NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow,
+    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
@@ -33,6 +32,7 @@ use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServer};
 
 use crate::app::{ModelAccess, with_delegate};
+use crate::form;
 use crate::layout::{self, view};
 use crate::sheets::ImportSheetController;
 use crate::table::TextTable;
@@ -63,9 +63,8 @@ impl Pane {
 pub const PANE_KEY: &str = "SettingsPane";
 const FRAME_NAME: &str = "Settings";
 
-/// The server list and the form's text fields.
+/// The server list and the timeout field.
 const LIST_HEIGHT: f64 = 120.0;
-const FIELD_WIDTH: f64 = 260.0;
 const TIMEOUT_WIDTH: f64 = 60.0;
 const SQUARE_BUTTON: f64 = 22.0;
 
@@ -129,26 +128,6 @@ fn item(object: &AnyObject) -> &PaneItem {
         .downcast_ref::<PaneItem>()
         .expect("settings sidebar items are PaneItems")
 }
-
-define_class!(
-    // SAFETY:
-    // - NSView has no subclassing requirements beyond its designated initializers, which we
-    //   inherit.
-    // - `FlippedView` does not implement `Drop`.
-    #[unsafe(super(NSView, NSResponder, NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[derive(Debug)]
-    struct FlippedView;
-
-    impl FlippedView {
-        // A scroll view's document starts at the top only when it is flipped.
-        // SAFETY: the signature matches `isFlipped`.
-        #[unsafe(method(isFlipped))]
-        fn is_flipped(&self) -> bool {
-            true
-        }
-    }
-);
 
 #[derive(Debug, Default)]
 pub struct SettingsWindowIvars {
@@ -401,6 +380,11 @@ impl SettingsWindowController {
         self.window().makeKeyAndOrderFront(None);
     }
 
+    /// The shown pane's view.
+    pub fn pane_view(&self) -> Option<Retained<NSView>> {
+        self.ivars().content.get()?.subviews().firstObject()
+    }
+
     /// The pane shown, once the window has shown one.
     pub fn selected(&self) -> Option<Pane> {
         self.ivars().selected.get()
@@ -430,7 +414,7 @@ impl SettingsWindowController {
         for old in content.subviews().iter() {
             old.removeFromSuperview();
         }
-        fill(content, &view);
+        form::fill(content, &view);
         self.window()
             .setTitle(&NSString::from_str(&self.pane_title(pane)));
         self.show_outline_selection();
@@ -486,16 +470,21 @@ impl SettingsWindowController {
     }
 
     /// The General pane's buttons under the WSDL files.
-    fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Retained<NSView> {
-        let buttons = [
-            target_button("Show in Finder", self, sel!(showWsdlInFinder:), mtm),
-            target_button("Replace WSDL…", self, sel!(replaceWsdl:), mtm),
+    fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Vec<Retained<NSView>> {
+        vec![
+            view(target_button(
+                "Show in Finder",
+                self,
+                sel!(showWsdlInFinder:),
+                mtm,
+            )),
+            view(target_button(
+                "Replace WSDL…",
+                self,
+                sel!(replaceWsdl:),
+                mtm,
+            )),
         ]
-        .map(view);
-        let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&buttons), mtm);
-        stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        stack.setSpacing(8.0);
-        view(stack)
     }
 
     /// What the General pane's Show in Finder selects: project `key`'s entry WSDL, in the
@@ -706,31 +695,33 @@ impl SettingsWindowController {
             })
             .flatten()
             .unwrap_or_default();
-        let folder_label = value_label(&folder.display().to_string(), mtm);
-        folder_label.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
-        let files = value_label(&wsdl.join("\n"), mtm);
+        let folder_label = form::value_label(
+            &folder.display().to_string(),
+            NSLineBreakMode::ByTruncatingMiddle,
+            mtm,
+        );
+        let files = form::value_lines(&wsdl.join("\n"), mtm);
         *self.ivars().wsdl_files.borrow_mut() = Some(files.clone());
-        page(
+        let name_label = form::value_label(&name, NSLineBreakMode::ByTruncatingTail, mtm);
+        let group = form::group(
+            vec![
+                form::value_row("Name", &name_label, mtm),
+                form::value_row("Folder", &folder_label, mtm),
+                form::stacked_row("WSDL files", &files, mtm),
+                form::button_row(self.wsdl_buttons(mtm), mtm),
+            ],
+            mtm,
+        );
+        form::page(
             vec![
                 project_note(&name, mtm),
-                section(
-                    vec![
-                        form_row("Name", view(value_label(&name, mtm)), mtm),
-                        form_row("Folder", view(folder_label), mtm),
-                        form_row("WSDL files", view(files), mtm),
-                        padded_row(
-                            view(NSTextField::labelWithString(ns_string!(""), mtm)),
-                            self.wsdl_buttons(mtm),
-                            mtm,
-                        ),
-                    ],
-                    mtm,
-                ),
-                note(
-                    "Replace WSDL checks the new files as New Project does. Requests are kept \
-                     as they are and validated against the new WSDL.",
-                    mtm,
-                ),
+                form::Section::new(mtm)
+                    .group(&group)
+                    .text(
+                        "Replace WSDL checks the new files as New Project does. Requests are \
+                         kept as they are and validated against the new WSDL.",
+                    )
+                    .build(),
             ],
             mtm,
         )
@@ -808,25 +799,24 @@ fn app_pane(
         on_save.setTarget(Some(target));
         on_save.setAction(Some(sel!(settingChanged:)));
     }
-    let view = page(
+    let group = form::group(
         vec![
-            heading("Formatting", mtm),
-            section(
-                vec![
-                    form_row("Indent", view(indent.clone()), mtm),
-                    form_row(
-                        "Format the open request on Save All (⌘S)",
-                        view(on_save.clone()),
-                        mtm,
-                    ),
-                ],
-                mtm,
-            ),
-            note(
-                "The indent is also used for new requests and responses. Autosave and Send \
-                 never reformat a request. These settings apply to Washboard and every project.",
-                mtm,
-            ),
+            form::control_row("Indent", &indent, mtm),
+            form::control_row("Format the open request on Save All (⌘S)", &on_save, mtm),
+        ],
+        mtm,
+    );
+    let view = form::page(
+        vec![
+            form::Section::new(mtm)
+                .header(&form::header("Formatting", mtm))
+                .group(&group)
+                .text(
+                    "The indent is also used for new requests and responses. Autosave and Send \
+                     never reformat a request. These settings apply to Washboard and every \
+                     project.",
+                )
+                .build(),
         ],
         mtm,
     );
@@ -855,8 +845,8 @@ pub struct ServersIvars {
     selected: Cell<Option<ServerId>>,
     view: OnceCell<Retained<NSView>>,
     table: OnceCell<Retained<TextTable>>,
-    /// The suggestions' section and the stack its rows go in.
-    suggestions: OnceCell<(Retained<NSView>, Retained<NSStackView>)>,
+    /// The suggestions' section and the group its rows go in.
+    suggestions: OnceCell<(Retained<NSView>, Retained<NSBox>)>,
     form: OnceCell<ServerForm>,
 }
 
@@ -942,78 +932,62 @@ impl ServersPane {
             .setBorderType(objc2_app_kit::NSBorderType::NoBorder);
         table.view().setDrawsBackground(false);
         table.table().setBackgroundColor(&NSColor::clearColor());
-        // The +/− buttons sit inside the list's section, under the list, as in System
-        // Settings.
-        let buttons = layout::row(
-            &[
+        // The +/− buttons sit inside the list's group, under the list, as in System Settings.
+        let buttons = form::bar_row(
+            vec![
                 square_button("+", &this, sel!(addServer:), mtm),
                 square_button("−", &this, sel!(removeServer:), mtm),
             ],
             mtm,
         );
-        buttons.setSpacing(0.0);
+        let list = form::group(vec![form::flush_row(table.view(), mtm), buttons], mtm);
 
         let form = this.server_form(mtm);
-        set_width(&form.name, FIELD_WIDTH);
-        set_width(&form.url, FIELD_WIDTH);
-        set_width(&form.user, FIELD_WIDTH);
-        set_width(&form.password, FIELD_WIDTH);
-        set_width(&form.timeout, TIMEOUT_WIDTH);
-        let auth = layout::row(
-            &[view(form.auth_none.clone()), view(form.auth_basic.clone())],
+        form::set_width(&form.timeout, TIMEOUT_WIDTH, NSLayoutPriorityRequired);
+        let auth = form::hstack(
+            vec![view(form.auth_none.clone()), view(form.auth_basic.clone())],
             mtm,
         );
-        let timeout = layout::row(
-            &[
+        let timeout = form::hstack(
+            vec![
                 view(form.timeout.clone()),
                 view(NSTextField::labelWithString(ns_string!("seconds"), mtm)),
             ],
             mtm,
         );
-        let fields = section(
+        let fields = form::group(
             vec![
-                form_row("Name", view(form.name.clone()), mtm),
-                form_row("URL", view(form.url.clone()), mtm),
-                form_row(
-                    "Ignore certificate errors",
-                    view(form.ignore_tls.clone()),
-                    mtm,
-                ),
-                form_row("Authentication", view(auth), mtm),
-                form_row("User", view(form.user.clone()), mtm),
-                form_row("Password", view(form.password.clone()), mtm),
-                form_row("Timeout", view(timeout), mtm),
+                form::field_row("Name", &form.name, mtm),
+                form::field_row("URL", &form.url, mtm),
+                form::control_row("Ignore certificate errors", &form.ignore_tls, mtm),
+                form::control_row("Authentication", &auth, mtm),
+                form::field_row("User", &form.user, mtm),
+                form::field_row("Password", &form.password, mtm),
+                form::control_row("Timeout", &timeout, mtm),
             ],
             mtm,
         );
+        let details = form::Section::new(mtm)
+            .header(&form::header("Selected server", mtm))
+            .group(&fields)
+            .text("A password is saved to the Keychain, not in the project folder.")
+            .build();
 
-        let suggestion_rows = column(vec![], mtm);
-        suggestion_rows.setSpacing(0.0);
-        let suggestions = column(
-            vec![
-                heading("Suggested by the WSDL", mtm),
-                section(vec![view(suggestion_rows.clone())], mtm),
-                note(
-                    "Servers named by the WSDL's addresses. Add one to edit and use it.",
-                    mtm,
-                ),
-            ],
-            mtm,
-        );
-        suggestions.setAlignment(NSLayoutAttribute::Width);
-        let suggestions = view(suggestions);
+        let suggestion_rows = form::group(vec![], mtm);
+        let suggestions = form::Section::new(mtm)
+            .header(&form::header("Suggested by the WSDL", mtm))
+            .group(&suggestion_rows)
+            .text("Servers named by the WSDL's addresses. Add one to edit and use it.")
+            .build();
 
-        let view = page(
+        let view = form::page(
             vec![
                 project_note(project, mtm),
-                heading("Servers", mtm),
-                section(vec![view(table.view().retain()), view(buttons)], mtm),
-                heading("Selected server", mtm),
-                fields,
-                note(
-                    "A password is saved to the Keychain, not in the project folder.",
-                    mtm,
-                ),
+                form::Section::new(mtm)
+                    .header(&form::header("Servers", mtm))
+                    .group(&list)
+                    .build(),
+                details,
                 suggestions.clone(),
             ],
             mtm,
@@ -1274,32 +1248,17 @@ impl ServersPane {
     fn show_suggestions(&self, suggested: &[SuggestedServer]) {
         let mtm = self.mtm();
         let (section, rows) = self.ivars().suggestions.get().expect("set in new()");
-        section.setHidden(suggested.is_empty());
-        for old in rows.arrangedSubviews().iter() {
-            rows.removeArrangedSubview(&old);
-            old.removeFromSuperview();
-        }
-        for (i, s) in suggested.iter().enumerate() {
-            if i > 0 {
-                rows.addArrangedSubview(&separator(mtm));
-            }
-            let add = target_button("Add", self, sel!(confirmSuggestion:), mtm);
-            add.setTag(NSInteger::try_from(i).unwrap_or(0));
-            let address = value_label(&s.url, mtm);
-            address.setLineBreakMode(NSLineBreakMode::ByTruncatingMiddle);
-            let text = column(
-                vec![
-                    view(NSTextField::labelWithString(
-                        &NSString::from_str(&s.port),
-                        mtm,
-                    )),
-                    view(address),
-                ],
-                mtm,
-            );
-            text.setSpacing(2.0);
-            rows.addArrangedSubview(&padded_row(view(text), view(add), mtm));
-        }
+        form::set_shown(section, !suggested.is_empty());
+        let rows_now = suggested
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let add = target_button("Add", self, sel!(confirmSuggestion:), mtm);
+                add.setTag(NSInteger::try_from(i).unwrap_or(0));
+                form::subtitle_row(&s.port, &s.url, &add, mtm)
+            })
+            .collect();
+        form::set_rows(rows, rows_now, mtm);
     }
 
     fn enable_form(&self, enabled: bool) {
@@ -1419,174 +1378,15 @@ fn symbol(name: &str) -> Option<Retained<NSImage>> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
 }
 
-fn column(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSStackView> {
-    let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
-    stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
-    stack.setAlignment(NSLayoutAttribute::Leading);
-    stack
-}
-
-/// A pane: its sections in a column that scrolls when the window is short, starting at the
-/// top.
-fn page(views: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
-    let stack = column(views, mtm);
-    stack.setAlignment(NSLayoutAttribute::Width);
-    stack.setSpacing(10.0);
-    stack.setEdgeInsets(layout::insets(20.0, 24.0, 24.0, 24.0));
-    // SAFETY: `init` is NSView's designated initializer for code-built views.
-    let document: Retained<FlippedView> = unsafe { msg_send![FlippedView::alloc(mtm), init] };
-    document.setTranslatesAutoresizingMaskIntoConstraints(false);
-    fill(&document, &stack);
-    let scroll = layout::vertical_scroll(&document, mtm);
-    scroll.setDrawsBackground(false);
-    let clip = scroll.contentView();
-    for constraint in [
-        document
-            .topAnchor()
-            .constraintEqualToAnchor(&clip.topAnchor()),
-        document
-            .leadingAnchor()
-            .constraintEqualToAnchor(&clip.leadingAnchor()),
-        document
-            .widthAnchor()
-            .constraintEqualToAnchor(&clip.widthAnchor()),
-    ] {
-        constraint.setActive(true);
-    }
-    view(scroll)
-}
-
-/// Pins `view` to `container`'s edges.
-fn fill(container: &NSView, view: &NSView) {
-    view.setTranslatesAutoresizingMaskIntoConstraints(false);
-    container.addSubview(view);
-    for constraint in [
-        view.leadingAnchor()
-            .constraintEqualToAnchor(&container.leadingAnchor()),
-        view.trailingAnchor()
-            .constraintEqualToAnchor(&container.trailingAnchor()),
-        view.topAnchor()
-            .constraintEqualToAnchor(&container.topAnchor()),
-        view.bottomAnchor()
-            .constraintEqualToAnchor(&container.bottomAnchor()),
-    ] {
-        constraint.setActive(true);
-    }
-}
-
-/// A grouped section: its rows in a rounded inset box on the window background, a hairline
-/// between rows, as in System Settings.
-fn section(rows: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
-    let mut views = Vec::new();
-    for (i, row) in rows.into_iter().enumerate() {
-        if i > 0 {
-            views.push(separator(mtm));
-        }
-        views.push(row);
-    }
-    let stack = column(views, mtm);
-    stack.setAlignment(NSLayoutAttribute::Width);
-    stack.setSpacing(0.0);
-    stack.setEdgeInsets(layout::insets(2.0, 0.0, 2.0, 0.0));
-    let section = NSBox::new(mtm);
-    section.setBoxType(NSBoxType::Custom);
-    section.setTitlePosition(NSTitlePosition::NoTitle);
-    // Semantic colours, so the section follows the appearance.
-    section.setFillColor(&NSColor::quaternarySystemFillColor());
-    section.setBorderColor(&NSColor::separatorColor());
-    section.setBorderWidth(0.5);
-    section.setCornerRadius(10.0);
-    section.setContentViewMargins(NSSize::new(0.0, 0.0));
-    if let Some(content) = section.contentView() {
-        fill(&content, &stack);
-    }
-    view(section)
-}
-
-/// A hairline between a section's rows, inset from the leading edge.
-fn separator(mtm: MainThreadMarker) -> Retained<NSView> {
-    let line = NSBox::new(mtm);
-    line.setBoxType(NSBoxType::Separator);
-    let inset = NSView::new(mtm);
-    inset.setTranslatesAutoresizingMaskIntoConstraints(false);
-    line.setTranslatesAutoresizingMaskIntoConstraints(false);
-    inset.addSubview(&line);
-    for constraint in [
-        line.leadingAnchor()
-            .constraintEqualToAnchor_constant(&inset.leadingAnchor(), 12.0),
-        line.trailingAnchor()
-            .constraintEqualToAnchor(&inset.trailingAnchor()),
-        line.centerYAnchor()
-            .constraintEqualToAnchor(&inset.centerYAnchor()),
-        inset.heightAnchor().constraintEqualToConstant(1.0),
-    ] {
-        constraint.setActive(true);
-    }
-    inset
-}
-
-/// One setting: its label on the leading edge, its control on the trailing edge.
-fn form_row(label: &str, control: Retained<NSView>, mtm: MainThreadMarker) -> Retained<NSView> {
-    let label = NSTextField::labelWithString(&NSString::from_str(label), mtm);
-    padded_row(view(label), control, mtm)
-}
-
-fn padded_row(
-    leading: Retained<NSView>,
-    trailing: Retained<NSView>,
-    mtm: MainThreadMarker,
-) -> Retained<NSView> {
-    let stack = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
-    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-    stack.setAlignment(NSLayoutAttribute::CenterY);
-    stack.addView_inGravity(&leading, NSStackViewGravity::Leading);
-    stack.addView_inGravity(&trailing, NSStackViewGravity::Trailing);
-    stack.setEdgeInsets(layout::insets(8.0, 12.0, 8.0, 12.0));
-    layout::hug_vertically(&stack);
-    view(stack)
-}
-
-/// A section's title, above it.
-fn heading(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
-    view(label)
-}
-
-/// An explanation in secondary text, under a section.
-fn note(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
-    let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), mtm);
-    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    label.setFont(Some(&NSFont::systemFontOfSize(11.0)));
-    view(label)
-}
-
 /// Each project pane opens by saying whose settings these are and where they are kept, so
 /// nobody takes them for the app's.
 fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSView> {
-    note(
-        &format!(
+    form::Section::new(mtm)
+        .text(&format!(
             "These settings belong to the project “{project}” and are saved in its folder. \
              They do not change other projects."
-        ),
-        mtm,
-    )
-}
-
-/// A read-only value that can be selected and copied.
-fn value_label(text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
-    let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-    label.setSelectable(true);
-    label.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    label.setAlignment(objc2_app_kit::NSTextAlignment::Right);
-    layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
-    label
-}
-
-fn set_width(v: &NSView, width: f64) {
-    v.widthAnchor()
-        .constraintEqualToConstant(width)
-        .setActive(true);
+        ))
+        .build()
 }
 
 fn target_button(
@@ -1618,7 +1418,7 @@ fn square_button(
     let button = target_button(title, target, action, mtm);
     button.setBezelStyle(NSBezelStyle::SmallSquare);
     button.setBordered(false);
-    set_width(&button, SQUARE_BUTTON);
+    form::set_width(&button, SQUARE_BUTTON, NSLayoutPriorityRequired);
     button
         .heightAnchor()
         .constraintEqualToConstant(SQUARE_BUTTON)

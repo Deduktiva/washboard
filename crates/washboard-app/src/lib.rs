@@ -16,6 +16,8 @@ mod app_settings;
 #[cfg(target_os = "macos")]
 mod editor;
 #[cfg(target_os = "macos")]
+mod form;
+#[cfg(target_os = "macos")]
 mod front_end;
 #[cfg(target_os = "macos")]
 mod http_log;
@@ -47,6 +49,8 @@ pub use app::{AppDelegate, Options, install, run};
 pub use app_settings::{INDENT_KEY, ON_SAVE_KEY};
 #[cfg(target_os = "macos")]
 pub use editor::{EditorController, LineNumberRuler};
+#[cfg(target_os = "macos")]
+pub use form::{GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, ROW_INSET, TEXT_ID};
 #[cfg(target_os = "macos")]
 pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]

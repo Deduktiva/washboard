@@ -64,11 +64,12 @@ mod checks {
     use objc2::runtime::{AnyObject, Sel};
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor, NSControl,
         NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
-        NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode, NSView,
-        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSForegroundColorAttributeName, NSMenu, NSScrollView, NSSplitViewItemBehavior, NSStackView,
+        NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode,
+        NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
+        NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -79,7 +80,10 @@ mod checks {
         AppDelegate, EditorController, ImportSheetController, NodeKind, Options,
         ProjectWindowController, SidebarNode,
     };
-    use washboard_app::{Pane, ServersPane};
+    use washboard_app::{
+        GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, Pane, ROW_INSET, ServersPane,
+        SettingsWindowController, TEXT_ID,
+    };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
@@ -2061,11 +2065,130 @@ mod checks {
                 "a field inside the window: {f:?} in width {width}"
             );
         }
+        let edges: Vec<f64> = fields.iter().map(|f| frame(f).origin.x).collect();
+        assert!(
+            edges.iter().all(|x| (x - edges[0]).abs() < 0.5),
+            "the form's text fields share a leading edge: {edges:?}"
+        );
         let list = settings.table().view().frame();
         assert!(
             list.size.height >= 100.0,
             "the server list has room: {list:?}"
         );
+    }
+
+    /// The shown Settings pane keeps `form.rs`'s rules: groups inside the page margins, centred
+    /// and all one width; headers and footnotes on the rows' leading line; every label and
+    /// control in a group inside the group's insets, at its full height, overlapping no other.
+    fn assert_form_layout(settings: &SettingsWindowController, pane: &str) {
+        let page = settings.pane_view().expect("a pane is shown");
+        let window = page.window().expect("the pane is in the window");
+        window
+            .contentView()
+            .expect("content")
+            .layoutSubtreeIfNeeded();
+        let frame = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let scroll = page.downcast_ref::<NSScrollView>().expect("a pane scrolls");
+        let clip = frame(&scroll.contentView());
+        let mut parts = Vec::new();
+        form_parts(&page, None, &mut parts);
+        let has_id = |v: &NSView, id: &str| v.identifier().is_some_and(|i| i.to_string() == id);
+        let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+        let max_x = |r: NSRect| r.origin.x + r.size.width;
+
+        let groups: Vec<NSRect> = parts
+            .iter()
+            .filter(|(v, _)| has_id(v, GROUP_ID))
+            .map(|(v, _)| frame(v))
+            .collect();
+        assert!(!groups.is_empty(), "{pane}: a group");
+        let first = groups[0];
+        let (left, right) = (first.origin.x - clip.origin.x, max_x(clip) - max_x(first));
+        assert!(
+            left >= PAGE_MARGIN - 0.5 && near(left, right),
+            "{pane}: groups within the margins and centred: {left} and {right}"
+        );
+        assert!(first.size.width <= MAX_WIDTH + 0.5, "{pane}: {first:?}");
+        // The content area may run under the sidebar; the groups must not.
+        let sidebar = settings
+            .outline()
+            .enclosingScrollView()
+            .expect("the sidebar scrolls");
+        assert!(
+            first.origin.x >= max_x(frame(&sidebar)) + PAGE_MARGIN - 0.5,
+            "{pane}: groups clear of the sidebar: {first:?}, sidebar {:?}",
+            frame(&sidebar)
+        );
+        for g in &groups {
+            assert!(
+                near(g.origin.x, first.origin.x) && near(g.size.width, first.size.width),
+                "{pane}: groups line up: {g:?} and {first:?}"
+            );
+        }
+        for (v, _) in &parts {
+            if has_id(v, HEADER_ID) || has_id(v, TEXT_ID) {
+                let f = frame(v);
+                assert!(
+                    near(f.origin.x, first.origin.x + ROW_INSET)
+                        && max_x(f) <= max_x(first) - ROW_INSET + 0.5,
+                    "{pane}: {v:?} on the rows' leading line: {f:?}, group {first:?}"
+                );
+            }
+        }
+
+        let controls: Vec<(Retained<NSView>, NSRect)> = parts
+            .iter()
+            .filter(|(v, _)| v.downcast_ref::<NSControl>().is_some())
+            .filter_map(|(v, g)| Some((v.clone(), (*g)?)))
+            .collect();
+        for (v, g) in &controls {
+            let f = frame(v);
+            assert!(
+                f.origin.x >= g.origin.x + ROW_INSET / 2.0 - 0.5
+                    && max_x(f) <= max_x(*g) - ROW_INSET + 0.5,
+                "{pane}: {v:?} inside its group's insets: {f:?} in {g:?}"
+            );
+            let needed = v.intrinsicContentSize().height;
+            assert!(
+                needed <= 0.0 || f.size.height >= needed - 0.5,
+                "{pane}: {v:?} at its full height: {f:?}, needs {needed}"
+            );
+        }
+        for (i, (a, _)) in controls.iter().enumerate() {
+            for (b, _) in &controls[i + 1..] {
+                let (fa, fb) = (frame(a), frame(b));
+                let apart = max_x(fa) <= fb.origin.x + 0.5
+                    || max_x(fb) <= fa.origin.x + 0.5
+                    || fa.origin.y + fa.size.height <= fb.origin.y + 0.5
+                    || fb.origin.y + fb.size.height <= fa.origin.y + 0.5;
+                assert!(apart, "{pane}: {a:?} {fa:?} overlaps {b:?} {fb:?}");
+            }
+        }
+    }
+
+    /// The visible views under `view` with the frame of the group each is in. Lists and other
+    /// scroll views count as one part: their rows are theirs to lay out.
+    fn form_parts(
+        view: &NSView,
+        group: Option<NSRect>,
+        out: &mut Vec<(Retained<NSView>, Option<NSRect>)>,
+    ) {
+        for sub in view.subviews().iter() {
+            if sub.isHidden() {
+                continue;
+            }
+            out.push((sub.clone(), group));
+            if sub.downcast_ref::<NSScrollView>().is_some() {
+                continue;
+            }
+            let is_group = sub.identifier().is_some_and(|i| i.to_string() == GROUP_ID);
+            let inner = if is_group {
+                Some(sub.convertRect_toView(sub.bounds(), None))
+            } else {
+                group
+            };
+            form_parts(&sub, inner, out);
+        }
     }
 
     /// Waits for the import check the last file change started.
@@ -2230,10 +2353,12 @@ mod checks {
         let suggested = settings.suggestion_rows();
         assert_eq!(suggested.len(), 1, "the SOAP 1.1 port: {suggested:?}");
         assert!(settings.shows_suggestions());
-        assert_settings_layout(&settings);
+        assert_form_layout(settings_window, "Servers, suggestions only");
         settings.confirm_suggestion(0);
         assert!(settings.suggestion_rows().is_empty());
         assert!(!settings.shows_suggestions(), "nothing left to suggest");
+        assert_settings_layout(&settings);
+        assert_form_layout(settings_window, "Servers, one server");
         assert_eq!(server_names(ctx, project.key()), [suggested[0][0].clone()]);
         assert_eq!(settings.selected(), Some(0));
         assert_eq!(
@@ -2349,6 +2474,7 @@ mod checks {
         assert!(settings_window.attachedSheet().is_none() && window.attachedSheet().is_none());
         assert_eq!(settings.selected(), Some(Pane::App));
         assert_eq!(settings_window.title().to_string(), "General");
+        assert_form_layout(settings, "the app's General");
         assert_eq!(
             settings.sidebar_titles(),
             ["Washboard", "General", "Customer API", "General", "Servers"],
@@ -2364,6 +2490,7 @@ mod checks {
         );
         let sheet = settings.servers(key);
         assert_settings_layout(&sheet);
+        assert_form_layout(settings, "Servers");
 
         let names = table_column(sheet.table(), 0);
         assert_eq!(names, server_names(ctx, key));
@@ -2443,6 +2570,7 @@ mod checks {
             settings_window.title().to_string(),
             "Customer API — General"
         );
+        assert_form_layout(settings, "the project's General");
         settings.select(Pane::Servers(key));
         // SAFETY: `showSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, showSettings: None::<&AnyObject>] };
