@@ -18,6 +18,7 @@ mod event;
 mod format;
 mod front_end;
 mod import;
+mod picker;
 mod send;
 mod timers;
 mod window;
@@ -42,6 +43,7 @@ pub use front_end::{
 pub use import::{
     CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome, SuggestedServer,
 };
+pub use picker::{PickerSection, pick_operations};
 pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
 pub use window::{
     OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,

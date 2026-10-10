@@ -386,7 +386,7 @@ impl App {
         };
         match loaded {
             Ok(schema) => {
-                window.sidebar.services = operation_tree(&schema.wsdl);
+                window.sidebar.services = operation_tree(&schema.wsdl, &schema.model);
                 window.schema = SchemaState::Ready(std::sync::Arc::new(schema));
             }
             Err(message) => window.schema = SchemaState::Failed(message),
