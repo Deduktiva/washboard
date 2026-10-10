@@ -221,7 +221,9 @@ What the schema decides:
 - **Reconciliation on open**: request files without a row get a row; rows without a file are
   dropped (history kept until pruned). Handles files added/removed in Finder or via git.
 - **Same folder opened twice** (two windows or two app instances): `flock` on
-  `washboard.sqlite`; second open is refused with a clear message.
+  `.washboard.lock` beside it (not on the database: on macOS `flock` and SQLite's own `fcntl`
+  locks interfere); the second open is refused with a clear message. Read-only CLI commands
+  open without the lock.
 
 ### App-level state
 `~/Library/Application Support/Washboard/state.json`: list of open projects (path +
