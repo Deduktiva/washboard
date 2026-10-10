@@ -629,8 +629,43 @@ mod checks {
         assert!(labels[1].ends_with("Customer API"), "{labels:?}");
         assert_eq!(open_recent_titles(ctx), ["Customer API", "Clear Menu"]);
 
-        welcome.open_recent(0);
-        assert_eq!(ctx.delegate.projects().len(), 1, "reopened");
+        // A row's context menu; none off the rows.
+        let menu = NSMenu::new(MainThreadMarker::new().expect("main thread"));
+        welcome.fill_context_menu(&menu, 0);
+        let titles: Vec<String> = menu
+            .itemArray()
+            .iter()
+            .filter(|i| !i.isSeparatorItem())
+            .map(|i| i.title().to_string())
+            .collect();
+        assert_eq!(titles, ["Open", "Show in Finder", "Remove from List"]);
+        welcome.fill_context_menu(&menu, -1);
+        assert_eq!(menu.numberOfItems(), 0, "no menu off the rows");
+
+        // The most recent project is selected, and Return opens it.
+        assert_eq!(
+            table.selectedRow(),
+            0,
+            "the most recent project is selected"
+        );
+        let window = welcome.window();
+        let key = |chars: &str| {
+            NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+                NSEventType::KeyDown,
+                NSPoint::new(0.0, 0.0),
+                NSEventModifierFlags::empty(),
+                0.0,
+                window.windowNumber(),
+                None,
+                &NSString::from_str(chars),
+                &NSString::from_str(chars),
+                false,
+                36,
+            )
+            .expect("a key event")
+        };
+        table.keyDown(&key("\r"));
+        assert_eq!(ctx.delegate.projects().len(), 1, "reopened by Return");
         assert!(!welcome.window().isVisible(), "welcome window hidden again");
         welcome.open_recent(0);
         assert_eq!(
