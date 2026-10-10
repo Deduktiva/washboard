@@ -73,7 +73,7 @@ mod checks {
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString, NSUserDefaults,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString, NSUserDefaults,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -2078,17 +2078,31 @@ mod checks {
         if servers.shows_credentials() {
             fields.extend([servers.user_field() as &NSView, servers.password_field()]);
         }
-        let edges: Vec<f64> = fields.iter().map(|f| frame(f).origin.x).collect();
+        let edges: Vec<f64> = fields.iter().map(|f| layout_frame(f).origin.x).collect();
         assert!(
             edges.iter().all(|x| (x - edges[0]).abs() < 0.5),
             "{what}: the text fields share a leading edge: {edges:?}"
         );
     }
 
+    /// `v`'s alignment rect in window coordinates: what Auto Layout lines up. A label's frame
+    /// is wider than its text by a couple of points on each side.
+    fn layout_frame(v: &NSView) -> NSRect {
+        let f = v.convertRect_toView(v.bounds(), None);
+        let i = v.alignmentRectInsets();
+        NSRect::new(
+            NSPoint::new(f.origin.x + i.left, f.origin.y + i.bottom),
+            NSSize::new(
+                f.size.width - i.left - i.right,
+                f.size.height - i.top - i.bottom,
+            ),
+        )
+    }
+
     /// The rules every form keeps, under `root` in `area`; returns the first group's frame.
     fn assert_form_rules(root: &NSView, area: NSRect, pane: &str) -> NSRect {
         let clip = area;
-        let frame = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let frame = layout_frame;
         let mut parts = Vec::new();
         form_parts(root, None, &mut parts);
         let has_id = |v: &NSView, id: &str| v.identifier().is_some_and(|i| i.to_string() == id);
@@ -2172,7 +2186,7 @@ mod checks {
             }
             let is_group = sub.identifier().is_some_and(|i| i.to_string() == GROUP_ID);
             let inner = if is_group {
-                Some(sub.convertRect_toView(sub.bounds(), None))
+                Some(layout_frame(&sub))
             } else {
                 group
             };
