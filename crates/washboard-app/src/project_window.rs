@@ -902,7 +902,7 @@ impl ProjectWindowController {
             self.response().view(),
             mtm,
         );
-        content_vc.setView(&content);
+        content_vc.setView(&below_toolbar(&content, mtm));
         // The drawer's split controller manages its items through the view controller tree.
         content_vc.addChildViewController(self.response().drawer());
         let _ = self.ivars().issues.set(issues);
@@ -1047,6 +1047,35 @@ fn content_pane(
     }
     split.adjustSubviews();
     split
+}
+
+/// `content` in a view of its own, its top pinned to the safe area. The window's content runs
+/// under the toolbar (`FullSizeContentView`); scroll views inset their documents by
+/// themselves, but the request bar, the status line and the response tabs would be drawn
+/// under the toolbar's title and items. The safe area also grows with the older-exchange
+/// accessory.
+fn below_toolbar(content: &NSView, mtm: MainThreadMarker) -> Retained<NSView> {
+    let container = NSView::new(mtm);
+    content.setTranslatesAutoresizingMaskIntoConstraints(false);
+    container.addSubview(content);
+    let safe = container.safeAreaLayoutGuide();
+    for constraint in [
+        content
+            .topAnchor()
+            .constraintEqualToAnchor(&safe.topAnchor()),
+        content
+            .bottomAnchor()
+            .constraintEqualToAnchor(&container.bottomAnchor()),
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor(&container.leadingAnchor()),
+        content
+            .trailingAnchor()
+            .constraintEqualToAnchor(&container.trailingAnchor()),
+    ] {
+        constraint.setActive(true);
+    }
+    container
 }
 
 /// A read-only, highlighted text view with line numbers on the window background colour, so

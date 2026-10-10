@@ -640,6 +640,15 @@ mod checks {
                 < 0.5,
             "request bar and response start at one height: {bar:?} vs {response_pane:?}"
         );
+        // Both bars sit below the toolbar, not under its title and items.
+        let below = window.contentLayoutRect();
+        let toolbar_bottom = below.origin.y + below.size.height;
+        for (what, rect) in [("request bar", bar), ("response", response_pane)] {
+            assert!(
+                rect.origin.y + rect.size.height <= toolbar_bottom + 0.5,
+                "the {what} starts below the toolbar: {rect:?} vs {below:?}"
+            );
+        }
         assert_eq!(project.content_split().subviews().len(), 2);
         assert!(project.content_split().isVertical());
 

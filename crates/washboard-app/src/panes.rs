@@ -506,9 +506,14 @@ impl ResponsePane {
         // collapsed; the table is the split's second half.
         let header = this.drawer_header(mtm);
         let response_vc = NSViewController::new(mtm);
+        // A hairline sets the header off from the response body, as the split's divider does
+        // from the table below.
+        let line = NSBox::new(mtm);
+        line.setBoxType(NSBoxType::Separator);
         response_vc.setView(&layout::fill_column(
             &[
                 Retained::into_super(this.ivars().tabs.clone()),
+                Retained::into_super(line),
                 Retained::into_super(header),
             ],
             mtm,
@@ -535,7 +540,8 @@ impl ResponsePane {
             ],
             mtm,
         );
-        status.setEdgeInsets(layout::insets(0.0, 8.0, 0.0, 8.0));
+        // The request bar's insets, so both halves' text starts as far from its edge.
+        status.setEdgeInsets(layout::insets(0.0, 12.0, 0.0, 12.0));
         layout::set_height(&status, layout::BAR_HEIGHT);
         let view = layout::fill_column(&[Retained::into_super(status), drawer.view()], mtm);
         let _ = this.ivars().drawer.set(drawer);
@@ -557,7 +563,7 @@ impl ResponsePane {
         header.addView_inGravity(&self.ivars().earlier, NSStackViewGravity::Leading);
         header.addView_inGravity(&self.ivars().dots, NSStackViewGravity::Trailing);
         header.setSpacing(8.0);
-        header.setEdgeInsets(layout::insets(0.0, 10.0, 0.0, 10.0));
+        header.setEdgeInsets(layout::insets(0.0, 12.0, 0.0, 12.0));
         layout::set_height(&header, DRAWER_HEADER_HEIGHT);
         // SAFETY: this pane owns the header (through its view) and so the recognizer, which
         // holds its target weakly; `toggleHistory:` takes the sender.
