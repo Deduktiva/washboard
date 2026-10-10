@@ -235,6 +235,15 @@ pub fn button(
     }
 }
 
+/// Keeps `window`'s size and position in the user defaults under `name`; the first time, it
+/// starts centred.
+pub fn keep_frame(window: &NSWindow, name: &NSString) {
+    if !window.setFrameUsingName(name) {
+        window.center();
+    }
+    window.setFrameAutosaveName(name);
+}
+
 /// A titled window of content size `size`, for a controller that keeps it in a `Retained`:
 /// closing it only hides it, and the controller decides when it goes.
 pub fn owned_window(

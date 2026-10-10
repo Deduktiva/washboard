@@ -287,10 +287,6 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     panel.setTitle(ns_string!("HTTP Log"));
     panel.setHidesOnDeactivate(false);
     // Size and position are kept across launches.
-    let name = ns_string!("HTTP Log");
-    if !panel.setFrameUsingName(name) {
-        panel.center();
-    }
-    panel.setFrameAutosaveName(name);
+    layout::keep_frame(&panel, ns_string!("HTTP Log"));
     panel
 }

@@ -58,7 +58,6 @@ impl Pane {
 /// The selected pane in the user defaults: `app`, or `general:` / `servers:` and the project's
 /// folder, which, unlike its key, is the same on the next launch.
 pub const PANE_KEY: &str = "SettingsPane";
-const FRAME_NAME: &str = "Settings";
 
 #[derive(Debug)]
 pub struct ItemIvars {
@@ -334,11 +333,7 @@ impl SettingsWindowController {
         window.setContentMinSize(NSSize::new(620.0, 420.0));
         // The window holds its delegate weakly; this controller owns the window.
         window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
-        let name = NSString::from_str(FRAME_NAME);
-        if !window.setFrameUsingName(&name) {
-            window.center();
-        }
-        window.setFrameAutosaveName(&name);
+        layout::keep_frame(&window, ns_string!("Settings"));
 
         let (app_pane, indent, on_save) = app_pane(&this, mtm);
         let ivars = this.ivars();

@@ -348,11 +348,7 @@ impl ProjectWindowController {
         window.setContentSize(NSSize::new(1100.0, 700.0));
         // Size and position are kept per project, by folder (the key changes every launch),
         // as PLAN §3 intends; a project opened for the first time starts centred.
-        let frame_name = autosave_name("ProjectWindow", folder);
-        if !window.setFrameUsingName(&frame_name) {
-            window.center();
-        }
-        window.setFrameAutosaveName(&frame_name);
+        layout::keep_frame(&window, &autosave_name("ProjectWindow", folder));
         this.add_accessory(&window, mtm);
         // Request and response start with half each, unless the project remembers them.
         window.layoutIfNeeded();
