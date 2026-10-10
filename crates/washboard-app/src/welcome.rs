@@ -295,8 +295,7 @@ fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTa
 
 fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSTableCellView> {
     let name = NSTextField::labelWithString(&NSString::from_str(&project.name), mtm);
-    let path = NSTextField::labelWithString(&NSString::from_str(&project.path), mtm);
-    path.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+    let path = layout::small_label(&project.path, mtm);
     path.setTextColor(Some(&NSColor::secondaryLabelColor()));
     layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
     // Long paths keep both ends: the folder's name is at the end.

@@ -9,9 +9,10 @@ use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, Serve
 use washboard_core::project::{OpenProject, Project};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
-use washboard_core::wsdl::{self, Sources, Wsdl};
+use washboard_core::wsdl::{self, Protocol, Sources, Wsdl};
 
 use crate::app::ModelError;
+use crate::diagnostics::WellFormedness;
 use crate::editor::Editor;
 use crate::import::{ReplaceOutcome, SuggestedServer};
 use crate::send::{ResponseView, Sending};
@@ -101,6 +102,16 @@ pub struct Sidebar {
     pub services: Vec<ServiceNode>,
 }
 
+impl Sidebar {
+    pub fn request(&self, id: RequestId) -> Option<&RequestRow> {
+        self.requests.iter().find(|r| r.id == id)
+    }
+
+    pub(crate) fn request_mut(&mut self, id: RequestId) -> Option<&mut RequestRow> {
+        self.requests.iter_mut().find(|r| r.id == id)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestRow {
     pub id: RequestId,
@@ -120,6 +131,9 @@ pub struct ServiceNode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortNode {
     pub name: String,
+    /// The binding's protocol, for the port's "1.1" or "1.2 · unsupported" chip; `None` when
+    /// the port names a binding the WSDL lacks.
+    pub protocol: Option<Protocol>,
     pub operations: Vec<OperationNode>,
 }
 
@@ -134,6 +148,15 @@ impl OperationNode {
     pub fn name(&self) -> &str {
         &self.operation.operation
     }
+}
+
+/// What the request bar shows for the open request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestSummary {
+    pub name: String,
+    /// The operation the request was made for; `None` for a request without the hint.
+    pub operation: Option<OperationRef>,
+    pub well_formedness: WellFormedness,
 }
 
 /// One open project and the state of its window.
@@ -182,6 +205,23 @@ impl ProjectWindow {
     /// The selected request's buffer; `None` without a selection or if it could not be read.
     pub fn editor(&self) -> Option<&Editor> {
         self.editor.as_ref()
+    }
+
+    /// The open request's name, operation and well-formedness; `None` with no request open.
+    pub fn request_summary(&self) -> Option<RequestSummary> {
+        let editor = self.editor.as_ref()?;
+        let id = editor.request();
+        Some(RequestSummary {
+            name: self.sidebar.request(id)?.name.clone(),
+            operation: self.request_operation(id),
+            well_formedness: editor.well_formedness(),
+        })
+    }
+
+    /// The operation `request` was made for. A hint only, kept in the project database: it
+    /// may name an operation the WSDL no longer has.
+    pub(crate) fn request_operation(&self, request: RequestId) -> Option<OperationRef> {
+        self.project.request(request).ok().and_then(|r| r.operation)
     }
 
     /// Has unsaved edits: the window's edited dot.
@@ -256,7 +296,7 @@ impl ProjectWindow {
     }
 
     pub(crate) fn mark_dirty(&mut self, request: RequestId, dirty: bool) {
-        if let Some(row) = self.sidebar.requests.iter_mut().find(|r| r.id == request) {
+        if let Some(row) = self.sidebar.request_mut(request) {
             row.dirty = dirty;
         }
     }
@@ -277,24 +317,26 @@ pub(crate) fn operation_tree(wsdl: &Wsdl) -> Vec<ServiceNode> {
             ports: service
                 .ports
                 .iter()
-                .map(|port| PortNode {
-                    name: port.name.clone(),
-                    operations: wsdl
-                        .definitions
-                        .binding(&port.binding)
-                        .map(|b| {
-                            b.operations
-                                .iter()
-                                .map(|op| OperationNode {
-                                    operation: OperationRef {
-                                        binding: b.name.clone(),
-                                        operation: op.name.clone(),
-                                    },
-                                    unsupported: op.support.reason().map(ToString::to_string),
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                .map(|port| {
+                    let binding = wsdl.definitions.binding(&port.binding);
+                    PortNode {
+                        name: port.name.clone(),
+                        protocol: binding.map(|b| b.protocol.clone()),
+                        operations: binding
+                            .map(|b| {
+                                b.operations
+                                    .iter()
+                                    .map(|op| OperationNode {
+                                        operation: OperationRef {
+                                            binding: b.name.clone(),
+                                            operation: op.name.clone(),
+                                        },
+                                        unsupported: op.support.reason().map(ToString::to_string),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    }
                 })
                 .collect(),
         })

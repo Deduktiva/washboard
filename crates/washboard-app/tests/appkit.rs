@@ -23,6 +23,7 @@ fn main() {
         ("welcome_window", checks::welcome_window),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
+        ("port_chips", checks::port_chips),
         ("sidebar_commands", checks::sidebar_commands),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
@@ -63,11 +64,11 @@ mod checks {
     use objc2::runtime::{AnyObject, Sel};
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSColor, NSControlStateValueOn,
-        NSEvent, NSEventModifierFlags, NSEventType, NSForegroundColorAttributeName, NSMenu,
-        NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
-        NSToolbarDisplayMode, NSView, NSWindowOrderingMode, NSWindowTabbingMode,
-        NSWritingToolsBehavior,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
+        NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
+        NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
+        NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode, NSView,
+        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -665,9 +666,14 @@ mod checks {
         let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
         let editor = in_window(project.editor().view());
         let issues = in_window(project.issues().view());
+        let bar = in_window(project.request_bar().view());
         assert!(
             editor.size.height > 100.0,
             "the editor takes the slack: {editor:?}"
+        );
+        assert!(
+            bar.origin.y >= editor.origin.y + editor.size.height - 0.5 && bar.size.height > 10.0,
+            "the request bar sits above the editor: {bar:?} vs {editor:?}"
         );
         assert!(
             issues.origin.y + issues.size.height <= editor.origin.y + 0.5,
@@ -731,6 +737,18 @@ mod checks {
 
         // Operations are listed, unsupported ones too, and can be selected.
         let nodes = all_nodes(&project.sidebar().roots());
+        let chips: Vec<_> = nodes
+            .iter()
+            .filter(|n| n.kind() == NodeKind::Port)
+            .map(|n| (n.title(), n.chip()))
+            .collect();
+        assert_eq!(
+            chips,
+            [
+                ("LegacyPort".to_owned(), Some("1.1")),
+                ("LegacyEncodedPort".to_owned(), Some("1.1")),
+            ]
+        );
         assert!(
             nodes.iter().any(|n| n.unsupported().is_some()),
             "the rpc/encoded operation is shown"
@@ -756,6 +774,73 @@ mod checks {
             ctx.delegate.welcome().window().isVisible(),
             "welcome window back"
         );
+    }
+
+    /// A project with a SOAP 1.2 port marks it "1.2 · unsupported" beside the 1.1 port, and the
+    /// chips fit their rows.
+    pub fn port_chips(ctx: &Ctx) {
+        let tmp = TempDir::new().expect("temp dir");
+        let from = fixtures().join("customer");
+        let set = WsdlSet {
+            files: CUSTOMER_FILES
+                .iter()
+                .map(|f| WsdlFile {
+                    source: from.join(f),
+                    dest: (*f).into(),
+                })
+                .collect(),
+            entry: "CustomerService.wsdl".into(),
+        };
+        let folder = tmp.path().join("Customers");
+        Project::create(&folder, "Customers", &set).expect("create project");
+        let key = ctx
+            .delegate
+            .open_project_at(&folder)
+            .expect("the customer project opens");
+        let project = ctx.delegate.project(key).expect("a window for the project");
+        wait_loaded(&project);
+
+        let outline = project.sidebar().outline().expect("outline built").retain();
+        let ports: Vec<(NSInteger, Retained<SidebarNode>)> = (0..outline.numberOfRows())
+            .filter_map(|row| {
+                let item = outline.itemAtRow(row)?;
+                let node = item.downcast::<SidebarNode>().ok()?;
+                (node.kind() == NodeKind::Port).then_some((row, node))
+            })
+            .collect();
+        let chips: Vec<_> = ports.iter().map(|(_, n)| (n.title(), n.chip())).collect();
+        assert_eq!(
+            chips,
+            [
+                ("CustomerPort".to_owned(), Some("1.1")),
+                ("CustomerPort12".to_owned(), Some("1.2 · unsupported")),
+            ]
+        );
+        project.project_window().layoutIfNeeded();
+        for (row, node) in &ports {
+            let cell = outline
+                .viewAtColumn_row_makeIfNecessary(0, *row, true)
+                .expect("a cell");
+            assert_fits(&cell, &node.title());
+            cell.layoutSubtreeIfNeeded();
+            // The chip is the box beside the name, inside the cell and as tall as a line.
+            let stack = cell.subviews().firstObject().expect("the cell has content");
+            let chip = stack
+                .subviews()
+                .iter()
+                .find(|v| v.downcast_ref::<NSBox>().is_some())
+                .expect("a chip");
+            let frame = chip.convertRect_toView(chip.bounds(), Some(&cell));
+            let outer = cell.bounds();
+            assert!(
+                frame.size.width > 15.0
+                    && frame.size.height > 10.0
+                    && frame.origin.x + frame.size.width <= outer.size.width + 0.5,
+                "{}'s chip fits: {frame:?} in {outer:?}",
+                node.title()
+            );
+        }
+        autoreleasepool(|_| project.project_window().performClose(None));
     }
 
     /// New, rename, duplicate and delete through the window's actions change the rows and the
@@ -1236,23 +1321,22 @@ mod checks {
 
     /// The file of the request selected in `project`.
     fn selected_file(ctx: &Ctx, project: &ProjectWindowController) -> PathBuf {
-        let id = project.selected_request().expect("a selected request");
-        let name = all_nodes(&project.sidebar().roots())
-            .into_iter()
-            .find(|n| n.request() == Some(id))
-            .expect("the selected request's row")
-            .title();
+        let name = selected_row(project).title();
         ctx.project.join("requests").join(format!("{name}.xml"))
     }
 
-    /// The (unsaved, invalid) markers of the selected request's row.
-    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+    /// The sidebar row of the request selected in `project`.
+    fn selected_row(project: &ProjectWindowController) -> Retained<SidebarNode> {
         let id = project.selected_request().expect("a selected request");
         all_nodes(&project.sidebar().roots())
             .into_iter()
             .find(|n| n.request() == Some(id))
             .expect("the selected request's row")
-            .markers()
+    }
+
+    /// The (unsaved, invalid) markers of the selected request's row.
+    fn selected_markers(project: &ProjectWindowController) -> (bool, bool) {
+        selected_row(project).markers()
     }
 
     /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
@@ -1318,6 +1402,20 @@ mod checks {
             project.issues().summary() == "✓ Valid"
         });
 
+        // The request bar names the open request and its operation, and says the text is
+        // well-formed.
+        let bar = project.request_bar();
+        assert_eq!(bar.name(), selected_row(&project).title());
+        assert_eq!(bar.operation().as_deref(), Some("SOAP 1.1 · Lookup"));
+        assert_eq!(bar.state(), "Well-formed");
+        project.project_window().layoutIfNeeded();
+        let chip = bar.operation_chip();
+        assert!(
+            chip.frame().size.width > 60.0,
+            "the chip shows its text: {:?}",
+            chip.frame()
+        );
+
         let replace = |at: usize, len: usize, with: &str| {
             // SAFETY: replacing a range inside the text, as typing over a selection does.
             unsafe {
@@ -1351,7 +1449,18 @@ mod checks {
             "click selects the issue: {selected:?}"
         );
 
-        replace(start, "someday".len(), &date);
+        // Broken XML turns the request bar's state into the error's line; the schema error
+        // before it did not.
+        assert_eq!(bar.state(), "Well-formed");
+        replace(start, "someday".len(), "<");
+        wait_until("the XML error in the request bar", || {
+            bar.state() == format!("XML error, line {line}")
+        });
+
+        replace(start, 1, &date);
+        wait_until("the request bar to read well-formed again", || {
+            bar.state() == "Well-formed"
+        });
         let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
         // SAFETY: the window controller's actions take the sender.
         let sent = unsafe {
@@ -1626,6 +1735,8 @@ mod checks {
         assert!(shows(true), "revealed: {}", log.request_text());
         log.set_revealed(false);
         assert!(shows(false), "masked again: {}", log.request_text());
+        // The send went to a plain-HTTP local server; the TLS wording is tested on Linux.
+        assert_eq!(log.tls_text(), "No TLS (plain HTTP)");
         log.panel().close();
     }
 
@@ -1800,17 +1911,24 @@ mod checks {
         });
     }
 
+    /// `fixtures/customer`'s WSDLs and schemas, entry first.
+    const CUSTOMER_FILES: [&str; 6] = [
+        "CustomerService.wsdl",
+        "CustomerBinding.wsdl",
+        "xsd/customer.xsd",
+        "xsd/common/party.xsd",
+        "xsd/common/party-ids.xsd",
+        "xsd/ext/audit.xsd",
+    ];
+
     /// `fixtures/customer`'s WSDLs and schemas without `xsd/common/party-ids.xsd`, which
     /// `party.xsd` includes.
     fn customer_without_include(dir: &Path) -> PathBuf {
         let from = fixtures().join("customer");
-        for file in [
-            "CustomerService.wsdl",
-            "CustomerBinding.wsdl",
-            "xsd/customer.xsd",
-            "xsd/common/party.xsd",
-            "xsd/ext/audit.xsd",
-        ] {
+        for file in CUSTOMER_FILES
+            .into_iter()
+            .filter(|f| *f != "xsd/common/party-ids.xsd")
+        {
             let to = dir.join(file);
             std::fs::create_dir_all(to.parent().expect("a parent")).expect("mkdir");
             std::fs::copy(from.join(file), &to).expect("copy fixture");

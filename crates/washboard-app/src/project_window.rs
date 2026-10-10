@@ -1,5 +1,5 @@
 //! One window per open project (PLAN §8): unified toolbar, sidebar, and a content split of
-//! editor, issues bar and response pane.
+//! request bar, editor, issues bar and response pane.
 //!
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
 //! answers the Project menu while its window is key. One per project open in the model; the
@@ -27,12 +27,12 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{ImportTarget, ModelError, ProjectKey};
+use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, WellFormedness};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
 use crate::layout;
-use crate::panes::{IssuesBar, ResponsePane};
+use crate::panes::{IssuesBar, RequestBar, ResponsePane};
 use crate::sheets::{ImportSheetController, SettingsSheet};
 use crate::sidebar::SidebarController;
 use crate::text::replace_summary;
@@ -82,6 +82,7 @@ pub struct ProjectIvars {
     /// The toolbar's server popup; its items are `server_ids`, in order.
     servers: Retained<NSPopUpButton>,
     server_ids: RefCell<Vec<ServerId>>,
+    request_bar: RequestBar,
     editor: Retained<EditorController>,
     issues: OnceCell<Retained<IssuesBar>>,
     response: Retained<ResponsePane>,
@@ -295,6 +296,7 @@ impl ProjectWindowController {
             sidebar: SidebarController::new(key, mtm),
             servers: server_popup(mtm),
             server_ids: RefCell::new(Vec::new()),
+            request_bar: RequestBar::new(mtm),
             editor: EditorController::for_project(key, mtm),
             issues: OnceCell::new(),
             response: ResponsePane::new(key, mtm),
@@ -432,18 +434,38 @@ impl ProjectWindowController {
         self.project_window().setDocumentEdited(edited);
     }
 
-    /// The issues bar, ruler and underlines show the editor's issues (`DiagnosticsChanged`).
+    /// The issues bar, ruler and underlines show the editor's issues, and the request bar
+    /// whether its text is well-formed (`DiagnosticsChanged`).
     pub fn show_issues(&self) {
         let key = self.key();
-        let (issues, basis) = self
+        let (issues, basis, state) = self
             .read(|app| {
-                app.project(key)
-                    .and_then(|w| w.editor())
-                    .map(|e| (e.issues().to_vec(), Some(e.issues_basis())))
+                app.project(key).and_then(|w| w.editor()).map(|e| {
+                    (
+                        e.issues().to_vec(),
+                        Some(e.issues_basis()),
+                        e.well_formedness(),
+                    )
+                })
             })
             .flatten()
-            .unwrap_or_default();
+            .unwrap_or((Vec::new(), None, WellFormedness::Pending));
         self.issues().set_issues(issues, basis);
+        self.ivars().request_bar.set_state(state);
+    }
+
+    /// The request bar shows the open request's name, operation and well-formedness
+    /// (`EditorReplaced`, and `SidebarChanged` for a rename).
+    pub fn show_request_bar(&self) {
+        let key = self.key();
+        let summary = self
+            .read(|app| app.project(key)?.request_summary())
+            .flatten();
+        self.ivars().request_bar.show(summary.as_ref());
+    }
+
+    pub fn request_bar(&self) -> &RequestBar {
+        &self.ivars().request_bar
     }
 
     /// Format XML (⌃I) on the open request, applied through the editor as one undo step. A
@@ -623,6 +645,7 @@ impl ProjectWindowController {
         let editor = &self.ivars().editor;
         let issues = IssuesBar::new(editor, mtm);
         content_vc.setView(&content_pane(
+            self.ivars().request_bar.view(),
             editor.view(),
             issues.view(),
             self.response().view(),
@@ -780,8 +803,9 @@ pub fn sidebar_actions_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
 const MIN_EDITOR_HEIGHT: f64 = 260.0;
 const MIN_RESPONSE_HEIGHT: f64 = 200.0;
 
-/// Editor with the issues bar under it, above the response pane.
+/// Editor with the request bar over it and the issues bar under it, above the response pane.
 fn content_pane(
+    bar: &NSStackView,
     editor: &NSScrollView,
     issues: &NSStackView,
     response: &NSStackView,
@@ -789,6 +813,7 @@ fn content_pane(
 ) -> Retained<NSView> {
     let top = layout::fill_column(
         &[
+            Retained::into_super(bar.retain()),
             Retained::into_super(editor.retain()),
             Retained::into_super(issues.retain()),
         ],

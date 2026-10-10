@@ -1,4 +1,5 @@
-//! The issues bar under the editor and the response pane below it (PLAN §8).
+//! The request bar above the editor, the issues bar under it and the response pane below them
+//! (PLAN §8).
 
 use std::cell::{OnceCell, RefCell};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -7,21 +8,110 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
+    NSBox, NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
     NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView, NSStackViewGravity,
-    NSTabView, NSTabViewItem, NSTextField, NSTextView, NSView,
+    NSTabView, NSTabViewItem, NSTextField, NSView,
 };
 use objc2_foundation::{
     NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
     ns_string,
 };
 use washboard_core::model::HistoryId;
-use washboard_ui_model::{Issue, IssuesBasis, ProjectKey, ResponseView};
+use washboard_ui_model::{
+    Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
+};
 
 use crate::app::ModelAccess;
-use crate::editor::EditorController;
+use crate::editor::{EditorController, read_only_text, set_text, text_of};
 use crate::layout;
 use crate::table::TextTable;
+use crate::text::{count, operation_chip, well_formedness_text};
+
+/// The bar above the editor (`docs/gui-draft.html`): the request's name, a chip with its
+/// operation, and the live well-formedness state. Plain views with no actions, so no
+/// Objective-C class of its own.
+#[derive(Debug)]
+pub struct RequestBar {
+    name: Retained<NSTextField>,
+    operation: Retained<NSBox>,
+    operation_label: Retained<NSTextField>,
+    state: Retained<NSTextField>,
+    view: Retained<NSStackView>,
+}
+
+impl RequestBar {
+    pub fn new(mtm: MainThreadMarker) -> RequestBar {
+        let name = NSTextField::labelWithString(ns_string!(""), mtm);
+        name.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
+        layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
+        let (operation, operation_label) = layout::chip("", mtm);
+        operation.setHidden(true);
+        let state = NSTextField::labelWithString(ns_string!(""), mtm);
+        state.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+        let view = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        view.addView_inGravity(&name, NSStackViewGravity::Leading);
+        view.addView_inGravity(&operation, NSStackViewGravity::Leading);
+        view.addView_inGravity(&state, NSStackViewGravity::Trailing);
+        view.setSpacing(10.0);
+        view.setEdgeInsets(layout::insets(6.0, 12.0, 6.0, 12.0));
+        layout::hug_vertically(&view);
+        RequestBar {
+            name,
+            operation,
+            operation_label,
+            state,
+            view,
+        }
+    }
+
+    pub fn view(&self) -> &NSStackView {
+        &self.view
+    }
+
+    /// Shows the open request; `None` with no request open.
+    pub fn show(&self, request: Option<&RequestSummary>) {
+        let name = request.map_or("", |r| r.name.as_str());
+        self.name.setStringValue(&NSString::from_str(name));
+        // A request made before its operation was recorded, or from a file, has no hint.
+        let chip = request
+            .and_then(|r| r.operation.as_ref())
+            .map(operation_chip);
+        self.operation_label
+            .setStringValue(&NSString::from_str(chip.as_deref().unwrap_or_default()));
+        self.operation.setHidden(chip.is_none());
+        self.set_state(request.map_or(WellFormedness::Pending, |r| r.well_formedness));
+    }
+
+    /// The well-formedness state alone, which changes with every check.
+    pub fn set_state(&self, state: WellFormedness) {
+        self.state
+            .setStringValue(&NSString::from_str(&well_formedness_text(state)));
+        let colour = match state {
+            WellFormedness::Pending => NSColor::secondaryLabelColor(),
+            WellFormedness::WellFormed => NSColor::systemGreenColor(),
+            WellFormedness::Error { .. } => NSColor::systemRedColor(),
+        };
+        self.state.setTextColor(Some(&colour));
+    }
+
+    pub fn name(&self) -> String {
+        self.name.stringValue().to_string()
+    }
+
+    /// The operation chip's text; `None` while it is hidden.
+    pub fn operation(&self) -> Option<String> {
+        (!self.operation.isHidden()).then(|| self.operation_label.stringValue().to_string())
+    }
+
+    /// The operation chip, for layout checks.
+    pub fn operation_chip(&self) -> &NSBox {
+        &self.operation
+    }
+
+    pub fn state(&self) -> String {
+        self.state.stringValue().to_string()
+    }
+}
 
 #[derive(Debug)]
 pub struct IssuesIvars {
@@ -72,8 +162,7 @@ impl IssuesBar {
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
-        let summary = NSTextField::labelWithString(ns_string!(""), mtm);
-        summary.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        let summary = layout::small_label("", mtm);
         // A long first message keeps the Hide button in view.
         layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
         // SAFETY: this bar owns the button through its view, so it outlives the button's weak
@@ -241,19 +330,10 @@ impl ResponsePane {
     pub fn new(key: ProjectKey, mtm: MainThreadMarker) -> Retained<Self> {
         let body = EditorController::new(mtm);
         body.text_view().setEditable(false);
-        let headers = NSTextView::scrollableTextView(mtm);
-        headers.setAutohidesScrollers(true);
-        if let Some(text) = headers
-            .documentView()
-            .and_then(|v| v.downcast::<NSTextView>().ok())
-        {
-            text.setEditable(false);
-            crate::editor::code_text(&text);
-        }
+        let headers = read_only_text(mtm);
         let history = TextTable::new(&["Sent", "Server", "Status", "Duration"], mtm);
         let tabs = NSTabView::new(mtm);
-        let status = NSTextField::labelWithString(ns_string!("No response yet"), mtm);
-        status.setFont(Some(&NSFont::systemFontOfSize(11.0)));
+        let status = layout::small_label("No response yet", mtm);
         // A long fault message is cut off rather than widening the window.
         status.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         status.setContentCompressionResistancePriority_forOrientation(
@@ -356,12 +436,7 @@ impl ResponsePane {
 
     /// The Headers tab's text.
     pub fn headers(&self) -> String {
-        self.ivars()
-            .headers
-            .documentView()
-            .and_then(|v| v.downcast::<NSTextView>().ok())
-            .map(|t| t.string().to_string())
-            .unwrap_or_default()
+        text_of(&self.ivars().headers)
     }
 
     pub fn history(&self) -> &TextTable {
@@ -387,7 +462,7 @@ impl ResponsePane {
         let status = match (&response, server, sending) {
             (_, _, true) => "Sending…".to_owned(),
             (Some(response), Some(server), false) => {
-                let sent = sent_text(&sent_formatter(), response.sent_at);
+                let sent = date_text(&sent_formatter(), response.sent_at);
                 format!("{} · {server} · {sent}", status_line(response))
             }
             _ => "No response yet".to_owned(),
@@ -406,14 +481,7 @@ impl ResponsePane {
             .flat_map(|r| &r.headers)
             .map(|(name, value)| format!("{name}: {value}\n"))
             .collect();
-        if let Some(text) = self
-            .ivars()
-            .headers
-            .documentView()
-            .and_then(|v| v.downcast::<NSTextView>().ok())
-        {
-            text.setString(&NSString::from_str(&headers));
-        }
+        set_text(&self.ivars().headers, &headers);
     }
 
     /// Lists the selected request's history (`HistoryChanged`).
@@ -444,7 +512,7 @@ impl ResponsePane {
                     .duration
                     .map_or_else(String::new, |d| format!("{} ms", d.as_millis()));
                 vec![
-                    sent_text(&formatter, e.sent_at),
+                    date_text(&formatter, e.sent_at),
                     server.clone(),
                     status,
                     duration,
@@ -489,10 +557,6 @@ fn summary(
     warnings: usize,
     basis: Option<IssuesBasis>,
 ) -> (String, Retained<NSColor>) {
-    let plural = |n: usize, what: &str| match n {
-        1 => format!("1 {what}"),
-        n => format!("{n} {what}s"),
-    };
     match (errors, warnings, basis) {
         (_, _, None) => (String::new(), NSColor::secondaryLabelColor()),
         (0, _, Some(IssuesBasis::Pending)) => ("Checking…".into(), NSColor::secondaryLabelColor()),
@@ -501,15 +565,13 @@ fn summary(
             NSColor::systemOrangeColor(),
         ),
         (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), NSColor::systemGreenColor()),
-        (0, w, Some(IssuesBasis::Validated)) => {
-            (plural(w, "warning"), NSColor::systemOrangeColor())
-        }
+        (0, w, Some(IssuesBasis::Validated)) => (count(w, "warning"), NSColor::systemOrangeColor()),
         (e, 0, _) => (
-            format!("⚠ {}", plural(e, "error")),
+            format!("⚠ {}", count(e, "error")),
             NSColor::systemRedColor(),
         ),
         (e, w, _) => (
-            format!("⚠ {}, {}", plural(e, "error"), plural(w, "warning")),
+            format!("⚠ {}, {}", count(e, "error"), count(w, "warning")),
             NSColor::systemRedColor(),
         ),
     }
@@ -524,10 +586,11 @@ fn sent_formatter() -> Retained<NSDateFormatter> {
     formatter
 }
 
-/// When a request was sent: the received time differs only by the duration shown beside it,
-/// and a failed send has none.
-fn sent_text(formatter: &NSDateFormatter, sent_at: SystemTime) -> String {
-    let since_epoch = sent_at.duration_since(UNIX_EPOCH).unwrap_or_default();
+/// `time` in `formatter`'s style. The response pane and history show when a request was
+/// sent: the received time differs only by the duration shown beside it, and a failed send
+/// has none.
+pub(crate) fn date_text(formatter: &NSDateFormatter, time: SystemTime) -> String {
+    let since_epoch = time.duration_since(UNIX_EPOCH).unwrap_or_default();
     let date = NSDate::dateWithTimeIntervalSince1970(since_epoch.as_secs_f64());
     formatter.stringFromDate(&date).to_string()
 }

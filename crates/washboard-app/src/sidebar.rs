@@ -1,5 +1,6 @@
 //! The project window's source list: REQUESTS and OPERATIONS (service › port › operation),
-//! with unsaved (•) and invalid (⚠) markers on requests and inline rename.
+//! with unsaved (•) and invalid (⚠) markers on requests, inline rename, and each port's SOAP
+//! version as a chip.
 //!
 //! The rows are the model's [`Sidebar`]; this controller only draws them and turns selection,
 //! rename and double-clicks into model commands. `NSOutlineView` identifies rows by object
@@ -13,19 +14,26 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSFont, NSLayoutAttribute,
-    NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder,
-    NSStackView, NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate,
-    NSTextView, NSUserInterfaceLayoutOrientation, NSView,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
+    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView,
+    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
 };
 use washboard_core::model::{OperationRef, RequestId};
+use washboard_core::wsdl::Protocol;
 use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout;
+use crate::text::port_chip;
+
+/// On a SOAP 1.2 port's row; its operations give their own reason.
+fn soap12_tool_tip() -> &'static NSString {
+    ns_string!("SOAP 1.2 bindings are not supported")
+}
 
 /// What a sidebar row stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +57,9 @@ enum NodeData {
         invalid: bool,
     },
     Service,
-    Port,
+    Port {
+        protocol: Option<Protocol>,
+    },
     Operation {
         operation: OperationRef,
         unsupported: Option<String>,
@@ -103,7 +113,7 @@ impl SidebarNode {
             NodeData::Group => NodeKind::Group,
             NodeData::Request { .. } => NodeKind::Request,
             NodeData::Service => NodeKind::Service,
-            NodeData::Port => NodeKind::Port,
+            NodeData::Port { .. } => NodeKind::Port,
             NodeData::Operation { .. } => NodeKind::Operation,
             NodeData::Placeholder => NodeKind::Placeholder,
         }
@@ -139,6 +149,24 @@ impl SidebarNode {
             NodeData::Operation { operation, .. } => Some(operation),
             _ => None,
         }
+    }
+
+    /// A port row's chip: its SOAP version, and "unsupported" for 1.2.
+    pub fn chip(&self) -> Option<&'static str> {
+        match &self.ivars().data {
+            NodeData::Port { protocol } => port_chip(protocol.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Whether a port row stands for a SOAP 1.2 binding, which Washboard can't send to.
+    fn is_soap12(&self) -> bool {
+        matches!(
+            &self.ivars().data,
+            NodeData::Port {
+                protocol: Some(Protocol::Soap12)
+            }
+        )
     }
 
     /// Why an operation row can't be used, if it can't.
@@ -189,7 +217,10 @@ fn tree(
                         })
                         .collect();
                     let path = format!("port:{}/{}", service.name, port.name);
-                    SidebarNode::new(NodeData::Port, &port.name, path, operations, mtm)
+                    let data = NodeData::Port {
+                        protocol: port.protocol.clone(),
+                    };
+                    SidebarNode::new(data, &port.name, path, operations, mtm)
                 })
                 .collect();
             let path = format!("service:{}", service.name);
@@ -702,23 +733,40 @@ impl SidebarController {
                     name.setToolTip(Some(&NSString::from_str(why)));
                 }
             }
+            NodeKind::Port if node.is_soap12() => {
+                // Greyed like its operations, which say the same in their tool tips.
+                name.setTextColor(Some(&NSColor::disabledControlTextColor()));
+                name.setToolTip(Some(soap12_tool_tip()));
+            }
             NodeKind::Service | NodeKind::Port => {}
         }
         let mut views = vec![Retained::into_super(Retained::into_super(name.clone()))];
+        let chip = node.chip().map(|text| layout::chip(text, mtm));
+        if let Some((chip, label)) = &chip {
+            if node.is_soap12() {
+                label.setTextColor(Some(&NSColor::disabledControlTextColor()));
+                chip.setToolTip(Some(soap12_tool_tip()));
+            }
+            views.push(Retained::into_super(chip.clone()));
+        }
         let marker = match node.markers() {
             (_, true) => Some(("⚠", NSColor::systemOrangeColor())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
             (false, false) => None,
         };
         if let Some((text, color)) = marker {
-            let marker = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+            let marker = layout::small_label(text, mtm);
             marker.setTextColor(Some(&color));
-            marker.setFont(Some(&NSFont::systemFontOfSize(11.0)));
             views.push(Retained::into_super(Retained::into_super(marker)));
         }
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        stack.setAlignment(NSLayoutAttribute::FirstBaseline);
+        // A box has no baseline to line up with the name's; centre a chip instead.
+        stack.setAlignment(if chip.is_some() {
+            NSLayoutAttribute::CenterY
+        } else {
+            NSLayoutAttribute::FirstBaseline
+        });
         // The marker stays in view however long the name: the name gives up width first.
         Retained::into_super(layout::cell(&stack, Some(&name), mtm))
     }

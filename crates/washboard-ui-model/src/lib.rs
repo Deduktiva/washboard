@@ -32,7 +32,7 @@ mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
 pub use assist::{CompletionItem, CompletionKind, Completions, Hover};
-pub use diagnostics::{Issue, IssuesBasis};
+pub use diagnostics::{Issue, IssuesBasis, WellFormedness};
 pub use editor::Editor;
 pub use event::Event;
 pub use format::{FormatSettings, INDENT_RANGE, Reformat};
@@ -44,6 +44,6 @@ pub use import::{
 };
 pub use send::{LOG_CAPACITY, LogEntry, ResponseView};
 pub use window::{
-    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, SchemaState, ServiceNode,
-    Sidebar,
+    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
+    ServiceNode, Sidebar,
 };

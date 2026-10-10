@@ -77,6 +77,19 @@ pub enum IssuesBasis {
     WellFormedOnly,
 }
 
+/// Whether the editor's text is well-formed XML: the request bar's live indicator. Like the
+/// issues it comes from, it may lag the text by up to a debounce interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WellFormedness {
+    /// No check has finished since the request was opened.
+    Pending,
+    WellFormed,
+    /// `line` is 1-based; `None` if the parser gave no position.
+    Error {
+        line: Option<u32>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Check {
     /// Replaces the well-formedness issue and keeps the rest until the full check catches up.
@@ -149,11 +162,7 @@ impl App {
                         "The WSDL could not be loaded ({m}); only well-formedness is checked."
                     )),
                 };
-                let hint = window
-                    .project
-                    .request(request)
-                    .ok()
-                    .and_then(|r| r.operation);
+                let hint = window.request_operation(request);
                 self.spawn(
                     move || full_check(&text, &against, hint.as_ref()),
                     move |app, issues| app.check_done(key, request, version, check, issues),
@@ -185,6 +194,8 @@ impl App {
         if check == Check::Full {
             editor.checked = Some((version, schema));
         }
+        // Every check, the full one too, finds a well-formedness error if there is one.
+        editor.well_formedness_checked = true;
         match check {
             Check::WellFormed => {
                 editor
@@ -197,9 +208,7 @@ impl App {
         let invalid = editor.issues.iter().any(Issue::is_error);
         let marker_changed = window
             .sidebar
-            .requests
-            .iter_mut()
-            .find(|r| r.id == request)
+            .request_mut(request)
             .is_some_and(|row| std::mem::replace(&mut row.invalid, invalid) != invalid);
         self.events.push(Event::DiagnosticsChanged { project: key });
         if marker_changed {
