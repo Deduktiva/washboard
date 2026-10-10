@@ -1,6 +1,9 @@
 //! Per-project window state: the sidebar tree, selection, and the server popup.
 
+use std::cmp::Ordering;
+use std::iter::Peekable;
 use std::path::{Path, PathBuf};
+use std::str::Chars;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use washboard_core::diag::Diagnostic;
@@ -97,6 +100,8 @@ impl SchemaState {
 /// The sidebar's two sections (PLAN §8).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sidebar {
+    /// By name in Finder's order: case-insensitive, numbers by value. The database's
+    /// `sort_order` is not used.
     pub requests: Vec<RequestRow>,
     /// Service › port › operation. Empty while the schema loads.
     pub services: Vec<ServiceNode>,
@@ -269,11 +274,11 @@ impl ProjectWindow {
             .or_else(|| self.servers.first().map(|s| s.id))
     }
 
-    /// Re-reads the request rows, keeping dirty and invalid markers of requests that still
-    /// exist.
+    /// Re-reads the request rows, sorted by name, keeping dirty and invalid markers of
+    /// requests that still exist.
     pub(crate) fn reload_requests(&mut self) -> Result<(), washboard_core::project::ProjectError> {
         let old = std::mem::take(&mut self.sidebar.requests);
-        self.sidebar.requests = self
+        let mut rows: Vec<RequestRow> = self
             .project
             .requests()?
             .into_iter()
@@ -287,6 +292,8 @@ impl ProjectWindow {
                 }
             })
             .collect();
+        rows.sort_by(|a, b| finder_order(&a.name, &b.name));
+        self.sidebar.requests = rows;
         if let Some(sel) = self.selected_request()
             && !self.sidebar.requests.iter().any(|r| r.id == sel)
         {
@@ -305,6 +312,40 @@ impl ProjectWindow {
         self.servers = self.project.servers()?;
         Ok(())
     }
+}
+
+/// Finder's order for names: case-insensitive, and runs of digits compared by value, so
+/// "Lookup 2" comes before "lookup 10". Equal names under those rules fall back to plain
+/// string order, so the order never depends on the database's.
+pub(crate) fn finder_order(a: &str, b: &str) -> Ordering {
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    while let (Some(&cx), Some(&cy)) = (x.peek(), y.peek()) {
+        let ord = if cx.is_ascii_digit() && cy.is_ascii_digit() {
+            let (nx, ny) = (digits(&mut x), digits(&mut y));
+            let (tx, ty) = (nx.trim_start_matches('0'), ny.trim_start_matches('0'));
+            tx.len().cmp(&ty.len()).then_with(|| tx.cmp(ty))
+        } else {
+            x.next();
+            y.next();
+            cx.to_lowercase().cmp(cy.to_lowercase())
+        };
+        if ord != Ordering::Equal {
+            return ord;
+        }
+    }
+    x.peek()
+        .is_some()
+        .cmp(&y.peek().is_some())
+        .then_with(|| a.cmp(b))
+}
+
+/// The run of ASCII digits at the front of `chars`, taken from it.
+fn digits(chars: &mut Peekable<Chars<'_>>) -> String {
+    let mut run = String::new();
+    while let Some(c) = chars.next_if(char::is_ascii_digit) {
+        run.push(c);
+    }
+    run
 }
 
 /// The operations section from the WSDL's services, in document order.
