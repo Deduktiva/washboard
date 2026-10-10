@@ -39,6 +39,16 @@ pub fn run(dir: &Path, name: &str, json: bool, show: Option<usize>) -> anyhow::R
         let rec = project.load_history(entry.id)?;
         let mut out = io::stdout().lock();
         writeln!(out, "--- request sent to {}", rec.entry.url)?;
+        match &rec.request_head {
+            Some(head) => {
+                writeln!(out, "{}", head.start_line)?;
+                for (k, v) in &head.headers {
+                    writeln!(out, "{k}: {v}")?;
+                }
+            }
+            None => writeln!(out, "(headers not recorded)")?,
+        }
+        writeln!(out)?;
         out.write_all(&rec.request_body)?;
         writeln!(out)?;
         match &rec.response_body {
