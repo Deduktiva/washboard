@@ -105,7 +105,7 @@ impl App {
 /// before the n-th non-whitespace character stays before it. Falls back to the same offset,
 /// clamped, if the texts differ in more than whitespace.
 fn map_offset(old: &str, new: &str, at: usize) -> usize {
-    let is_ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let is_ws = xml::is_xml_ws_char;
     let solid = |s: &str| s.chars().filter(|c| !is_ws(*c)).collect::<String>();
     let at = at.min(old.len());
     if solid(old) != solid(new) {
