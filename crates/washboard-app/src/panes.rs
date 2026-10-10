@@ -196,16 +196,7 @@ impl IssuesBar {
         let summary = layout::small_label("", mtm);
         // A long first message keeps the Hide button in view.
         layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
-        // SAFETY: this bar owns the button through its view, so it outlives the button's weak
-        // target reference.
-        let hide = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                ns_string!("Hide"),
-                Some(&this),
-                Some(sel!(toggleIssues:)),
-                mtm,
-            )
-        };
+        let hide = layout::button("Hide", &this, sel!(toggleIssues:), mtm);
         hide.setControlSize(NSControlSize::Small);
         let header = layout::row(
             &[layout::view(summary.clone()), layout::view(hide.clone())],

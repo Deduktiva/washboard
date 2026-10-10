@@ -11,10 +11,10 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::path::{Path, PathBuf};
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject, Sel};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSButton, NSColor, NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn,
+    NSColor, NSControlStateValue, NSControlStateValueOff, NSControlStateValueOn,
     NSControlTextEditingDelegate, NSImage, NSImageView, NSLayoutConstraintOrientation,
     NSLayoutPriorityDefaultHigh, NSLineBreakMode, NSOutlineView, NSOutlineViewDataSource,
     NSOutlineViewDelegate, NSPopUpButton, NSSplitViewController, NSSplitViewItem, NSStackView,
@@ -464,13 +464,13 @@ impl SettingsWindowController {
     /// The General pane's buttons under the WSDL files.
     fn wsdl_buttons(&self, mtm: MainThreadMarker) -> Vec<Retained<NSView>> {
         vec![
-            view(target_button(
+            view(layout::button(
                 "Show in Finder",
                 self,
                 sel!(showWsdlInFinder:),
                 mtm,
             )),
-            view(target_button(
+            view(layout::button(
                 "Replace WSDL…",
                 self,
                 sel!(replaceWsdl:),
@@ -864,25 +864,6 @@ pub(crate) fn project_note(project: &str, mtm: MainThreadMarker) -> Retained<NSV
             "These settings affect only the project “{project}”."
         ))
         .build()
-}
-
-pub(crate) fn target_button(
-    title: &str,
-    target: &NSObject,
-    action: Sel,
-    mtm: MainThreadMarker,
-) -> Retained<NSButton> {
-    let target: &AnyObject = target;
-    // SAFETY: the settings window owns every button and its target, so the target outlives
-    // the button's weak target reference.
-    unsafe {
-        NSButton::buttonWithTitle_target_action(
-            &NSString::from_str(title),
-            Some(target),
-            Some(action),
-            mtm,
-        )
-    }
 }
 
 fn settings_window(mtm: MainThreadMarker) -> Retained<NSWindow> {
