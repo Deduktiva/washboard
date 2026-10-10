@@ -67,7 +67,7 @@ mod checks {
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
         NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
-        NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode, NSView,
+        NSTableCellView, NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSView,
         NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
@@ -1803,6 +1803,13 @@ mod checks {
             .flatten()
             .expect("a response");
         assert!(!headers.is_empty());
+        let headers_font = response
+            .headers_view()
+            .documentView()
+            .and_then(|v| v.downcast::<NSTextView>().ok())
+            .and_then(|v| v.font())
+            .expect("the Headers tab has a font");
+        assert!(headers_font.isFixedPitch(), "headers in the code font");
         for (name, value) in &headers {
             let line = format!("{name}: {value}");
             assert!(

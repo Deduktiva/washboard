@@ -821,16 +821,19 @@ fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
         container.setContainerSize(NSSize::new(f64::MAX, f64::MAX));
         container.setWidthTracksTextView(false);
     }
-    // SAFETY: an immutable AppKit constant.
-    let weight = unsafe { NSFontWeightRegular };
-    text_view.setFont(Some(&NSFont::monospacedSystemFontOfSize_weight(
-        FONT_SIZE, weight,
-    )));
+    text_view.setFont(Some(&code_font()));
     text_view.setRichText(false);
     text_view.setAllowsUndo(true);
     text_view.setUsesFindBar(true);
     code_text(&text_view);
     text_view
+}
+
+/// The editor's font, also used wherever XML or headers are shown as text.
+fn code_font() -> Retained<NSFont> {
+    // SAFETY: an immutable AppKit constant.
+    let weight = unsafe { NSFontWeightRegular };
+    NSFont::monospacedSystemFontOfSize_weight(FONT_SIZE, weight)
 }
 
 /// Turns off everything meant for prose in a text view that shows XML: substitutions,
@@ -857,6 +860,10 @@ pub(crate) fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
     scroll.setAutohidesScrollers(true);
     if let Some(text) = scroll_text_view(&scroll) {
         text.setEditable(false);
+        // `scrollableTextView` starts as rich text in the proportional system font; plain
+        // text keeps the font for every `setString`.
+        text.setRichText(false);
+        text.setFont(Some(&code_font()));
         code_text(&text);
     }
     scroll

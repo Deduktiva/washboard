@@ -426,6 +426,11 @@ impl ResponsePane {
         &self.ivars().body
     }
 
+    /// The Headers tab's text view.
+    pub fn headers_view(&self) -> &NSScrollView {
+        &self.ivars().headers
+    }
+
     /// The Headers tab's text.
     pub fn headers(&self) -> String {
         text_of(&self.ivars().headers)
