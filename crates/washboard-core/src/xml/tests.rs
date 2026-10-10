@@ -769,9 +769,13 @@ fn pretty_prints_element_only_content() {
     let expected = "<?xml version=\"1.0\"?>\n<!--top-->\n<a xmlns=\"urn:a\" x='v&amp;'>\n  <b>\n    <c/>\n    \
                     <!-- note -->\n    <?pi x?>\n  </b>\n  <d>  text  &lt; <i>mixed</i> </d>\n  <e> </e>\n  \
                     <f></f>\n  <g><![CDATA[ x ]]></g>\n</a>\n";
-    let out = pretty_print(input).expect("well-formed");
+    let out = pretty_print(input, 2).expect("well-formed");
     assert_eq!(out, expected);
-    assert_eq!(pretty_print(&out).expect("well-formed"), out, "idempotent");
+    assert_eq!(
+        pretty_print(&out, 2).expect("well-formed"),
+        out,
+        "idempotent"
+    );
 }
 
 #[test]
@@ -783,7 +787,42 @@ fn pretty_keeps_formatted_fixtures_unchanged() {
         "legacy-rpc/requests/valid-lookup.xml",
     ] {
         let text = read_fixture(rel);
-        assert_eq!(pretty_print(&text).expect("well-formed"), text, "{rel}");
+        assert_eq!(pretty_print(&text, 2).expect("well-formed"), text, "{rel}");
+    }
+}
+
+#[test]
+fn pretty_indent_width_is_a_parameter() {
+    let input = "<s:E xmlns:s=\"urn:s\"\r\n      xmlns:m=\"urn:m\">\r\n<s:B><m:Op><m:x>1</m:x></m:Op></s:B></s:E>";
+    for indent in [1, 4, 8] {
+        let pad = |level: usize| " ".repeat(level * indent);
+        // Attributes on their own line align with the first, whatever the indent.
+        let expected = format!(
+            "<s:E xmlns:s=\"urn:s\"\r\n     xmlns:m=\"urn:m\">\r\n{}<s:B>\r\n{}<m:Op>\r\n{}<m:x>1</m:x>\r\n{}</m:Op>\r\n{}</s:B>\r\n</s:E>\r\n",
+            pad(1),
+            pad(2),
+            pad(3),
+            pad(2),
+            pad(1),
+        );
+        let out = pretty_print(input, indent).expect("well-formed");
+        assert_eq!(out, expected, "indent {indent}");
+        assert_eq!(
+            pretty_print(&out, indent),
+            Ok(out.clone()),
+            "idempotent at {indent}"
+        );
+        // A nested start tag's own-line attributes align under its first attribute.
+        let nested = pretty_print("<a><b x=\"1\"\n y=\"2\"/></a>", indent).expect("well-formed");
+        let col = indent + "<b ".len();
+        assert_eq!(
+            nested,
+            format!(
+                "<a>\n{}<b x=\"1\"\n{}y=\"2\"/>\n</a>\n",
+                pad(1),
+                " ".repeat(col)
+            )
+        );
     }
 }
 
@@ -791,24 +830,24 @@ fn pretty_keeps_formatted_fixtures_unchanged() {
 fn pretty_reindents_and_aligns_attribute_lines() {
     let input = "<s:E xmlns:s=\"urn:s\"\n      xmlns:m=\"urn:m\" a=\"1\">\n<s:B>\n        <m:Op><m:x>1</m:x></m:Op></s:B></s:E>";
     let expected = "<s:E xmlns:s=\"urn:s\"\n     xmlns:m=\"urn:m\" a=\"1\">\n  <s:B>\n    <m:Op>\n      <m:x>1</m:x>\n    </m:Op>\n  </s:B>\n</s:E>\n";
-    assert_eq!(pretty_print(input).expect("well-formed"), expected);
+    assert_eq!(pretty_print(input, 2).expect("well-formed"), expected);
     // CRLF input keeps CRLF.
-    let out = pretty_print("<a>\r\n<b/></a>").expect("well-formed");
+    let out = pretty_print("<a>\r\n<b/></a>", 2).expect("well-formed");
     assert_eq!(out, "<a>\r\n  <b/>\r\n</a>\r\n");
     // Every fixture formats to something well-formed and stable.
     for (path, text) in all_fixtures() {
-        let Ok(out) = pretty_print(&text) else {
+        let Ok(out) = pretty_print(&text, 2) else {
             continue;
         };
         assert_eq!(check_well_formed(&out), Ok(()), "{path:?}");
-        assert_eq!(pretty_print(&out).as_ref(), Ok(&out), "{path:?}");
+        assert_eq!(pretty_print(&out, 2).as_ref(), Ok(&out), "{path:?}");
     }
 }
 
 #[test]
 fn pretty_refuses_broken_xml() {
     let text = read_fixture("customer/requests/invalid-not-well-formed.xml");
-    let d = pretty_print(&text).expect_err("not well-formed");
+    let d = pretty_print(&text, 2).expect_err("not well-formed");
     assert_eq!(d.pos.map(|p| p.line), Some(9));
 }
 
@@ -872,7 +911,7 @@ fn exercise(s: &str, rng: &mut fastrand::Rng) {
     if let Some(e) = &wf {
         assert!(e.offset <= s.len());
     }
-    let pretty = pretty_print(s);
+    let pretty = pretty_print(s, 2);
     assert_eq!(pretty.is_ok(), wf.is_none(), "{s:?}");
     for _ in 0..6 {
         let at = rng.usize(..s.len() + 2);
@@ -909,7 +948,7 @@ fn deep_nesting_does_not_overflow() {
     // The formatter only accepts well-formed input, so its depth is bounded by the same limit.
     let depth = 250;
     let s = format!("{}x{}", "<a><b/>".repeat(depth), "</a>".repeat(depth));
-    let out = pretty_print(&s).expect("well-formed");
+    let out = pretty_print(&s, 2).expect("well-formed");
     assert_eq!(check_well_formed(&out), Ok(()));
 }
 

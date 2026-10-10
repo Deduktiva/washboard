@@ -140,6 +140,16 @@ enum RequestCommand {
     Delete {
         name: String,
     },
+    /// Re-indent a request's XML, as Format XML (⌃I) in the app does; prints nothing.
+    Format {
+        name: String,
+        /// Spaces per level. The app's own setting is not read.
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=8))]
+        indent: u8,
+        /// Write nothing; exit with 1 if the request is not formatted.
+        #[arg(long)]
+        check: bool,
+    },
     /// Validate a request against the project's WSDL.
     Validate {
         name: String,
@@ -275,6 +285,11 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
             RequestCommand::Rename { name, new_name } => request::rename(dir, &name, &new_name),
             RequestCommand::Duplicate { name } => request::duplicate(dir, &name),
             RequestCommand::Delete { name } => request::delete(dir, &name),
+            RequestCommand::Format {
+                name,
+                indent,
+                check,
+            } => request::format(dir, &name, indent.into(), check),
             RequestCommand::Validate { name } => validation::command(dir, &name),
             RequestCommand::Send {
                 name,

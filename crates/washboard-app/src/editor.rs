@@ -588,6 +588,36 @@ impl EditorController {
         self.highlight(text, 0..text.len());
     }
 
+    /// Replaces the UTF-16 range `range` with `text` as the user would, so it is one undo step
+    /// named `action` and reaches the model as an edit, then selects `selection`.
+    pub fn apply_edit(
+        &self,
+        range: Range<usize>,
+        text: &str,
+        selection: Range<usize>,
+        action: &str,
+    ) {
+        let text_view = self.text_view();
+        let range = NSRange::new(range.start, range.end.saturating_sub(range.start));
+        let text = NSString::from_str(text);
+        // Typing before and after stays out of this step's undo.
+        text_view.breakUndoCoalescing();
+        if !text_view.shouldChangeTextInRange_replacementString(range, Some(&text)) {
+            return;
+        }
+        // SAFETY: a plain getter; the text view always has a text storage.
+        let Some(storage) = (unsafe { text_view.textStorage() }) else {
+            return;
+        };
+        storage.replaceCharactersInRange_withString(range, &text);
+        text_view.didChangeText();
+        text_view.breakUndoCoalescing();
+        if let Some(undo) = text_view.undoManager() {
+            undo.setActionName(&NSString::from_str(action));
+        }
+        self.select_range(selection);
+    }
+
     /// Selects the UTF-16 range `range`, clamped to the text, and scrolls to it.
     pub fn select_range(&self, range: Range<usize>) {
         let len = self.text_view().string().length();

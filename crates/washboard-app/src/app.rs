@@ -14,18 +14,21 @@ use std::sync::Arc;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSMenuItem,
 };
-use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSString, NSUserDefaults};
 use washboard_core::secrets::SecretStore;
 use washboard_ui_model::{
-    App, DialogAnswer, DialogId, Dialogs, Event, FrontEnd, ImportTarget, ModelError, ProjectKey,
-    TimerId,
+    App, DialogAnswer, DialogId, Dialogs, Event, FormatSettings, FrontEnd, ImportTarget,
+    ModelError, ProjectKey, TimerId,
 };
 
+use crate::app_settings::{self, AppSettings};
 use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
 use crate::http_log::HttpLog;
 use crate::menu;
@@ -41,6 +44,9 @@ pub struct Options {
     pub secrets: Arc<dyn SecretStore>,
     /// `None`: AppKit open panels and alerts.
     pub dialogs: Option<Box<dyn Dialogs>>,
+    /// The user defaults suite for the app's settings; `None`: the app's own defaults
+    /// (`at.deduktiva.washboard` when run from the bundle).
+    pub defaults_suite: Option<String>,
 }
 
 impl Options {
@@ -50,6 +56,7 @@ impl Options {
             state_dir: default_state_dir(),
             secrets: Arc::new(washboard_core::secrets::KeychainSecretStore),
             dialogs: None,
+            defaults_suite: None,
         }
     }
 }
@@ -72,6 +79,8 @@ pub struct AppDelegateIvars {
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
     http_log: OnceCell<Retained<HttpLog>>,
     new_project: RefCell<Option<Retained<ImportSheetController>>>,
+    defaults: OnceCell<Retained<NSUserDefaults>>,
+    settings: OnceCell<Retained<AppSettings>>,
 }
 
 define_class!(
@@ -178,8 +187,13 @@ define_class!(
 
         #[unsafe(method(saveAll:))]
         fn save_all(&self, _sender: Option<&AnyObject>) {
-            self.update(App::save_all);
-            self.sync();
+            self.save_all_requests();
+        }
+
+        #[unsafe(method(showSettings:))]
+        fn show_settings(&self, _sender: Option<&AnyObject>) {
+            let settings = self.read(App::format_settings).unwrap_or_default();
+            self.app_settings().show(settings);
         }
 
         #[unsafe(method(showHttpLog:))]
@@ -204,8 +218,52 @@ impl AppDelegate {
             dialogs,
             secrets: options.secrets,
         };
-        *this.ivars().model.borrow_mut() = Some(App::new(options.state_dir, front));
+        let defaults = options
+            .defaults_suite
+            .and_then(|suite| {
+                NSUserDefaults::initWithSuiteName(
+                    NSUserDefaults::alloc(),
+                    Some(&NSString::from_str(&suite)),
+                )
+            })
+            .unwrap_or_else(NSUserDefaults::standardUserDefaults);
+        let mut model = App::new(options.state_dir, front);
+        model.set_format_settings(app_settings::load(&defaults));
+        *this.ivars().model.borrow_mut() = Some(model);
+        let _ = this.ivars().defaults.set(defaults);
         this
+    }
+
+    /// The user defaults the app's settings live in.
+    pub fn defaults(&self) -> &NSUserDefaults {
+        self.ivars().defaults.get().expect("set in new()")
+    }
+
+    /// The settings window changed a setting: the model uses it from now on, the defaults keep
+    /// it for the next launch.
+    pub fn set_format_settings(&self, settings: FormatSettings) {
+        self.update(|app| app.set_format_settings(settings));
+        let stored = self.read(App::format_settings).unwrap_or(settings);
+        app_settings::store(self.defaults(), stored);
+    }
+
+    /// The app's settings window, created on first use.
+    pub fn app_settings(&self) -> &AppSettings {
+        self.ivars()
+            .settings
+            .get_or_init(|| AppSettings::new(self.mtm()))
+    }
+
+    /// File ▸ Save All: with format on save, formats each project's edited request first (one
+    /// undo step each, as Format XML), then saves every edit.
+    pub fn save_all_requests(&self) {
+        for key in self.read(App::format_on_save).unwrap_or_default() {
+            if let Some(controller) = self.project(key) {
+                controller.format_request(false);
+            }
+        }
+        self.update(App::save_all);
+        self.sync();
     }
 
     /// Runs `f` on the model and alerts with `title` if it fails, then applies the events.

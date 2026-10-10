@@ -15,6 +15,7 @@ mod commands;
 mod diagnostics;
 mod editor;
 mod event;
+mod format;
 mod front_end;
 mod import;
 mod send;
@@ -34,6 +35,7 @@ pub use assist::{CompletionItem, CompletionKind, Completions, Hover};
 pub use diagnostics::{Issue, IssuesBasis};
 pub use editor::Editor;
 pub use event::Event;
+pub use format::{FormatSettings, INDENT_RANGE, Reformat};
 pub use front_end::{
     Alert, Confirm, DialogAnswer, DialogId, Dialogs, FrontEnd, MainThread, TimerId, Timers,
 };

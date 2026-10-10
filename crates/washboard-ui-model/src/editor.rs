@@ -200,6 +200,7 @@ impl App {
     /// exists.
     pub(crate) fn load_editor(&mut self, key: ProjectKey) {
         let version = self.next();
+        let indent = self.format.indent;
         let Some(window) = self.window_mut(key) else {
             return;
         };
@@ -215,7 +216,7 @@ impl App {
             Some(Err(e)) => Some(e),
             None => None,
         };
-        App::load_history(window);
+        App::load_history(window, indent);
         self.stop_timers(key);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);

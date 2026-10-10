@@ -13,8 +13,8 @@ use washboard_core::xml::TokenKind;
 use crate::fake::Fake;
 use crate::server;
 use crate::{
-    App, CheckState, CompletionKind, Completions, DialogAnswer, Event, ImportTarget, Issue,
-    IssuesBasis, ModelError, OperationNode, ProjectKey, SchemaState,
+    App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
+    ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey, Reformat, SchemaState,
 };
 
 fn fixtures() -> PathBuf {
@@ -1449,4 +1449,118 @@ fn a_fresh_end_tag_offers_the_open_element() {
     app.edit(key, at..end, "</").expect("edit");
     let c = app.completions(key, at + 2).expect("end tag");
     assert_eq!(texts(&c), ["cus:status"]);
+}
+
+// ---------------------------------------------------------------- Format XML
+
+fn formatted(app: &App, key: ProjectKey, selection: std::ops::Range<usize>) -> Option<Reformat> {
+    app.format_request(key, selection).expect("format")
+}
+
+#[test]
+fn format_xml_reindents_as_an_edit_and_keeps_the_selection() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    set_text(&mut app, key, "<a><b>xy</b><c/></a>");
+    assert!(app.save_all());
+    // The selection covers `y`.
+    let reformat = formatted(&app, key, 7..8).expect("changes");
+    let text = editor_text(&app, key);
+    app.edit(key, reformat.range.clone(), &reformat.text)
+        .expect("edit");
+    let expected = "<a>\n  <b>xy</b>\n  <c/>\n</a>\n";
+    assert_eq!(editor_text(&app, key), expected);
+    assert_eq!(&expected[reformat.selection.clone()], "y");
+    // The smallest edit: the unchanged `<a>` is not part of it.
+    assert_eq!(reformat.range.start, 3, "{text:?}");
+    assert!(app.project(key).expect("open").edited(), "dirty");
+    fake.advance(&mut app, ms(1000));
+    assert_eq!(on_disk(&app, key, first), expected, "autosaved");
+
+    assert_eq!(formatted(&app, key, 0..0), None, "already formatted");
+    app.set_format_settings(FormatSettings {
+        indent: 4,
+        on_save: false,
+    });
+    let reformat = formatted(&app, key, 0..0).expect("changes at 4");
+    app.edit(key, reformat.range, &reformat.text).expect("edit");
+    assert_eq!(
+        editor_text(&app, key),
+        "<a>\n    <b>xy</b>\n    <c/>\n</a>\n"
+    );
+}
+
+#[test]
+fn format_xml_refuses_a_malformed_request() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    set_text(&mut app, key, "<a><b></a>");
+    assert!(matches!(
+        app.format_request(key, 0..0),
+        Err(ModelError::NotWellFormed(_))
+    ));
+    assert_eq!(editor_text(&app, key), "<a><b></a>");
+}
+
+#[test]
+fn format_indent_is_clamped() {
+    let setup = Setup::new();
+    let (_fake, mut app) = setup.launch();
+    assert_eq!(app.format_settings(), FormatSettings::default());
+    for (asked, kept) in [(0, 1), (3, 3), (20, 8)] {
+        app.set_format_settings(FormatSettings {
+            indent: asked,
+            on_save: true,
+        });
+        assert_eq!(app.format_settings().indent, kept);
+    }
+}
+
+#[test]
+fn format_on_save_is_for_save_all_with_edits_only() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    set_text(&mut app, key, "<a><b/></a>");
+    assert_eq!(app.format_on_save(), [], "off by default");
+    app.set_format_settings(FormatSettings {
+        indent: 2,
+        on_save: true,
+    });
+    assert_eq!(app.format_on_save(), [key]);
+    // Autosave writes the text as typed.
+    fake.advance(&mut app, ms(1000));
+    assert_eq!(on_disk(&app, key, first), "<a><b/></a>");
+    assert_eq!(app.format_on_save(), [], "nothing unsaved");
+}
+
+#[test]
+fn new_requests_and_responses_use_the_indent() {
+    let setup = Setup::new();
+    let (url, server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
+    let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    app.set_format_settings(FormatSettings {
+        indent: 4,
+        on_save: false,
+    });
+    send_and_wait(&fake, &mut app, key);
+    server.join().expect("server");
+    let window = app.project(key).expect("open");
+    let entry = window.history()[0].id;
+    let body = window.response().expect("response").body.clone();
+    assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 4).ok());
+    app.set_format_settings(FormatSettings::default());
+    app.show_history(key, entry).expect("show");
+    let window = app.project(key).expect("open");
+    let body = window.response().expect("response").body.clone();
+    assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 2).ok());
+
+    app.set_format_settings(FormatSettings {
+        indent: 4,
+        on_save: false,
+    });
+    let op = lookup(&app, key, "LegacyPort").operation;
+    app.new_request(key, &op).expect("new");
+    let text = editor_text(&app, key);
+    assert!(text.contains("\n    <soapenv:Body>"), "{text}");
+    assert_eq!(formatted(&app, key, 0..0), None, "{text}");
 }
