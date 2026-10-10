@@ -167,6 +167,34 @@ mod checks {
             .collect()
     }
 
+    /// Titles and enabled states of `row`'s context menu, as it would open.
+    fn context_menu(project: &ProjectWindowController, row: NSInteger) -> Vec<(String, bool)> {
+        let menu = NSMenu::new(MainThreadMarker::new().expect("main thread"));
+        project.sidebar().fill_context_menu(&menu, row);
+        menu.itemArray()
+            .iter()
+            .map(|i| (i.title().to_string(), i.isEnabled()))
+            .collect()
+    }
+
+    /// Chooses `title` in `row`'s context menu, as a click on it would.
+    fn context_click(ctx: &Ctx, project: &ProjectWindowController, row: NSInteger, title: &str) {
+        let menu = NSMenu::new(MainThreadMarker::new().expect("main thread"));
+        project.sidebar().fill_context_menu(&menu, row);
+        let item = menu
+            .itemArray()
+            .iter()
+            .find(|i| i.title().to_string() == title)
+            .unwrap_or_else(|| panic!("{title:?} in the context menu of row {row}"));
+        let action = item.action().expect("an action");
+        // SAFETY: reading the item's target; the sidebar's actions take the sender.
+        let sent = unsafe {
+            ctx.app
+                .sendAction_to_from(action, item.target().as_deref(), Some(&item))
+        };
+        assert!(sent, "{title:?} reached the sidebar");
+    }
+
     fn request_names(project: &ProjectWindowController) -> Vec<String> {
         project.sidebar().roots()[0]
             .children()
@@ -651,16 +679,6 @@ mod checks {
         assert_eq!(ids, expected, "toolbar items");
         assert_eq!(toolbar.displayMode(), NSToolbarDisplayMode::IconOnly);
 
-        // The sidebar's ⋯ menu offers the request commands with no button of their own.
-        let more =
-            washboard_app::sidebar_actions_menu(MainThreadMarker::new().expect("main thread"));
-        let titles: Vec<String> = more
-            .itemArray()
-            .iter()
-            .map(|i| i.title().to_string())
-            .collect();
-        assert_eq!(titles, ["Rename", "Duplicate", "Validate"]);
-
         // Stacked views share the height instead of drawing over each other.
         window.layoutIfNeeded();
         let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
@@ -733,6 +751,54 @@ mod checks {
             outline.numberOfRows() as usize,
             rows,
             "sidebar rows after reload"
+        );
+
+        // Context menus: New Request on the REQUESTS header and on operations (disabled on an
+        // unsupported one), nothing on the OPERATIONS header, services and ports.
+        let row_of = |f: &dyn Fn(&SidebarNode) -> bool| {
+            (0..outline.numberOfRows())
+                .find(|&row| {
+                    outline
+                        .itemAtRow(row)
+                        .is_some_and(|i| i.downcast_ref::<SidebarNode>().is_some_and(f))
+                })
+                .expect("a matching row")
+        };
+        let requests_header = row_of(&|n| n.title() == "REQUESTS");
+        assert_eq!(
+            context_menu(&project, requests_header),
+            [("New Request".to_string(), true)]
+        );
+        let ops_header = row_of(&|n| n.title() == "OPERATIONS");
+        assert!(context_menu(&project, ops_header).is_empty());
+        let service = row_of(&|n| n.kind() == NodeKind::Service);
+        assert!(context_menu(&project, service).is_empty());
+        let port = row_of(&|n| n.kind() == NodeKind::Port);
+        assert!(context_menu(&project, port).is_empty());
+        let supported = row_of(&|n| n.kind() == NodeKind::Operation && n.unsupported().is_none());
+        assert_eq!(
+            context_menu(&project, supported),
+            [("New Request".to_string(), true)]
+        );
+        let unsupported = row_of(&|n| n.unsupported().is_some());
+        assert_eq!(
+            context_menu(&project, unsupported),
+            [("New Request".to_string(), false)]
+        );
+        let menu = outline.menu().expect("the outline has a context menu");
+        // AppKit holds the menu's delegate weakly, too.
+        assert!(menu.delegate().is_some(), "menu delegate alive");
+        let pane = project
+            .split_view()
+            .splitViewItems()
+            .firstObject()
+            .expect("sidebar item");
+        assert!(
+            pane.viewController(MainThreadMarker::new().expect("main thread"))
+                .view()
+                .downcast::<objc2_app_kit::NSScrollView>()
+                .is_ok(),
+            "no buttons under the sidebar, only the list"
         );
 
         // Operations are listed, unsupported ones too, and can be selected.
@@ -993,6 +1059,97 @@ mod checks {
         );
         assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
         assert!(ctx.alerts().is_empty());
+
+        // The context menu acts on the clicked row. New Request on an operation puts the
+        // request in its place by name and selects it.
+        let operation_row = |name: &str| {
+            (0..outline.numberOfRows())
+                .find(|&row| {
+                    outline.itemAtRow(row).is_some_and(|item| {
+                        item.downcast_ref::<SidebarNode>().is_some_and(|n| {
+                            n.kind() == NodeKind::Operation
+                                && n.unsupported().is_none()
+                                && n.title() == name
+                        })
+                    })
+                })
+                .expect("the operation's row")
+        };
+        let request_row = |name: &str| {
+            (0..outline.numberOfRows())
+                .find(|&row| {
+                    outline.itemAtRow(row).is_some_and(|item| {
+                        item.downcast_ref::<SidebarNode>()
+                            .is_some_and(|n| n.kind() == NodeKind::Request && n.title() == name)
+                    })
+                })
+                .expect("the request's row")
+        };
+        context_click(ctx, &project, operation_row("Lookup"), "New Request");
+        window.makeFirstResponder(Some(&outline));
+        assert_eq!(request_names(&project), ["Find customer copy", "Lookup 1"]);
+        assert_eq!(selected_row(), Some(outline.selectedRow()));
+        assert_eq!(selected_row(), Some(request_row("Lookup 1")));
+        assert_eq!(
+            context_menu(&project, request_row("Lookup 1")),
+            [
+                ("Rename".to_string(), true),
+                ("Duplicate".to_string(), true),
+                ("Validate".to_string(), true),
+                ("Delete".to_string(), true),
+            ]
+        );
+
+        // Renaming moves the request to its place; it stays selected.
+        rename("A lookup");
+        assert_eq!(request_names(&project), ["A lookup", "Find customer copy"]);
+        assert_eq!(selected_row(), Some(request_row("A lookup")));
+        assert_eq!(selected_row(), Some(outline.selectedRow()));
+
+        // Duplicate and Delete on a row that is not selected.
+        context_click(
+            ctx,
+            &project,
+            request_row("Find customer copy"),
+            "Duplicate",
+        );
+        assert_eq!(
+            request_names(&project),
+            ["A lookup", "Find customer copy", "Find customer copy copy"]
+        );
+        assert_eq!(selected_row(), Some(request_row("Find customer copy copy")));
+        context_click(ctx, &project, request_row("A lookup"), "Delete");
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert!(confirm.title.contains("A lookup"), "{confirm:?}");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(
+            request_names(&project),
+            ["Find customer copy", "Find customer copy copy"]
+        );
+        assert_eq!(
+            selected_row(),
+            Some(request_row("Find customer copy copy")),
+            "deleting another row keeps the selection"
+        );
+
+        // Validate and Rename select the clicked request first.
+        context_click(ctx, &project, request_row("Find customer copy"), "Validate");
+        assert_eq!(selected_row(), Some(request_row("Find customer copy")));
+        context_click(
+            ctx,
+            &project,
+            request_row("Find customer copy copy"),
+            "Rename",
+        );
+        assert_eq!(selected_row(), Some(request_row("Find customer copy copy")));
+        assert!(project.sidebar().is_editing(), "inline rename started");
+        window.makeFirstResponder(Some(&outline));
+        assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
     }
 
     fn temporary_color(editor: &EditorController, index: usize) -> Option<Retained<AnyObject>> {

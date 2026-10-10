@@ -1,6 +1,6 @@
 //! The project window's source list: REQUESTS and OPERATIONS (service › port › operation),
-//! with unsaved (•) and invalid (⚠) markers on requests, inline rename, and each port's SOAP
-//! version as a chip.
+//! with unsaved (•) and invalid (⚠) markers on requests, inline rename, each port's SOAP
+//! version as a chip, and a context menu per row.
 //!
 //! The rows are the model's [`Sidebar`]; this controller only draws them and turns selection,
 //! rename and double-clicks into model commands. `NSOutlineView` identifies rows by object
@@ -11,13 +11,13 @@ use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashSet;
 
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView,
-    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
-    NSUserInterfaceLayoutOrientation, NSView,
+    NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource,
+    NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn, NSTableView, NSTableViewStyle,
+    NSTextField, NSTextFieldDelegate, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
@@ -272,6 +272,12 @@ fn node(item: &AnyObject) -> &SidebarNode {
         .expect("sidebar items are SidebarNodes")
 }
 
+/// The node a context menu item was made for.
+fn menu_node(sender: Option<&AnyObject>) -> Option<Retained<SidebarNode>> {
+    let item = sender?.downcast_ref::<NSMenuItem>()?;
+    item.representedObject()?.downcast::<SidebarNode>().ok()
+}
+
 define_class!(
     // SAFETY:
     // - NSOutlineView has no subclassing requirements beyond its designated initializers,
@@ -432,6 +438,64 @@ define_class!(
         }
     }
 
+    // SAFETY: `NSMenuDelegate` has no safety requirements.
+    unsafe impl NSMenuDelegate for SidebarController {
+        // SAFETY: the signature matches `menuNeedsUpdate:`.
+        #[unsafe(method(menuNeedsUpdate:))]
+        fn menu_needs_update(&self, menu: &NSMenu) {
+            // The row that was right-clicked (or control-clicked), not the selected one.
+            let row = self.outline().map_or(-1, |o| o.clickedRow());
+            self.fill_context_menu(menu, row);
+        }
+    }
+
+    // Context menu actions. Each item's represented object is the row's node.
+    impl SidebarController {
+        // SAFETY (all below): action methods take the sender and return nothing.
+        #[unsafe(method(sidebarNewRequest:))]
+        fn context_new_request(&self, sender: Option<&AnyObject>) {
+            let operation = menu_node(sender).and_then(|n| n.operation().cloned());
+            self.new_request(operation);
+        }
+
+        #[unsafe(method(sidebarRenameRequest:))]
+        fn context_rename(&self, sender: Option<&AnyObject>) {
+            if let Some(request) = self.select_for_menu(sender) {
+                self.begin_rename(request);
+            }
+        }
+
+        #[unsafe(method(sidebarDuplicateRequest:))]
+        fn context_duplicate(&self, sender: Option<&AnyObject>) {
+            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
+                return;
+            };
+            let key = self.ivars().key;
+            self.command("Could not duplicate the request", |app| {
+                app.duplicate_request(key, request)
+            });
+        }
+
+        #[unsafe(method(sidebarValidateRequest:))]
+        fn context_validate(&self, sender: Option<&AnyObject>) {
+            if self.select_for_menu(sender).is_some() {
+                let key = self.ivars().key;
+                self.command("Could not validate the request", |app| app.validate(key));
+            }
+        }
+
+        #[unsafe(method(sidebarDeleteRequest:))]
+        fn context_delete(&self, sender: Option<&AnyObject>) {
+            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
+                return;
+            };
+            let key = self.ivars().key;
+            self.command("Could not delete the request", |app| {
+                app.delete_request(key, request)
+            });
+        }
+    }
+
     impl SidebarController {
         // SAFETY: the signature matches an action method; the outline view's double action.
         #[unsafe(method(sidebarDoubleClicked:))]
@@ -496,8 +560,78 @@ impl SidebarController {
             outline.setTarget(Some(self));
             outline.setDoubleAction(Some(sel!(sidebarDoubleClicked:)));
         }
+        // The items depend on the clicked row, so the menu is filled as it opens.
+        let menu = NSMenu::new(mtm);
+        menu.setAutoenablesItems(false);
+        menu.setDelegate(Some(ProtocolObject::from_ref(self)));
+        // SAFETY: the outline view retains its menu; the menu's delegate is this controller,
+        // which outlives the outline view as above.
+        unsafe { outline.setMenu(Some(&menu)) };
         let _ = self.ivars().outline.set(outline.clone());
         outline
+    }
+
+    /// The context menu for `row`: Rename, Duplicate, Validate and Delete on a request; New
+    /// Request on an operation and on the REQUESTS header; nothing elsewhere, so no menu opens.
+    /// The Project menu keeps the same commands for the selected request, with shortcuts.
+    pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
+        menu.removeAllItems();
+        let Some(clicked) = self.outline().and_then(|o| o.itemAtRow(row)) else {
+            return;
+        };
+        let node = node(&clicked);
+        let items: &[(&str, Sel)] = match node.kind() {
+            NodeKind::Request => &[
+                ("Rename", sel!(sidebarRenameRequest:)),
+                ("Duplicate", sel!(sidebarDuplicateRequest:)),
+                ("Validate", sel!(sidebarValidateRequest:)),
+                ("Delete", sel!(sidebarDeleteRequest:)),
+            ],
+            NodeKind::Operation => &[("New Request", sel!(sidebarNewRequest:))],
+            NodeKind::Group if node.ivars().path == "group:requests" => {
+                &[("New Request", sel!(sidebarNewRequest:))]
+            }
+            _ => &[],
+        };
+        let object: &AnyObject = node.as_ref();
+        for &(title, action) in items {
+            // SAFETY: each action is one of this controller's context menu methods above,
+            // which take the sender.
+            let item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(self.mtm()),
+                    &NSString::from_str(title),
+                    Some(action),
+                    ns_string!(""),
+                )
+            };
+            // SAFETY: the target is this controller, which implements every action used here
+            // and outlives the menu (the outline view owns it); the represented object is a
+            // `SidebarNode`, which is what `menu_node` expects back.
+            unsafe {
+                item.setTarget(Some(self));
+                item.setRepresentedObject(Some(object));
+            }
+            // An unsupported operation gets no request, as a double-click shows.
+            item.setEnabled(node.unsupported().is_none());
+            menu.addItem(&item);
+        }
+    }
+
+    /// Selects the context menu's request, as clicking its row would, so a command on the
+    /// selected request applies to it. `None` if the model kept another selection (the
+    /// previous request could not be saved).
+    fn select_for_menu(&self, sender: Option<&AnyObject>) -> Option<RequestId> {
+        let request = menu_node(sender)?.request()?;
+        let key = self.ivars().key;
+        self.command("Could not open the request", |app| {
+            app.select_request(key, Some(request))
+        });
+        self.show_selection(None);
+        let selected = self
+            .read(|app| app.project(key).and_then(|w| w.selected_request()))
+            .flatten();
+        (selected == Some(request)).then_some(request)
     }
 
     /// Redraws the rows from the model (`SidebarChanged`), keeping collapsed groups collapsed

@@ -423,6 +423,65 @@ fn rename_and_duplicate() {
 }
 
 #[test]
+fn finder_order_ignores_case_and_compares_numbers_by_value() {
+    let mut names = [
+        "lookup 10",
+        "Lookup 2",
+        "Zeta",
+        "alpha",
+        "Lookup 02",
+        "Lookup",
+        "Lookup 1 copy",
+        "Lookup 1",
+    ];
+    names.sort_by(|a, b| crate::window::finder_order(a, b));
+    assert_eq!(
+        names,
+        [
+            "alpha",
+            "Lookup",
+            "Lookup 1",
+            "Lookup 1 copy",
+            "Lookup 02",
+            "Lookup 2",
+            "lookup 10",
+            "Zeta",
+        ]
+    );
+}
+
+#[test]
+fn requests_sort_by_name_and_keep_the_selection() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let ids: Vec<_> = (0..10)
+        .map(|_| app.new_request(key, &op).expect("new"))
+        .collect();
+    assert_eq!(names(&app, key)[..3], ["Lookup 1", "Lookup 2", "Lookup 3"]);
+    assert_eq!(names(&app, key)[9], "Lookup 10", "numbers by value");
+
+    // A renamed request moves to its place and stays selected.
+    app.select_request(key, Some(ids[9])).expect("select");
+    app.rename_request(key, ids[9], "a first one")
+        .expect("rename");
+    assert_eq!(names(&app, key)[..2], ["a first one", "Lookup 1"]);
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), Some(ids[9]));
+    assert_eq!(window.sidebar().requests[0].id, ids[9]);
+
+    // A new one goes to its place too, not to the end.
+    app.rename_request(key, ids[1], "Zulu").expect("rename");
+    let new = app.new_request(key, &op).expect("new");
+    let window = app.project(key).expect("open");
+    let rows = &window.sidebar().requests;
+    assert_eq!(rows[2].name, "Lookup 2");
+    assert_eq!(rows[2].id, new);
+    assert_eq!(rows.last().map(|r| r.name.as_str()), Some("Zulu"));
+    assert_eq!(window.selected_request(), Some(new));
+}
+
+#[test]
 fn delete_asks_first_and_selects_a_neighbour() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");

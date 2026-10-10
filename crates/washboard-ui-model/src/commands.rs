@@ -90,8 +90,8 @@ impl App {
         self.requests_changed(key)
     }
 
-    /// Project ▸ Duplicate: `<name> copy` right after the original, then selected. Unsaved
-    /// edits are saved first so the copy has them.
+    /// Project ▸ Duplicate: `<name> copy`, then selected. Unsaved edits are saved first so the
+    /// copy has them.
     pub fn duplicate_request(
         &mut self,
         key: ProjectKey,
