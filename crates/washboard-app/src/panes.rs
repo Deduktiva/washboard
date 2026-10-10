@@ -1,27 +1,30 @@
-//! The request bar above the editor, the issues bar under it and the response pane below them
-//! (PLAN §8).
+//! The request bar above the editor, the issues bar under it, and the response pane beside
+//! them with its History drawer (PLAN §4 "Response pane and history", §8).
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBox, NSButton, NSColor, NSControlSize, NSFont, NSLayoutConstraintOrientation,
-    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView, NSStackViewGravity,
-    NSTabView, NSTabViewItem, NSTextField, NSView,
+    NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor, NSControlSize, NSEvent, NSFont,
+    NSImage, NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow,
+    NSLineBreakMode, NSResponder, NSScrollView, NSSplitView, NSSplitViewController,
+    NSSplitViewDividerStyle, NSSplitViewItem, NSStackView, NSStackViewGravity, NSTabView,
+    NSTabViewItem, NSTextField, NSTitlePosition, NSView, NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
-    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString, ns_string,
+    NSDateFormatterStyle, NSIndexSet, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
-    Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
+    HistoryDrawer, Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
 };
 
-use crate::app::{ModelAccess, with_delegate};
+use crate::app::ModelAccess;
 use crate::editor::{EditorController, read_only_text, set_text, text_of};
 use crate::layout;
 use crate::table::TextTable;
@@ -36,6 +39,10 @@ pub struct RequestBar {
     operation: Retained<NSBox>,
     operation_label: Retained<NSTextField>,
     state: Retained<NSTextField>,
+    /// The editor's live state, shown again when the sent-request label goes.
+    well_formedness: Cell<WellFormedness>,
+    /// "Sent <time> · read-only" while an older exchange is shown.
+    sent: RefCell<Option<String>>,
     view: Retained<NSStackView>,
 }
 
@@ -53,13 +60,16 @@ impl RequestBar {
         view.addView_inGravity(&operation, NSStackViewGravity::Leading);
         view.addView_inGravity(&state, NSStackViewGravity::Trailing);
         view.setSpacing(10.0);
-        view.setEdgeInsets(layout::insets(6.0, 12.0, 6.0, 12.0));
+        view.setEdgeInsets(layout::insets(0.0, 12.0, 0.0, 12.0));
         layout::hug_vertically(&view);
+        layout::set_height(&view, layout::BAR_HEIGHT);
         RequestBar {
             name,
             operation,
             operation_label,
             state,
+            well_formedness: Cell::new(WellFormedness::Pending),
+            sent: RefCell::new(None),
             view,
         }
     }
@@ -82,8 +92,13 @@ impl RequestBar {
         self.set_state(request.map_or(WellFormedness::Pending, |r| r.well_formedness));
     }
 
-    /// The well-formedness state alone, which changes with every check.
+    /// The well-formedness state alone, which changes with every check. While an older
+    /// exchange is shown it is kept for later: the bar is about the sent request then.
     pub fn set_state(&self, state: WellFormedness) {
+        self.well_formedness.set(state);
+        if self.sent.borrow().is_some() {
+            return;
+        }
         self.state
             .setStringValue(&NSString::from_str(&well_formedness_text(state)));
         let colour = match state {
@@ -92,6 +107,20 @@ impl RequestBar {
             WellFormedness::Error { .. } => NSColor::systemRedColor(),
         };
         self.state.setTextColor(Some(&colour));
+    }
+
+    /// `Some("Sent … · read-only")` while an older exchange's request is shown in place of
+    /// the editor; `None` shows the editor's state again.
+    pub fn show_sent(&self, sent: Option<&str>) {
+        *self.sent.borrow_mut() = sent.map(str::to_owned);
+        match sent {
+            Some(text) => {
+                self.state.setStringValue(&NSString::from_str(text));
+                self.state
+                    .setTextColor(Some(&NSColor::secondaryLabelColor()));
+            }
+            None => self.set_state(self.well_formedness.get()),
+        }
     }
 
     pub fn name(&self) -> String {
@@ -285,7 +314,77 @@ impl IssuesBar {
 /// The issues list's height while shown; the editor gets the rest.
 const ISSUES_HEIGHT: f64 = 110.0;
 
-pub const RESPONSE_TABS: [&str; 3] = ["Response", "Headers", "History"];
+pub const RESPONSE_TABS: [&str; 2] = ["Response", "Headers"];
+
+type DragEnd = Box<dyn Fn()>;
+
+#[derive(Default)]
+pub struct DrawerSplitIvars {
+    /// Called when a drag of the divider ends.
+    on_drag_end: RefCell<Option<DragEnd>>,
+    /// The History table's height to apply once the split has a size of its own.
+    pending_height: Cell<Option<f64>>,
+}
+
+impl fmt::Debug for DrawerSplitIvars {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DrawerSplitIvars")
+            .field("pending_height", &self.pending_height)
+            .finish_non_exhaustive()
+    }
+}
+
+define_class!(
+    // SAFETY:
+    // - NSSplitView has no subclassing requirements.
+    // - `DrawerSplit` does not implement `Drop`.
+    #[unsafe(super(NSSplitView, NSView, NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = DrawerSplitIvars]
+    #[derive(Debug)]
+    pub struct DrawerSplit;
+
+    impl DrawerSplit {
+        // SAFETY: the signature matches `mouseDown:`.
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            // NSSplitView tracks a divider drag inside `mouseDown:` and returns on mouse up, so
+            // the drawer's height is saved once per drag rather than on every step of it.
+            // SAFETY: calling the superclass's implementation with its own arguments.
+            let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+            if let Some(f) = &*self.ivars().on_drag_end.borrow() {
+                f();
+            }
+        }
+
+        // SAFETY: the signature matches `layout`.
+        #[unsafe(method(layout))]
+        fn layout(&self) {
+            // SAFETY: calling the superclass's implementation.
+            let _: () = unsafe { msg_send![super(self), layout] };
+            let total = self.frame().size.height;
+            if let Some(height) = self.ivars().pending_height.get()
+                && total > 0.0
+            {
+                self.ivars().pending_height.set(None);
+                let position = (total - height - self.dividerThickness()).max(0.0);
+                self.setPosition_ofDividerAtIndex(position, 0);
+            }
+        }
+    }
+);
+
+impl DrawerSplit {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(DrawerSplitIvars::default());
+        // SAFETY: `NSView`'s `init` has this signature.
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        // Horizontal dividers: the response above, the History table below.
+        this.setVertical(false);
+        this.setDividerStyle(NSSplitViewDividerStyle::Thin);
+        this
+    }
+}
 
 #[derive(Debug)]
 pub struct ResponseIvars {
@@ -297,6 +396,13 @@ pub struct ResponseIvars {
     /// The history rows' entries, in the table's order (newest first).
     history_ids: RefCell<Vec<HistoryId>>,
     tabs: Retained<NSTabView>,
+    disclosure: Retained<NSImageView>,
+    /// "3 earlier exchanges".
+    earlier: Retained<NSTextField>,
+    /// One dot per stored exchange, oldest left.
+    dots: Retained<NSStackView>,
+    drawer_split: Retained<DrawerSplit>,
+    drawer: OnceCell<Retained<NSSplitViewController>>,
     view: OnceCell<Retained<NSStackView>>,
 }
 
@@ -315,9 +421,9 @@ define_class!(
 
     impl ResponsePane {
         // SAFETY: action methods take the sender and return nothing.
-        #[unsafe(method(restoreRequest:))]
-        fn restore_request(&self, _sender: Option<&AnyObject>) {
-            self.restore_selected();
+        #[unsafe(method(toggleHistory:))]
+        fn toggle_history(&self, _sender: Option<&AnyObject>) {
+            self.set_drawer_open(!self.drawer_open());
         }
     }
 );
@@ -337,6 +443,11 @@ impl ResponsePane {
             NSLayoutPriorityDefaultLow,
             NSLayoutConstraintOrientation::Horizontal,
         );
+        let disclosure = NSImageView::new(mtm);
+        let earlier = layout::small_label("", mtm);
+        earlier.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        let dots = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        dots.setSpacing(3.0);
 
         let this = Self::alloc(mtm).set_ivars(ResponseIvars {
             key,
@@ -346,6 +457,11 @@ impl ResponsePane {
             history,
             history_ids: RefCell::new(Vec::new()),
             tabs,
+            disclosure,
+            earlier,
+            dots,
+            drawer_split: DrawerSplit::new(mtm),
+            drawer: OnceCell::new(),
             view: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -358,32 +474,16 @@ impl ResponsePane {
                 pane.show_history_row(row);
             }
         });
-        // SAFETY: this pane owns the button through its view, so it outlives the button's
-        // weak target reference.
-        let restore = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                ns_string!("Restore Request"),
-                Some(&this),
-                Some(sel!(restoreRequest:)),
-                mtm,
-            )
-        };
-        let buttons = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
-        buttons.addView_inGravity(&restore, NSStackViewGravity::Trailing);
-        buttons.setEdgeInsets(layout::insets(8.0, 8.0, 8.0, 8.0));
-        layout::hug_vertically(&buttons);
-        let history_page = layout::fill_column(
-            &[
-                Retained::into_super(this.ivars().history.view().retain()),
-                Retained::into_super(buttons),
-            ],
-            mtm,
-        );
+        let pane = Weak::from(&*this);
+        *this.ivars().drawer_split.ivars().on_drag_end.borrow_mut() = Some(Box::new(move || {
+            if let Some(pane) = pane.load() {
+                pane.drawer_dragged();
+            }
+        }));
 
-        let pages: [Retained<NSView>; 3] = [
+        let pages: [Retained<NSView>; 2] = [
             Retained::into_super(this.ivars().body.view().retain()),
             Retained::into_super(this.ivars().headers.clone()),
-            Retained::into_super(history_page),
         ];
         for (label, page) in RESPONSE_TABS.iter().zip(&pages) {
             let item = NSTabViewItem::new();
@@ -391,17 +491,70 @@ impl ResponsePane {
             item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
-        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
-        status.setEdgeInsets(layout::insets(6.0, 8.0, 2.0, 8.0));
-        let view = layout::fill_column(
+
+        // The drawer's header closes the response half, so it stays in view with the table
+        // collapsed; the table is the split's second half.
+        let header = this.drawer_header(mtm);
+        let response_vc = NSViewController::new(mtm);
+        response_vc.setView(&layout::fill_column(
             &[
-                Retained::into_super(status),
                 Retained::into_super(this.ivars().tabs.clone()),
+                Retained::into_super(header),
             ],
             mtm,
-        );
+        ));
+        let table_vc = NSViewController::new(mtm);
+        table_vc.setView(this.ivars().history.view());
+        let drawer = NSSplitViewController::new(mtm);
+        drawer.setSplitView(&this.ivars().drawer_split);
+        let response_item = NSSplitViewItem::splitViewItemWithViewController(&response_vc);
+        response_item.setMinimumThickness(MIN_BODY_HEIGHT);
+        drawer.addSplitViewItem(&response_item);
+        let table_item = NSSplitViewItem::splitViewItemWithViewController(&table_vc);
+        table_item.setMinimumThickness(MIN_HISTORY_HEIGHT);
+        table_item.setCanCollapse(true);
+        // A taller window gives its height to the response, not to the table.
+        table_item.setHoldingPriority(NSLayoutPriorityDefaultLow + 10.0);
+        table_item.setCollapsed(true);
+        drawer.addSplitViewItem(&table_item);
+
+        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
+        status.setEdgeInsets(layout::insets(0.0, 8.0, 0.0, 8.0));
+        layout::set_height(&status, layout::BAR_HEIGHT);
+        let view = layout::fill_column(&[Retained::into_super(status), drawer.view()], mtm);
+        let _ = this.ivars().drawer.set(drawer);
         let _ = this.ivars().view.set(view);
+        this.show_disclosure(false);
         this
+    }
+
+    /// The History drawer's header line: disclosure, title, count and dots. A click anywhere on
+    /// it opens or closes the table.
+    fn drawer_header(&self, mtm: MainThreadMarker) -> Retained<NSStackView> {
+        let title = NSTextField::labelWithString(ns_string!("History"), mtm);
+        title.setFont(Some(&NSFont::boldSystemFontOfSize(
+            layout::STATUS_FONT_SIZE,
+        )));
+        let header = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
+        header.addView_inGravity(&self.ivars().disclosure, NSStackViewGravity::Leading);
+        header.addView_inGravity(&title, NSStackViewGravity::Leading);
+        header.addView_inGravity(&self.ivars().earlier, NSStackViewGravity::Leading);
+        header.addView_inGravity(&self.ivars().dots, NSStackViewGravity::Trailing);
+        header.setSpacing(8.0);
+        header.setEdgeInsets(layout::insets(0.0, 10.0, 0.0, 10.0));
+        layout::set_height(&header, DRAWER_HEADER_HEIGHT);
+        // SAFETY: this pane owns the header (through its view) and so the recognizer, which
+        // holds its target weakly; `toggleHistory:` takes the sender.
+        let click = unsafe {
+            NSClickGestureRecognizer::initWithTarget_action(
+                NSClickGestureRecognizer::alloc(mtm),
+                Some(self),
+                Some(sel!(toggleHistory:)),
+            )
+        };
+        header.addGestureRecognizer(&click);
+        header.setToolTip(Some(ns_string!("Show or hide the request's history")));
+        header
     }
 
     pub fn view(&self) -> &NSStackView {
@@ -433,6 +586,113 @@ impl ResponsePane {
 
     pub fn history(&self) -> &TextTable {
         &self.ivars().history
+    }
+
+    /// The drawer header's "3 earlier exchanges".
+    pub fn earlier_exchanges(&self) -> String {
+        self.ivars().earlier.stringValue().to_string()
+    }
+
+    /// The drawer header's dots, oldest first: whether each is red and whether it is ringed.
+    pub fn dots(&self) -> Vec<(bool, bool)> {
+        self.ivars()
+            .dots
+            .arrangedSubviews()
+            .iter()
+            .filter_map(|v| v.downcast::<NSBox>().ok())
+            .map(|dot| {
+                let red = dot.fillColor() == NSColor::systemRedColor();
+                (red, dot.borderWidth() > 0.0)
+            })
+            .collect()
+    }
+
+    /// The split of response and History table, for the window controller to own.
+    pub fn drawer(&self) -> &NSSplitViewController {
+        self.ivars().drawer.get().expect("set in new()")
+    }
+
+    fn table_item(&self) -> Option<Retained<NSSplitViewItem>> {
+        self.drawer().splitViewItems().iter().nth(1)
+    }
+
+    /// The History table is shown.
+    pub fn drawer_open(&self) -> bool {
+        self.table_item().is_some_and(|item| !item.isCollapsed())
+    }
+
+    /// Opens or closes the History table, as a click on the drawer's header does, and
+    /// remembers it for the project.
+    pub fn set_drawer_open(&self, open: bool) {
+        let key = self.ivars().key;
+        let mut drawer = self
+            .read(|app| app.project(key).map(|w| w.history_drawer()))
+            .flatten()
+            .unwrap_or_default();
+        if !open && self.drawer_open() {
+            drawer.height = Some(self.ivars().history.view().frame().size.height);
+        }
+        drawer.open = open;
+        self.show_drawer(drawer);
+        self.command("Could not save the History drawer", |app| {
+            app.set_history_drawer(key, drawer)
+        });
+    }
+
+    /// Shows the drawer as the model remembers it (when the window opens).
+    pub fn show_model_drawer(&self) {
+        let key = self.ivars().key;
+        let drawer = self
+            .read(|app| app.project(key).map(|w| w.history_drawer()))
+            .flatten()
+            .unwrap_or_default();
+        self.show_drawer(drawer);
+    }
+
+    fn show_drawer(&self, drawer: HistoryDrawer) {
+        if let Some(item) = self.table_item() {
+            item.setCollapsed(!drawer.open);
+        }
+        if drawer.open
+            && let Some(height) = drawer.height
+        {
+            let split = &self.ivars().drawer_split;
+            split.ivars().pending_height.set(Some(height));
+            split.setNeedsLayout(true);
+        }
+        self.show_disclosure(drawer.open);
+    }
+
+    fn show_disclosure(&self, open: bool) {
+        let (symbol, label) = if open {
+            ("chevron.down", "Hide History")
+        } else {
+            ("chevron.right", "Show History")
+        };
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(symbol),
+            Some(&NSString::from_str(label)),
+        );
+        self.ivars().disclosure.setImage(image.as_deref());
+    }
+
+    /// After the user dragged the divider: the table's height, or that it was dragged shut.
+    fn drawer_dragged(&self) {
+        let open = self.drawer_open();
+        let height = self.ivars().history.view().frame().size.height;
+        let key = self.ivars().key;
+        let mut drawer = self
+            .read(|app| app.project(key).map(|w| w.history_drawer()))
+            .flatten()
+            .unwrap_or_default();
+        drawer.open = open;
+        if open {
+            drawer.height = Some(height);
+        }
+        self.show_disclosure(open);
+        self.command("Could not save the History drawer", |app| {
+            app.set_history_drawer(key, drawer)
+        });
     }
 
     /// Shows the model's response for the window (`ResponseChanged`, `SendStateChanged`).
@@ -476,17 +736,19 @@ impl ResponsePane {
         set_text(&self.ivars().headers, &headers);
     }
 
-    /// Lists the selected request's history (`HistoryChanged`).
+    /// Lists the selected request's history, with the shown exchange selected and ringed
+    /// (`HistoryChanged`, `ShownExchangeChanged`).
     pub fn show_history(&self) {
         let key = self.ivars().key;
-        let entries = self
+        let (entries, older) = self
             .read(|app| {
                 let window = app.project(key)?;
                 let entries = window.history().iter().map(|e| {
                     let server = window.server_label(e.server_id, &e.url);
                     (e.clone(), server)
                 });
-                Some(entries.collect::<Vec<_>>())
+                let older = window.older_exchange().map(|o| o.entry);
+                Some((entries.collect::<Vec<_>>(), older))
             })
             .flatten()
             .unwrap_or_default();
@@ -513,9 +775,42 @@ impl ResponsePane {
             .collect();
         self.ivars().history.set_rows(rows);
         *self.ivars().history_ids.borrow_mut() = entries.iter().map(|(e, _)| e.id).collect();
+
+        // Newest first in the table; the latest is shown unless an older one is.
+        let shown = older
+            .and_then(|id| entries.iter().position(|(e, _)| e.id == id))
+            .unwrap_or(0);
+        let table = self.ivars().history.table();
+        let selection = if entries.is_empty() {
+            NSIndexSet::new()
+        } else {
+            NSIndexSet::indexSetWithIndex(shown)
+        };
+        table.selectRowIndexes_byExtendingSelection(&selection, false);
+        let earlier = entries.len().saturating_sub(1);
+        let earlier = if earlier == 0 {
+            "no earlier exchanges".to_owned()
+        } else {
+            count(earlier, "earlier exchange")
+        };
+        self.ivars()
+            .earlier
+            .setStringValue(&NSString::from_str(&earlier));
+
+        let dots = &self.ivars().dots;
+        for dot in dots.arrangedSubviews().iter() {
+            dots.removeView(&dot);
+        }
+        let mtm = self.mtm();
+        for (i, (e, _)) in entries.iter().enumerate().rev() {
+            let failed = e.error.is_some() || e.soap_fault;
+            let dot = history_dot(failed, i == shown, mtm);
+            dot.setToolTip(Some(&NSString::from_str(&date_text(&formatter, e.sent_at))));
+            dots.addView_inGravity(&dot, NSStackViewGravity::Trailing);
+        }
     }
 
-    /// A click on a history row shows that exchange.
+    /// A click on a history row shows that exchange; the newest returns to the latest.
     pub fn show_history_row(&self, row: usize) {
         let Some(entry) = self.ivars().history_ids.borrow().get(row).copied() else {
             return;
@@ -525,32 +820,38 @@ impl ResponsePane {
             app.show_history(key, entry)
         });
     }
+}
 
-    /// History ▸ Restore Request, for the selected row: shows it, then puts its request as
-    /// sent into the editor.
-    pub fn restore_selected(&self) {
-        let row = self.ivars().history.table().selectedRow();
-        let entry = usize::try_from(row)
-            .ok()
-            .and_then(|row| self.ivars().history_ids.borrow().get(row).copied());
-        let Some(entry) = entry else {
-            return;
-        };
-        let key = self.ivars().key;
-        let Some(text) = self.command("Could not restore the request", |app| {
-            app.show_history(key, entry)?;
-            app.restore_request(key)
-        }) else {
-            return;
-        };
-        with_delegate(self.mtm(), |d| {
-            if let Some(controller) = d.project(key) {
-                let editor = controller.editor();
-                let len = editor.text_view().string().length();
-                editor.apply_edit(0..len, &text, 0..0, "Restore Request");
-            }
-        });
+/// The History drawer's header line, and the least each half of the drawer keeps.
+const DRAWER_HEADER_HEIGHT: f64 = 26.0;
+const MIN_BODY_HEIGHT: f64 = 120.0;
+const MIN_HISTORY_HEIGHT: f64 = 60.0;
+const DOT_SIZE: f64 = 7.0;
+
+/// One stored exchange in the drawer's header: green, red for a SOAP Fault or a transport
+/// failure, ringed in the accent colour while shown. An `NSBox` rather than a drawn view, so
+/// its semantic colours follow the appearance.
+fn history_dot(failed: bool, shown: bool, mtm: MainThreadMarker) -> Retained<NSBox> {
+    let dot = NSBox::new(mtm);
+    dot.setBoxType(NSBoxType::Custom);
+    dot.setTitlePosition(NSTitlePosition::NoTitle);
+    dot.setContentViewMargins(NSSize::new(0.0, 0.0));
+    let fill = if failed {
+        NSColor::systemRedColor()
+    } else {
+        NSColor::systemGreenColor()
+    };
+    dot.setFillColor(&fill);
+    dot.setCornerRadius(DOT_SIZE / 2.0);
+    dot.setBorderColor(&NSColor::controlAccentColor());
+    dot.setBorderWidth(if shown { 1.5 } else { 0.0 });
+    for constraint in [
+        dot.widthAnchor().constraintEqualToConstant(DOT_SIZE),
+        dot.heightAnchor().constraintEqualToConstant(DOT_SIZE),
+    ] {
+        constraint.setActive(true);
     }
+    dot
 }
 
 /// The issues summary and its colour. Errors show as soon as any check finds them; "Valid"
@@ -581,7 +882,7 @@ fn summary(
 }
 
 /// "Today 14:03:12", "Yesterday 17:02:10", else a short date, in the user's locale.
-fn sent_formatter() -> Retained<NSDateFormatter> {
+pub(crate) fn sent_formatter() -> Retained<NSDateFormatter> {
     let formatter = NSDateFormatter::new();
     formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
     formatter.setTimeStyle(NSDateFormatterStyle::MediumStyle);

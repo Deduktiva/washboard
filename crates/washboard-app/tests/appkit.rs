@@ -66,13 +66,13 @@ mod checks {
     use objc2_app_kit::{
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor,
         NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSSplitViewItemBehavior, NSStackView,
+        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSSplitViewItemBehavior, NSStackView,
         NSTableCellView, NSTextField, NSTextInputClient, NSToolbarDisplayMode, NSView,
         NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString, NSUserDefaults,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString, NSUserDefaults, ns_string,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -697,9 +697,26 @@ mod checks {
             issues.origin.y + issues.size.height <= editor.origin.y + 0.5,
             "the issues bar sits below the editor: {issues:?} vs {editor:?}"
         );
-        project.response().tabs().selectTabViewItemAtIndex(2);
-        let history = || project.response().history().view().frame();
-        // Give AppKit a few turns to frame the newly selected page.
+        // The request beside the response, both starting on one band.
+        let response_pane = in_window(project.response().view());
+        assert!(
+            response_pane.origin.x >= editor.origin.x + editor.size.width - 0.5,
+            "the response sits right of the request: {response_pane:?} vs {editor:?}"
+        );
+        assert!(
+            (bar.origin.y + bar.size.height - response_pane.origin.y - response_pane.size.height)
+                .abs()
+                < 0.5,
+            "request bar and response start at one height: {bar:?} vs {response_pane:?}"
+        );
+        assert_eq!(project.content_split().subviews().len(), 2);
+        assert!(project.content_split().isVertical());
+
+        // The History drawer opens under the response with room for its table.
+        let response = project.response();
+        assert!(!response.drawer_open(), "closed at first");
+        response.set_drawer_open(true);
+        let history = || in_window(response.history().view());
         for _ in 0..40 {
             if history().size.height > 40.0 {
                 break;
@@ -707,21 +724,24 @@ mod checks {
             NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
         }
         let history = history();
-        // SAFETY: reading the view hierarchy on the main thread; nothing is changed.
-        let page = unsafe { project.response().history().view().superview() };
-        // SAFETY: as above.
-        let container = page.as_ref().and_then(|p| unsafe { p.superview() });
+        let body = in_window(response.tabs());
         assert!(
-            history.size.height > 40.0 && history.size.width > 400.0,
-            "the history list has room: {history:?} in page {:?} in container {:?}, tab content \
-             {:?}, tabs {:?}, pane {:?}",
-            page.map(|v| v.frame()),
-            container.map(|v| v.frame()),
-            project.response().tabs().contentRect(),
-            project.response().tabs().frame(),
-            project.response().view().frame()
+            history.size.height > 40.0 && history.size.width > 300.0,
+            "the history list has room: {history:?}, response {response_pane:?}"
         );
-        project.response().tabs().selectTabViewItemAtIndex(0);
+        assert!(
+            history.origin.y + history.size.height <= body.origin.y + 0.5,
+            "the history sits under the response body: {history:?} vs {body:?}"
+        );
+        let key = project.key();
+        let drawer = ctx
+            .delegate
+            .read(|app| app.project(key).map(|w| w.history_drawer()))
+            .flatten()
+            .expect("open");
+        assert!(drawer.open, "remembered for the project");
+        response.set_drawer_open(false);
+        assert!(!response.drawer_open());
 
         let split = project.split_view();
         let items = split.splitViewItems();
@@ -1719,7 +1739,8 @@ mod checks {
     }
 
     /// A refused send lists the issues; a send fills the response pane, the history and the
-    /// log; a history entry restores the request; Cancel returns to Send.
+    /// log; an older exchange is shown whole and not sent, Esc returns from it, and Restore
+    /// Request is one undo step; Cancel returns to Send.
     pub fn send(ctx: &Ctx) {
         let project = ctx.open();
         wait_loaded(&project);
@@ -1832,16 +1853,112 @@ mod checks {
         server.join().expect("the server thread");
         assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
 
-        // Restore Request puts the sent request back.
+        // A second send makes the first an older exchange.
+        let (port, server) = serve_once(LOOKUP_RESPONSE);
+        ctx.delegate
+            .command("point the server at a new port", |app| {
+                app.update_server(key, &local_server(id, port), None)
+            })
+            .expect("server updated");
         replace(start, date.len(), "2031-12-31");
-        let history_table = response.history();
-        history_table
-            .table()
-            .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
-        history_table.click(0);
+        let edited = text_view.string().to_string();
+        action("sendRequest:");
+        wait_until("the second response", || {
+            response.history().rows().len() == history + 2
+                && send_label().as_deref() == Some("Send")
+        });
+        server.join().expect("the server thread");
+        assert_eq!(response.earlier_exchanges(), count_text(history + 1));
+        let dots = response.dots();
+        assert_eq!(dots.len(), history + 2, "{dots:?}");
+        assert_eq!(dots.last(), Some(&(false, true)), "the newest is ringed");
+
+        // Selecting it shows the request as sent and the accessory instead of the toolbar.
+        let window = project.project_window();
+        let send_item = project.send_item().expect("a Send item");
+        response.history().click(1);
+        assert!(!project.older_accessory().isHidden(), "accessory shown");
+        assert!(send_item.isHidden(), "Send hidden");
+        assert!(
+            project.older_text().starts_with("Older exchange · ")
+                && project.older_text().ends_with(" · Local"),
+            "{}",
+            project.older_text()
+        );
+        assert!(project.editor().view().isHidden(), "the editor gives way");
+        assert!(!project.sent_request().view().isHidden());
+        assert_eq!(
+            project.sent_request().text_view().string().to_string(),
+            text
+        );
+        assert!(!project.sent_request().text_view().isEditable());
+        assert!(project.request_bar().state().ends_with(" · read-only"));
+        assert_eq!(
+            text_view.string().to_string(),
+            edited,
+            "the editor keeps its text"
+        );
+        let dots = response.dots();
+        assert_eq!(
+            dots[dots.len() - 2],
+            (false, true),
+            "the shown one is ringed: {dots:?}"
+        );
+        let send_menu = menu_item(ctx, "Send");
+        // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+        let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };
+        assert!(!enabled, "Send is disabled for an older exchange");
+        let validate_menu = menu_item(ctx, "Validate");
+        // SAFETY: as above.
+        let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*validate_menu] };
+        assert!(!enabled, "Validate is disabled for an older exchange");
+
+        // Esc is Show Latest.
+        let esc = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            NSEventType::KeyDown,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags::empty(),
+            0.0,
+            window.windowNumber(),
+            None,
+            ns_string!("\u{1b}"),
+            ns_string!("\u{1b}"),
+            false,
+            53,
+        )
+        .expect("a key event");
+        assert!(window.performKeyEquivalent(&esc), "Esc reached Show Latest");
+        assert!(project.older_accessory().isHidden(), "accessory gone");
+        assert!(!send_item.isHidden(), "Send back");
+        assert!(!project.editor().view().isHidden(), "the editor is back");
+        assert_eq!(text_view.string().to_string(), edited);
+        // SAFETY: as above.
+        let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };
+        assert!(enabled, "Send is enabled again");
+
+        // Restore Request puts the sent request into the editor as one undo step.
+        let undo = text_view
+            .undoManager()
+            .expect("the text view has an undo manager");
+        wait_until("the typing's undo group to close", || {
+            undo.groupingLevel() == 0
+        });
+        undo.setGroupsByEvent(false);
+        response.history().click(1);
+        undo.beginUndoGrouping();
         // SAFETY: `restoreRequest:` takes the sender.
-        let _: () = unsafe { msg_send![response, restoreRequest: None::<&AnyObject>] };
+        let _: () = unsafe { msg_send![&*project, restoreRequest: None::<&AnyObject>] };
+        undo.endUndoGrouping();
+        assert!(project.older_accessory().isHidden(), "back to the latest");
         assert_eq!(text_view.string().to_string(), text, "restored");
+        assert_eq!(undo.undoMenuItemTitle().to_string(), "Undo Restore Request");
+        undo.undo();
+        undo.setGroupsByEvent(true);
+        assert_eq!(
+            text_view.string().to_string(),
+            edited,
+            "⌘Z brings the edit back"
+        );
 
         // Cancel stops waiting for a server that never answers.
         let port = serve_nothing();
@@ -1858,7 +1975,7 @@ mod checks {
             response.status().starts_with("200"),
             "the last response stays"
         );
-        assert_eq!(response.history().rows().len(), history + 1);
+        assert_eq!(response.history().rows().len(), history + 2);
         assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
 
         autoreleasepool(|_| project.project_window().performClose(None));
@@ -1900,6 +2017,28 @@ mod checks {
         // The send went to a plain-HTTP local server; the TLS wording is tested on Linux.
         assert_eq!(log.tls_text(), "No TLS (plain HTTP)");
         log.panel().close();
+    }
+
+    /// The main menu's item titled `title`, in whichever menu it is.
+    fn menu_item(ctx: &Ctx, title: &str) -> Retained<NSMenuItem> {
+        let title = NSString::from_str(title);
+        ctx.app
+            .mainMenu()
+            .expect("a main menu")
+            .itemArray()
+            .iter()
+            .filter_map(|top| top.submenu())
+            .find_map(|menu| menu.itemWithTitle(&title))
+            .expect("the menu item")
+    }
+
+    /// "1 earlier exchange", "2 earlier exchanges".
+    fn count_text(n: usize) -> String {
+        match n {
+            0 => "no earlier exchanges".to_owned(),
+            1 => "1 earlier exchange".to_owned(),
+            n => format!("{n} earlier exchanges"),
+        }
     }
 
     /// Pumps the main run loop until `done` holds; sheets attach and detach asynchronously.
