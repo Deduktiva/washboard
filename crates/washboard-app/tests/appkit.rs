@@ -2402,8 +2402,6 @@ mod checks {
         assert!(references.size.height >= 119.5, "{references:?}");
         inside("the findings", in_window(sheet.messages().view()));
 
-        sheet.set_name("Customers");
-        sheet.choose_location(projects.clone());
         sheet.choose_wsdl(files.join("CustomerService.wsdl"));
         sheet.add_files(vec![files.clone()]);
         wait_checked(&sheet);
@@ -2417,9 +2415,18 @@ mod checks {
         }
         let missing: Vec<&Vec<String>> = rows.iter().filter(|r| r[0] == "✗").collect();
         assert_eq!(missing.len(), 1, "{rows:?}");
-        assert_eq!(missing[0][1], "xs:include party-ids.xsd");
-        assert_eq!(missing[0][2], "not supplied");
+        assert!(
+            missing[0][1].ends_with("party.xsd"),
+            "the importer: {rows:?}"
+        );
+        assert_eq!(missing[0][2], "xs:include party-ids.xsd");
+        assert_eq!(missing[0][3], "not found");
         assert!(!sheet.messages().rows().is_empty(), "the finding is listed");
+        let messages = sheet.messages().table();
+        assert!(
+            messages.rectOfRow(0).size.height >= messages.rowHeight(),
+            "a message row is at least one line high"
+        );
         assert!(!sheet.finish_button().isEnabled(), "disabled while ✗");
         let open = ctx.delegate.projects().len();
         sheet.finish();
@@ -2436,6 +2443,10 @@ mod checks {
             "{:?}",
             sheet.references().rows()
         );
+        assert!(!sheet.finish_button().isEnabled(), "no name yet");
+        assert_eq!(sheet.status(), "Name the project.");
+        sheet.set_name("Customers");
+        sheet.choose_location(projects.clone());
         assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
         sheet.finish();
