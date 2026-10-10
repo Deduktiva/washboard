@@ -260,15 +260,14 @@ impl IssuesBar {
                 .collect(),
         );
         let editor = &self.ivars().editor;
-        let errors = issues.iter().filter(|i| i.is_error());
-        editor.ruler().set_error_lines(
-            errors
-                .clone()
-                .filter_map(|i| i.line)
-                .map(|l| l as usize)
+        editor.ruler().set_issues(&issues);
+        editor.set_underlines(
+            issues
+                .iter()
+                .filter(|i| i.is_error())
+                .filter_map(|i| Some((i.range.clone()?, i.message.clone())))
                 .collect(),
         );
-        editor.set_underlines(errors.filter_map(|i| i.range.clone()).collect());
         *self.ivars().issues.borrow_mut() = issues;
     }
 

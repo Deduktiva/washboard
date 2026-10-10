@@ -1745,9 +1745,30 @@ mod checks {
         assert_eq!(issues.rows()[0][0], line.to_string(), "{:?}", issues.rows());
         let summary = project.issues().summary();
         assert!(summary.starts_with("⚠ "), "{summary}");
+        let ruler = editor.ruler();
+        assert!(ruler.error_lines().contains(&line), "gutter marker");
         assert!(
-            editor.ruler().error_lines().contains(&line),
-            "gutter marker"
+            ruler.warning_lines().is_empty(),
+            "{:?}",
+            ruler.warning_lines()
+        );
+        // Hovering the marker lists the line's messages.
+        let tip = ruler.tool_tip(line).expect("the marker has a tool tip");
+        assert!(tip.contains(&issues.rows()[0][1]), "{tip}");
+        // Its rect is placed when the ruler draws, which needs the text laid out first.
+        wait_until("the marker's tool tip rect", || {
+            ruler.display();
+            ruler.tool_tip_lines().contains(&line)
+        });
+        // So does hovering the underline in the text, before the element's hover.
+        let message = issues.rows()[0][1].clone();
+        let row = text[..start].rfind('\n').map_or(0, |i| i + 1)
+            ..start + "someday".len() + "</asOf>".len();
+        assert!(
+            row.clone().any(|at| editor
+                .show_tool_tip_at(at)
+                .is_some_and(|tip| tip.starts_with(&message))),
+            "no tool tip in {row:?} starts with {message:?}"
         );
         wait_until("the invalid marker", || selected_markers(&project).1);
 
@@ -1783,6 +1804,7 @@ mod checks {
             project.issues().summary() == "✓ Valid"
         });
         assert!(editor.ruler().error_lines().is_empty(), "gutter cleared");
+        assert_eq!(editor.ruler().tool_tip(line), None);
         wait_until("the marker to clear", || !selected_markers(&project).1);
         autoreleasepool(|_| project.project_window().performClose(None));
     }

@@ -1,5 +1,7 @@
 //! Text helpers of the app that need no AppKit, so their tests run on Linux too.
 
+use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::Path;
 
 use washboard_core::diag::{Diagnostic, Severity};
@@ -7,8 +9,8 @@ use washboard_core::http::TlsInfo;
 use washboard_core::model::OperationRef;
 use washboard_core::wsdl::{Protocol, Reference, Resolution, Unresolved};
 use washboard_ui_model::{
-    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ImportTarget, ReplaceOutcome,
-    WellFormedness,
+    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ImportTarget, Issue,
+    ReplaceOutcome, WellFormedness,
 };
 
 /// A row of the import sheet's reference table: mark, the file the reference is in, the
@@ -164,6 +166,80 @@ pub(crate) fn hover_text(hover: &Hover) -> String {
     text
 }
 
+/// A gutter marker: a line with issues, and the tool tip that lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LineMarker {
+    /// 1-based.
+    pub line: usize,
+    /// Any error on the line marks it as an error; a line with only warnings, as a warning.
+    pub error: bool,
+    /// The issues' messages, errors first, each in the order the issues came.
+    pub tool_tip: String,
+}
+
+/// One marker per line with issues, sorted by line. Issues without a line have no place in
+/// the gutter; the issues list still shows them.
+pub(crate) fn line_markers(issues: &[Issue]) -> Vec<LineMarker> {
+    let mut lines: BTreeMap<usize, (Vec<&str>, Vec<&str>)> = BTreeMap::new();
+    for issue in issues {
+        let Some(line) = issue.line else {
+            continue;
+        };
+        let (errors, warnings) = lines.entry(line as usize).or_default();
+        if issue.is_error() {
+            errors.push(&issue.message);
+        } else {
+            warnings.push(&issue.message);
+        }
+    }
+    lines
+        .into_iter()
+        .map(|(line, (errors, warnings))| LineMarker {
+            line,
+            error: !errors.is_empty(),
+            tool_tip: errors
+                .into_iter()
+                .chain(warnings)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        })
+        .collect()
+}
+
+/// The text's tool tip at UTF-16 offset `at`, where the mouse rests: the messages of the
+/// underlined issues there, then the element hover after a blank line, and the range the tool
+/// tip covers. The first underline at `at` sets the range; with a hover it narrows to where
+/// both apply, so moving onto another name asks again. `underlines` are the ranges as drawn,
+/// never empty; `at` on a range's end counts, as an insertion point right after its last
+/// character.
+pub(crate) fn text_tool_tip(
+    underlines: &[(Range<usize>, String)],
+    hover: Option<(Range<usize>, String)>,
+    at: usize,
+) -> Option<(Range<usize>, String)> {
+    let mut covering = underlines
+        .iter()
+        .filter(|(range, _)| range.start <= at && at <= range.end);
+    let Some((first, _)) = covering.clone().next() else {
+        return hover;
+    };
+    let mut text = covering
+        .by_ref()
+        .map(|(_, message)| message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut range = first.clone();
+    if let Some((hover_range, hover_text)) = hover {
+        let both = range.start.max(hover_range.start)..range.end.min(hover_range.end);
+        if !both.is_empty() {
+            range = both;
+            text.push_str("\n\n");
+            text.push_str(&hover_text);
+        }
+    }
+    Some((range, text))
+}
+
 /// The request bar's operation chip. Always SOAP 1.1: that is the only envelope Washboard
 /// sends, whatever else the WSDL offers.
 pub(crate) fn operation_chip(operation: &OperationRef) -> String {
@@ -207,17 +283,18 @@ pub(crate) fn tls_line(tls: &TlsInfo, got_response: bool) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use washboard_core::diag::TextPos;
+    use washboard_core::diag::{DiagSource, Severity, TextPos};
     use washboard_core::http::TlsInfo;
     use washboard_core::model::{OperationRef, QName, RequestId};
     use washboard_core::wsdl::{MatchedBy, Protocol, RefKind, Reference, Resolution, Unresolved};
     use washboard_ui_model::{
-        CompletionKind, Hover, ImportSheet, ImportTarget, ReplaceOutcome, WellFormedness,
+        CompletionKind, Hover, ImportSheet, ImportTarget, Issue, ReplaceOutcome, WellFormedness,
     };
 
     use super::{
-        completion_kinds, hover_text, import_files, import_status, operation_chip, port_chip,
-        reference_row, replace_summary, tls_line, well_formedness_text,
+        LineMarker, completion_kinds, hover_text, import_files, import_status, line_markers,
+        operation_chip, port_chip, reference_row, replace_summary, text_tool_tip, tls_line,
+        well_formedness_text,
     };
 
     #[test]
@@ -418,6 +495,66 @@ mod tests {
         assert_eq!(
             replace_summary(&outcome),
             "0 operations added, 0 removed; 1 request no longer valid."
+        );
+    }
+
+    #[test]
+    fn line_markers_list_errors_first_and_mark_warnings() {
+        let issue = |severity, line, message: &str| Issue {
+            severity,
+            source: DiagSource::Schema,
+            message: message.into(),
+            line,
+            range: None,
+        };
+        let issues = [
+            issue(Severity::Warning, Some(3), "w3"),
+            issue(Severity::Error, Some(5), "e5"),
+            issue(Severity::Warning, Some(5), "w5"),
+            issue(Severity::Error, Some(5), "e5b"),
+            issue(Severity::Error, None, "nowhere"),
+            issue(Severity::Error, Some(1), "e1"),
+        ];
+        let marker = |line, error, tool_tip: &str| LineMarker {
+            line,
+            error,
+            tool_tip: tool_tip.into(),
+        };
+        assert_eq!(
+            line_markers(&issues),
+            [
+                marker(1, true, "e1"),
+                marker(3, false, "w3"),
+                marker(5, true, "e5\ne5b\nw5"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_text_tool_tip_puts_issues_before_the_hover() {
+        let underlines = [
+            (5..9, "bad date".to_owned()),
+            (7..20, "too long".to_owned()),
+        ];
+        let hover = |range: std::ops::Range<usize>| Some((range, "asOf\ntype xs:date".to_owned()));
+        assert_eq!(text_tool_tip(&underlines, None, 2), None);
+        assert_eq!(
+            text_tool_tip(&underlines, hover(0..4), 2),
+            Some((0..4, "asOf\ntype xs:date".into()))
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, None, 9),
+            Some((5..9, "bad date\ntoo long".into())),
+            "the end of an underline counts"
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, hover(6..12), 8),
+            Some((6..9, "bad date\ntoo long\n\nasOf\ntype xs:date".into()))
+        );
+        assert_eq!(
+            text_tool_tip(&underlines, hover(9..12), 9),
+            Some((5..9, "bad date\ntoo long".into())),
+            "a hover that only touches the underline stays out"
         );
     }
 }
