@@ -135,7 +135,7 @@ const FILE: &[Entry] = &[
         &[
             item("New Project…", c"newProject:", "n", SHIFT_CMD),
             Entry::Separator,
-            item("New Request...", c"newRequest:", "n", CMD),
+            item("New Request…", c"newRequest:", "n", CMD),
         ],
     ),
     item("Open Project…", c"openProject:", "o", CMD),
