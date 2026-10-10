@@ -707,13 +707,7 @@ impl SettingsWindowController {
         form::page(
             vec![
                 project_note(&name, mtm),
-                form::Section::new(mtm)
-                    .group(&group)
-                    .text(
-                        "Replace WSDL checks the new files as New Project does. Requests are \
-                         kept as they are and validated against the new WSDL.",
-                    )
-                    .build(),
+                form::Section::new(mtm).group(&group).build(),
             ],
             mtm,
         )
