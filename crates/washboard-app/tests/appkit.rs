@@ -434,6 +434,7 @@ mod checks {
                 ("Bring All to Front", "", 0, "arrangeInFront:"),
             ],
         ),
+        ("Help", &[]),
     ];
 
     fn rows(menu: &NSMenu) -> Vec<(String, String, usize, String)> {
@@ -499,6 +500,33 @@ mod checks {
             .servicesMenu()
             .expect("the Services menu is registered");
         assert_eq!(services.title().to_string(), "Services");
+        // Registered as the Help menu, it gets the system's menu search field.
+        let help = ctx.app.helpMenu().expect("the Help menu is registered");
+        assert_eq!(help.title().to_string(), "Help");
+        let find = main
+            .itemWithTitle(&NSString::from_str("Edit"))
+            .and_then(|i| i.submenu())
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("Find")))
+            .and_then(|i| i.submenu())
+            .expect("Edit ▸ Find");
+        let find_rows = rows(&find);
+        let expected: Vec<(String, String, usize, String)> = [
+            ("Find…", "f", C, "performFindPanelAction:"),
+            ("Find and Replace…", "f", O | C, "performFindPanelAction:"),
+            ("Find Next", "g", C, "performFindPanelAction:"),
+            ("Find Previous", "g", S | C, "performFindPanelAction:"),
+            ("Use Selection for Find", "e", C, "performFindPanelAction:"),
+            ("Jump to Selection", "j", C, "centerSelectionInVisibleArea:"),
+        ]
+        .iter()
+        .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
+        .collect();
+        assert_eq!(find_rows, expected, "Find menu");
+        let replace = find
+            .itemWithTitle(&NSString::from_str("Find and Replace…"))
+            .expect("Find and Replace");
+        // `NSTextFinderActionShowReplaceInterface`.
+        assert_eq!(replace.tag(), 12);
 
         // Settings is answered by the app delegate, so it is enabled with no window open.
         let app_menu = items

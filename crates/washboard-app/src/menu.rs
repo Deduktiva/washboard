@@ -50,6 +50,7 @@ const FIND_SHOW: isize = 1;
 const FIND_NEXT: isize = 2;
 const FIND_PREVIOUS: isize = 3;
 const FIND_SET_FIND_STRING: isize = 7;
+const FIND_REPLACE: isize = 12;
 
 const OPEN_RECENT: &str = "Open Recent";
 const CLEAR_MENU: &str = "Clear Menu";
@@ -75,6 +76,7 @@ enum Special {
     None,
     Services,
     Window,
+    Help,
 }
 
 const fn item(
@@ -154,9 +156,16 @@ const EDIT: &[Entry] = &[
         Special::None,
         &[
             find("Find…", "f", CMD, FIND_SHOW),
+            find("Find and Replace…", "f", OPT_CMD, FIND_REPLACE),
             find("Find Next", "g", CMD, FIND_NEXT),
             find("Find Previous", "g", SHIFT_CMD, FIND_PREVIOUS),
             find("Use Selection for Find", "e", CMD, FIND_SET_FIND_STRING),
+            item(
+                "Jump to Selection",
+                c"centerSelectionInVisibleArea:",
+                "j",
+                CMD,
+            ),
         ],
     ),
     Entry::Separator,
@@ -196,10 +205,13 @@ const MAIN: &[Entry] = &[
     Entry::Submenu("View", Special::None, VIEW),
     Entry::Submenu("Project", Special::None, PROJECT),
     Entry::Submenu("Window", Special::Window, WINDOW),
+    // Empty until there is documentation: registered as the Help menu, it gets the system's
+    // menu search field.
+    Entry::Submenu("Help", Special::Help, &[]),
 ];
 
-/// Builds the main menu and installs it on `app`, including the Services and Window menus
-/// AppKit maintains.
+/// Builds the main menu and installs it on `app`, including the Services, Window and Help
+/// menus AppKit maintains.
 pub fn install(app: &NSApplication, mtm: MainThreadMarker) {
     let menu = build("", MAIN, app, mtm);
     app.setMainMenu(Some(&menu));
@@ -266,6 +278,7 @@ fn build(
                     Special::None => {}
                     Special::Services => app.setServicesMenu(Some(&submenu)),
                     Special::Window => app.setWindowsMenu(Some(&submenu)),
+                    Special::Help => app.setHelpMenu(Some(&submenu)),
                 }
             }
         }
