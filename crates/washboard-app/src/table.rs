@@ -59,11 +59,16 @@ impl KeyTableView {
     }
 }
 
+/// Above and below a wrapped cell's text.
+const WRAP_PADDING: f64 = 2.0;
+
 pub struct TableIvars {
     columns: usize,
     rows: RefCell<Vec<Vec<String>>>,
     /// Columns fixed by `fix_column_width`, whose text is centred.
     fixed: RefCell<Vec<usize>>,
+    /// Columns set by `wrap_column`, whose text wraps and makes its row taller.
+    wrapped: RefCell<Vec<usize>>,
     on_click: RefCell<Option<OnClick>>,
     table: OnceCell<Retained<KeyTableView>>,
     scroll: OnceCell<Retained<NSScrollView>>,
@@ -119,8 +124,14 @@ define_class!(
             let text = usize::try_from(row).ok().and_then(|r| rows.get(r)?.get(index));
             text.map(|text| {
                 let mtm = self.mtm();
-                let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-                layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+                let label = match column.filter(|_| self.wraps(index)) {
+                    Some(column) => self.wrapping_label(text, column.width()),
+                    None => {
+                        let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+                        layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+                        label
+                    }
+                };
                 if self.ivars().fixed.borrow().contains(&index) {
                     label.setAlignment(NSTextAlignment::Center);
                 }
@@ -137,6 +148,37 @@ define_class!(
             let row = table.map_or(-1, |t| t.selectedRow());
             if let (true, Ok(row)) = (by_key, usize::try_from(row)) {
                 self.click(row);
+            }
+        }
+
+        // SAFETY: the signature matches `tableView:heightOfRow:`.
+        #[unsafe(method(tableView:heightOfRow:))]
+        fn height_of_row(&self, table: &NSTableView, row: NSInteger) -> f64 {
+            let base = table.rowHeight();
+            let rows = self.ivars().rows.borrow();
+            let Some(cells) = usize::try_from(row).ok().and_then(|r| rows.get(r)) else {
+                return base;
+            };
+            let columns = table.tableColumns();
+            self.ivars()
+                .wrapped
+                .borrow()
+                .iter()
+                .filter_map(|&i| {
+                    let text = cells.get(i)?;
+                    let column = columns.iter().nth(i)?;
+                    let label = self.wrapping_label(text, column.width());
+                    Some(label.intrinsicContentSize().height + 2.0 * WRAP_PADDING)
+                })
+                .fold(base, f64::max)
+        }
+
+        // SAFETY: the signature matches `tableViewColumnDidResize:`.
+        #[unsafe(method(tableViewColumnDidResize:))]
+        fn column_did_resize(&self, _notification: &NSNotification) {
+            // A wider or narrower column wraps its text onto other lines.
+            if !self.ivars().wrapped.borrow().is_empty() {
+                self.table().reloadData();
             }
         }
     }
@@ -159,6 +201,7 @@ impl TextTable {
             columns: titles.len().max(1),
             rows: RefCell::new(Vec::new()),
             fixed: RefCell::new(Vec::new()),
+            wrapped: RefCell::new(Vec::new()),
             on_click: RefCell::new(None),
             table: OnceCell::new(),
             scroll: OnceCell::new(),
@@ -216,6 +259,25 @@ impl TextTable {
             c.setWidth(width);
             c.setResizingMask(NSTableColumnResizingOptions::empty());
         }
+    }
+
+    /// Wraps the text of `column` onto as many lines as it needs, making its row taller,
+    /// instead of shortening it: for messages that are only useful when read in full.
+    pub fn wrap_column(&self, column: usize) {
+        self.ivars().wrapped.borrow_mut().push(column);
+        self.table().reloadData();
+    }
+
+    fn wraps(&self, column: usize) -> bool {
+        self.ivars().wrapped.borrow().contains(&column)
+    }
+
+    /// A label for a cell of a wrapped column `width` wide; the same label measures its row.
+    fn wrapping_label(&self, text: &str, width: f64) -> Retained<NSTextField> {
+        let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), self.mtm());
+        label.setSelectable(false);
+        label.setPreferredMaxLayoutWidth((width - 2.0 * layout::CELL_INSET).max(1.0));
+        label
     }
 
     pub fn set_rows(&self, rows: Vec<Vec<String>>) {

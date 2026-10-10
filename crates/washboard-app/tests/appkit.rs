@@ -37,6 +37,7 @@ fn main() {
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_window", checks::settings_window),
+        ("wrapped_table", checks::wrapped_table),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -75,7 +76,7 @@ mod checks {
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
-        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSString, NSUserDefaults,
+        NSObjectProtocol, NSPoint, NSRange, NSRect, NSRunLoop, NSSize, NSString, NSUserDefaults,
     };
     use tempfile::TempDir;
     use washboard_app::{
@@ -2493,6 +2494,42 @@ mod checks {
             Some(false),
             "closing the window cancels the import"
         );
+    }
+
+    /// A wrapped column shows a long text on several lines in a taller row, and rewraps when
+    /// the column changes width.
+    pub fn wrapped_table(_ctx: &Ctx) {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let table = washboard_app::TextTable::new(&["", "Message"], mtm);
+        table.wrap_column(1);
+        table.view().setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(300.0, 400.0),
+        ));
+        let long = "file.xsd: xs:include \"a-rather-long-name.xsd\" was not found; ".repeat(4);
+        table.set_rows(vec![
+            vec!["✗".into(), "short".into()],
+            vec!["✗".into(), long],
+        ]);
+        let tv = table.table();
+        let column = tv.tableColumns().iter().nth(1).expect("two columns");
+        column.setWidth(200.0);
+        tv.tile();
+        let short = tv.rectOfRow(0).size.height;
+        let tall = tv.rectOfRow(1).size.height;
+        assert!((short - tv.rowHeight()).abs() < 0.5, "{short}");
+        assert!(tall > 3.0 * short, "the long text wraps: {tall} vs {short}");
+        column.setWidth(600.0);
+        tv.tile();
+        let wider = tv.rectOfRow(1).size.height;
+        assert!(
+            wider < tall,
+            "a wider column needs fewer lines: {wider} vs {tall}"
+        );
+        let cell = tv
+            .viewAtColumn_row_makeIfNecessary(1, 1, true)
+            .expect("a cell");
+        assert_fits(&cell, "a wrapped message");
     }
 
     /// Replace WSDL, from the project's General settings, checks the new files like New
