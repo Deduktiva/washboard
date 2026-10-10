@@ -181,7 +181,10 @@ define_class!(
 
 impl IssuesBar {
     pub fn new(editor: &EditorController, mtm: MainThreadMarker) -> Retained<Self> {
-        let table = TextTable::new(&[], mtm);
+        // Line and message, without a header: the bar is only a few rows high.
+        let table = TextTable::new(&["", ""], mtm);
+        table.fix_column_width(0, LINE_COLUMN_WIDTH);
+        table.wrap_column(1);
         let this = Self::alloc(mtm).set_ivars(IssuesIvars {
             editor: editor.retain(),
             table,
@@ -305,6 +308,8 @@ impl IssuesBar {
 
 /// The issues list's height while shown; the editor gets the rest.
 const ISSUES_HEIGHT: f64 = 110.0;
+/// The issues list's line column: four digits and "—".
+const LINE_COLUMN_WIDTH: f64 = 44.0;
 
 pub const RESPONSE_TABS: [&str; 2] = ["Response", "Headers"];
 
