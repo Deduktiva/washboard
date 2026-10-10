@@ -13,7 +13,7 @@
 //! ├─ .washboard.lock           flock target (see `fsutil::lock_folder`)
 //! ├─ wsdl/                     entry WSDL + supporting files, structure preserved
 //! │  └─ .previous/<timestamp>/ the set before the last "Replace WSDL"
-//! ├─ requests/<name>.xml
+//! ├─ requests/<folder>/…/<name>.xml   folders nest to any depth; names unique across them
 //! └─ history/<request-uuid>/<stem>.request.xml, <stem>.response.xml
 //! ```
 
@@ -48,8 +48,9 @@ use crate::xml::DecodeError;
 pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE};
 pub use db::SCHEMA_VERSION;
 pub use history::{HistoryRecord, RequestHead};
-pub use names::{NameError, validate_request_name};
+pub use names::{NameError, validate_folder_path, validate_request_name};
 pub use replace_report::{ReplaceReport, RequestText, request_texts};
+pub use requests::operation_folder;
 
 use fsutil::{IoContext, join_rel, remove_dir_if_exists};
 
@@ -97,6 +98,12 @@ pub enum ProjectError {
     InvalidName { name: String, reason: NameError },
     #[error("a request named {0:?} already exists")]
     NameTaken(String),
+    #[error("a folder {0:?} already exists")]
+    FolderExists(String),
+    #[error("no folder {0:?}")]
+    UnknownFolder(String),
+    #[error("cannot move the folder {0:?} into itself")]
+    MoveIntoItself(String),
     #[error("invalid WSDL file set: {0}")]
     InvalidWsdlSet(String),
     #[error("no request with id {0}")]
@@ -428,25 +435,15 @@ impl Project {
         Ok(())
     }
 
-    /// Makes the `request` table match the `*.xml` files in `requests/`.
+    /// Makes the `request` table match the `*.xml` files in `requests/` and its folders.
     ///
     /// Files without a row get one (no operation, appended to the order). Rows without a file
     /// are dropped. A row whose file differs only in letter case (renamed in Finder on a
-    /// case-insensitive volume) is updated instead, keeping its id and history.
+    /// case-insensitive volume) is updated instead, keeping its id and history, and so is a
+    /// row whose file is gone when exactly one new file of the same name appeared elsewhere:
+    /// a move in Finder.
     pub fn reconcile(&mut self) -> Result<Reconciliation> {
-        let dir = self.root.join(REQUESTS_DIR);
-        let mut on_disk: Vec<String> = Vec::new();
-        for entry in fs::read_dir(&dir).at(&dir)? {
-            let entry = entry.at(&dir)?;
-            let Ok(file_name) = entry.file_name().into_string() else {
-                continue;
-            };
-            if names::stem_of(&file_name).is_none() || !entry.path().is_file() {
-                continue;
-            }
-            on_disk.push(file_name);
-        }
-        on_disk.sort();
+        let on_disk = requests::walk(&self.root.join(REQUESTS_DIR))?.files;
 
         let rows: Vec<(String, String)> = {
             let mut stmt = self.conn.prepare("SELECT id, file_name FROM request")?;
@@ -460,7 +457,7 @@ impl Project {
         }
         let mut claimed: HashSet<&str> = HashSet::new();
         let mut renames: Vec<(String, &str)> = Vec::new();
-        let mut removed_ids: Vec<String> = Vec::new();
+        let mut gone: Vec<(&str, &str)> = Vec::new();
         for (_, file) in &rows {
             if disk_exact.contains(file.as_str()) {
                 claimed.insert(file);
@@ -475,7 +472,28 @@ impl Project {
                     claimed.insert(f);
                     renames.push((id.clone(), f));
                 }
-                _ => removed_ids.push(id.clone()),
+                _ => gone.push((id, file)),
+            }
+        }
+        // Moves: the new files by name, without their folder.
+        let mut by_name: HashMap<String, Vec<&str>> = HashMap::new();
+        for f in on_disk.iter().filter(|f| !claimed.contains(f.as_str())) {
+            by_name
+                .entry(names::fold(names::split(f).1))
+                .or_default()
+                .push(f);
+        }
+        let mut removed_ids: Vec<String> = Vec::new();
+        for (id, file) in gone {
+            match by_name
+                .get(&names::fold(names::split(file).1))
+                .map(Vec::as_slice)
+            {
+                Some(&[f]) if !claimed.contains(f) => {
+                    claimed.insert(f);
+                    renames.push((id.to_owned(), f));
+                }
+                _ => removed_ids.push(id.to_owned()),
             }
         }
 

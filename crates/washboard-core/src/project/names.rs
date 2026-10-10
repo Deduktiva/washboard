@@ -1,8 +1,9 @@
-//! Request names: validation and automatic naming.
+//! Request and folder names: validation and automatic naming.
 //!
-//! A request name is the file stem of `requests/<name>.xml`. Clashes are detected
-//! case-insensitively because the default macOS file system is case-insensitive: `GetCustomer 1`
-//! and `getcustomer 1` would be the same file there.
+//! A request name is the file stem of `requests/<folder>/<name>.xml`; a folder is a
+//! subdirectory of `requests/`, nested to any depth, and its path is `/`-separated whatever the
+//! platform. Clashes are detected case-insensitively because the default macOS file system is
+//! case-insensitive: `GetCustomer 1` and `getcustomer 1` would be the same file there.
 
 use std::collections::HashSet;
 
@@ -52,6 +53,39 @@ pub fn validate_request_name(name: &str) -> Result<(), NameError> {
         return Err(NameError::TooLong);
     }
     Ok(())
+}
+
+/// Checks a folder path relative to `requests/`: `""` is the top level, otherwise every
+/// `/`-separated component follows the request name rules.
+pub fn validate_folder_path(path: &str) -> Result<(), NameError> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    path.split('/').try_for_each(validate_request_name)
+}
+
+/// `folder/name`, or `name` at the top level.
+pub(crate) fn join(folder: &str, name: &str) -> String {
+    if folder.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{folder}/{name}")
+    }
+}
+
+/// The folder part and the last component of a `/`-separated path; the folder is `""` at
+/// the top level.
+pub(crate) fn split(path: &str) -> (&str, &str) {
+    path.rsplit_once('/').unwrap_or(("", path))
+}
+
+/// Whether `path` is `folder` or inside it. Every path is inside the top level, `""`.
+pub(crate) fn is_within(path: &str, folder: &str) -> bool {
+    folder.is_empty()
+        || path == folder
+        || path
+            .strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 /// Key for clash detection.
@@ -113,6 +147,29 @@ mod tests {
             Err(NameError::TooLong)
         );
         assert_eq!(validate_request_name(&"x".repeat(251)), Ok(()));
+    }
+
+    #[test]
+    fn folder_paths() {
+        assert_eq!(validate_folder_path(""), Ok(()));
+        assert_eq!(validate_folder_path("Port/GetCustomer"), Ok(()));
+        assert_eq!(validate_folder_path("a//b"), Err(NameError::Empty));
+        assert_eq!(validate_folder_path("/a"), Err(NameError::Empty));
+        assert_eq!(validate_folder_path("a/.git"), Err(NameError::LeadingDot));
+        assert_eq!(validate_folder_path("a/b:c"), Err(NameError::Colon));
+    }
+
+    #[test]
+    fn paths() {
+        assert_eq!(join("", "A"), "A");
+        assert_eq!(join("F/G", "A"), "F/G/A");
+        assert_eq!(split("A"), ("", "A"));
+        assert_eq!(split("F/G/A"), ("F/G", "A"));
+        assert!(is_within("F/G", "F"));
+        assert!(is_within("F", "F"));
+        assert!(is_within("F", ""));
+        assert!(!is_within("FG", "F"));
+        assert!(!is_within("F", "F/G"));
     }
 
     #[test]
