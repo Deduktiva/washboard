@@ -531,6 +531,9 @@ impl AppDelegate {
                 }
             }
             Event::WsdlReplaced { project } => {
+                if let Some(settings) = self.ivars().settings.get() {
+                    settings.wsdl_replaced(project);
+                }
                 if let Some(controller) = self.project(project) {
                     controller.show_replace_outcome();
                 }

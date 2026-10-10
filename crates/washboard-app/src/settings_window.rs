@@ -33,6 +33,7 @@ use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey, SuggestedServ
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout::{self, view};
+use crate::sheets::ImportSheetController;
 use crate::table::TextTable;
 use crate::text::count;
 
@@ -290,6 +291,14 @@ define_class!(
             let settings = self.shown();
             with_delegate(self.mtm(), |d| d.set_format_settings(settings));
         }
+
+        // SAFETY: an action method: takes the sender, returns nothing.
+        #[unsafe(method(replaceWsdl:))]
+        fn replace_wsdl_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(Pane::ProjectGeneral(key)) = self.selected() {
+                self.replace_wsdl(key);
+            }
+        }
     }
 );
 
@@ -459,6 +468,19 @@ impl SettingsWindowController {
             self.ivars().servers.borrow_mut().push((key, pane.clone()));
             pane
         })
+    }
+
+    /// The General pane's Replace WSDL…: the import sheet on this window, for project `key`.
+    pub fn replace_wsdl(&self, key: ProjectKey) -> Option<Retained<ImportSheetController>> {
+        let project = with_delegate(self.mtm(), |d| d.project(key)).flatten()?;
+        project.show_replace_sheet(self.window())
+    }
+
+    /// The model replaced project `key`'s WSDL: its General pane lists the new files.
+    pub fn wsdl_replaced(&self, key: ProjectKey) {
+        if self.selected() == Some(Pane::ProjectGeneral(key)) {
+            self.select(Pane::ProjectGeneral(key));
+        }
     }
 
     /// The WSDL files a project's General pane lists, once one was shown.
@@ -661,11 +683,22 @@ impl SettingsWindowController {
                         form_row("Name", view(value_label(&name, mtm)), mtm),
                         form_row("Folder", view(folder_label), mtm),
                         form_row("WSDL files", view(files), mtm),
+                        padded_row(
+                            view(NSTextField::labelWithString(ns_string!(""), mtm)),
+                            view(target_button(
+                                "Replace WSDL…",
+                                self,
+                                sel!(replaceWsdl:),
+                                mtm,
+                            )),
+                            mtm,
+                        ),
                     ],
                     mtm,
                 ),
                 note(
-                    "Project ▸ Replace WSDL… swaps the WSDL files; requests are kept.",
+                    "Replace WSDL checks the new files as New Project does. Requests are kept \
+                     as they are and validated against the new WSDL.",
                     mtm,
                 ),
             ],
