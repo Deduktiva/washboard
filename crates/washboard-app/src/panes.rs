@@ -662,29 +662,33 @@ impl ResponsePane {
     /// Opens or closes the History table, as a click on the drawer's header does, and
     /// remembers it for the project.
     pub fn set_drawer_open(&self, open: bool) {
-        let key = self.ivars().key;
-        let mut drawer = self
-            .read(|app| app.project(key).map(|w| w.history_drawer()))
-            .flatten()
-            .unwrap_or_default();
-        if !open && self.drawer_open() {
-            drawer.height = Some(self.ivars().history.view().frame().size.height);
-        }
-        drawer.open = open;
-        self.show_drawer(drawer);
-        self.command("Could not save the History drawer", |app| {
-            app.set_history_drawer(key, drawer)
-        });
+        self.show_drawer(self.save_drawer(open));
     }
 
     /// Shows the drawer as the model remembers it (when the window opens).
     pub fn show_model_drawer(&self) {
+        self.show_drawer(self.model_drawer());
+    }
+
+    fn model_drawer(&self) -> HistoryDrawer {
         let key = self.ivars().key;
-        let drawer = self
-            .read(|app| app.project(key).map(|w| w.history_drawer()))
+        self.read(|app| app.project(key).map(|w| w.history_drawer()))
             .flatten()
-            .unwrap_or_default();
-        self.show_drawer(drawer);
+            .unwrap_or_default()
+    }
+
+    /// Remembers the drawer as `open`, with the table's height if it is shown now.
+    fn save_drawer(&self, open: bool) -> HistoryDrawer {
+        let mut drawer = self.model_drawer();
+        if self.drawer_open() {
+            drawer.height = Some(self.ivars().history.view().frame().size.height);
+        }
+        drawer.open = open;
+        let key = self.ivars().key;
+        self.command("Could not save the History drawer", |app| {
+            app.set_history_drawer(key, drawer)
+        });
+        drawer
     }
 
     fn show_drawer(&self, drawer: HistoryDrawer) {
@@ -716,21 +720,8 @@ impl ResponsePane {
 
     /// After the user dragged the divider: the table's height, or that it was dragged shut.
     fn drawer_dragged(&self) {
-        let open = self.drawer_open();
-        let height = self.ivars().history.view().frame().size.height;
-        let key = self.ivars().key;
-        let mut drawer = self
-            .read(|app| app.project(key).map(|w| w.history_drawer()))
-            .flatten()
-            .unwrap_or_default();
-        drawer.open = open;
-        if open {
-            drawer.height = Some(height);
-        }
-        self.show_disclosure(open);
-        self.command("Could not save the History drawer", |app| {
-            app.set_history_drawer(key, drawer)
-        });
+        let drawer = self.save_drawer(self.drawer_open());
+        self.show_disclosure(drawer.open);
     }
 
     /// Shows the model's response for the window (`ResponseChanged`, `SendStateChanged`).
