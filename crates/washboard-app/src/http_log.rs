@@ -294,6 +294,11 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     unsafe { panel.setReleasedWhenClosed(false) };
     panel.setTitle(ns_string!("HTTP Log"));
     panel.setHidesOnDeactivate(false);
-    panel.center();
+    // Size and position are kept across launches.
+    let name = ns_string!("HTTP Log");
+    if !panel.setFrameUsingName(name) {
+        panel.center();
+    }
+    panel.setFrameAutosaveName(name);
     panel
 }

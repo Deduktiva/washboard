@@ -21,6 +21,7 @@ fn main() {
         ("lifecycle", checks::lifecycle),
         ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
+        ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
         ("port_chips", checks::port_chips),
@@ -608,6 +609,46 @@ mod checks {
             ctx.delegate.projects().len(),
             1,
             "focused, not opened twice"
+        );
+    }
+
+    /// A project window comes back at the size and place it had, and so does its sidebar's
+    /// width (PLAN §3: frames autosaved per project).
+    pub fn window_frames(ctx: &Ctx) {
+        let project = ctx.open();
+        let window = project.project_window();
+        let mut frame = window.frame();
+        frame.origin.x += 37.0;
+        frame.size.width += 61.0;
+        window.setFrame_display(frame, false);
+        let split = project.split_view().splitView();
+        split.setPosition_ofDividerAtIndex(233.0, 0);
+        let sidebar = |p: &ProjectWindowController| {
+            p.split_view()
+                .splitView()
+                .subviews()
+                .firstObject()
+                .expect("the sidebar")
+                .frame()
+                .size
+                .width
+        };
+        let width = sidebar(&project);
+        autoreleasepool(|_| window.performClose(None));
+        drop(project);
+        assert!(ctx.delegate.projects().is_empty(), "closed");
+
+        let project = ctx.open();
+        let again = project.project_window().frame();
+        assert!(
+            (again.origin.x - frame.origin.x).abs() < 1.0
+                && (again.size.width - frame.size.width).abs() < 1.0,
+            "the frame came back: {again:?}, was {frame:?}"
+        );
+        let restored = sidebar(&project);
+        assert!(
+            (restored - width).abs() < 1.0,
+            "the sidebar's width came back: {restored}, was {width}"
         );
     }
 
