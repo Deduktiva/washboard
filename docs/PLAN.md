@@ -275,8 +275,9 @@ selected pane (`SettingsPane`) is kept there too.
    The check also reports the facts from §5.1 (namespaces split across files, XSD 1.1 constructs,
    unsupported bindings) as warnings.
 3. *Create* is enabled when nothing is unresolved and the schema set compiles.
-4. Copy files, create DB, default server pre-filled from `soap:address`
-   (disabled until the user confirms the URL — no implicit connection).
+4. Copy files, create DB. The WSDL's SOAP 1.1 `soap:address`es are not servers: Settings ▸
+   Servers always lists them as read-only "from WSDL" rows, and Add as Server… turns one into a
+   server once the user has saved it (no implicit connection).
 
 ### Replace WSDL (Settings ▸ the project's General ▸ Replace WSDL…)
 Same import sheet, on the Settings window. After replacing: recompile, re-validate every request, show a report

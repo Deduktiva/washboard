@@ -81,6 +81,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 | WP-STATUS-COLORS | DARK-MODE (done); the UI review fixes (#81), which change the same lines; coordinate with WP-RULER-HOVER, whose warning markers use the new warning colour | new `crates/washboard-app/src/colors.rs`; the status-colour call sites in `panes.rs`, `editor.rs` (ruler markers, underlines), `sidebar.rs`, `http_log.rs`; a colour rule in `CLAUDE.md` | One function per meaning (error, warning, success) instead of `NSColor::system*Color()` at each call site with a comment saying what it means. Below. |
+| WP-WSDL-SERVERS | the Servers pane redesign (#85), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
 
 ### WP-OPERATION-PICKER in detail
 
@@ -240,3 +241,42 @@ error count" to keep them consistent. A name says that once, and a change of min
 - **Tests:** the Dark Mode contrast check from WP-DARK-MODE (`tests/appkit.rs`) also measures
   the three status colours against the window background in both appearances. Nothing else
   changes behaviour, so the existing checks cover the call sites.
+
+### WP-WSDL-SERVERS in detail
+
+Today the WSDL's `soap:address`es are offered as servers once: New Project keeps them in memory
+(`ProjectWindow::suggested_servers`), the Servers pane shows them in a "Suggested by the WSDL"
+section with Add, and they are gone after Add or when the project is reopened. A WSDL address
+is useful later too (a second server for the same port, after a Replace WSDL, after deleting a
+server), so it should always be there, without becoming a server nobody configured.
+
+- **Source.** The loaded WSDL's `Wsdl::soap11_addresses()` (port name and address of every
+  SOAP 1.1 port), read whenever the schema loads: on open, after New Project, after Replace
+  WSDL. Not stored in the database; the WSDL is the record. A port without an address gives
+  no row. The model exposes them as `ProjectWindow::wsdl_servers()`, empty while the schema
+  loads or when it failed.
+- **In the server list** (#85's Servers group), after the project's own servers: one row per
+  WSDL address, with the port name and the address like a server row, a "From WSDL" tag in
+  secondary text, and the tooltip "From the WSDL's soap:address. Duplicate it to use it." The
+  row's button is **Add as Server…** instead of Edit…; there is no way to edit or delete it. Rows
+  stay even when a server already has the same address: the list says what the WSDL offers,
+  and the user decides.
+- **Duplicate…** opens #85's server sheet for a new server, filled in with the port name as
+  its name and the address as its URL, other fields at their defaults. Save adds the server;
+  Cancel adds nothing. Nothing connects before Save, so the rule that a WSDL address is never
+  used until the user has confirmed it (PLAN §4 "Create project", step 4) holds as before.
+- **Never sendable.** WSDL rows are not servers: not in the toolbar's server popup, not
+  stored, not in the HTTP code's reach. Only `Server`s are.
+- **Goes:** the "Suggested by the WSDL" section, `suggested_servers` and
+  `confirm_suggested_server` in the model. New Project still opens the project's Servers pane
+  when its WSDL has an address (the import check already knows them, before the schema has
+  loaded), so the first server is one Duplicate… away.
+- **Not changed:** the CLI (`server add` takes a URL; it has never offered WSDL addresses).
+- **Docs:** PLAN §4 "Settings" and its §8 sketch lose the suggestions section and show the
+  WSDL rows (they are #85's text until it merges).
+- **Tests:** model on Linux: `wsdl_servers()` after New Project, after reopening the project
+  and after Replace WSDL (`customer` has one SOAP 1.1 address, `legacy-rpc` its own); none
+  while loading. In `tests/appkit.rs`: the Servers pane lists the WSDL row after the servers,
+  with Duplicate… and no Edit…; Duplicate… then Cancel adds nothing; Duplicate… then Save adds
+  a server with the port name and address, and the WSDL row stays; the toolbar's server popup
+  never lists a WSDL row; reopening the project still shows it.
