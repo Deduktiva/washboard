@@ -2825,7 +2825,7 @@ mod checks {
         };
         assert_eq!(password(ctx, key).as_deref(), Some("hunter2"));
 
-        // Cancel drops the sheet's changes, a cleared password too.
+        // Cancel drops the sheet's changes.
         servers.edit(1);
         assert_eq!(
             servers.password_field().stringValue().to_string(),
@@ -2833,15 +2833,11 @@ mod checks {
             "a stored password is not shown"
         );
         assert_eq!(servers.password_placeholder(), "Stored in the Keychain");
-        assert!(servers.offers_clear_password());
         assert!(
             servers.timeout_field().formatter().is_some(),
             "the timeout takes whole seconds only"
         );
-        servers.clear_password();
-        assert_eq!(servers.password_placeholder(), "Not set");
-        assert!(!servers.offers_clear_password());
-        assert_server_sheet_layout(&servers, "server sheet, password cleared");
+        assert_server_sheet_layout(&servers, "server sheet, password stored");
         servers
             .name_field()
             .setStringValue(&NSString::from_str("Discarded"));
@@ -2921,15 +2917,16 @@ mod checks {
             settings_window.attachedSheet().is_none()
         });
         assert_eq!(password(ctx, project.key()).as_deref(), Some("hunter2"));
-        // Clear Password takes effect on Save, and keeps Basic auth.
+        // Turning auth off is how a stored password goes: Save removes it.
         servers.edit(1);
-        servers.clear_password();
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { servers.no_auth_button().performClick(None) };
         servers.save();
         wait_until("the sheet to close", || {
             settings_window.attachedSheet().is_none()
         });
         assert_eq!(password(ctx, project.key()), None);
-        assert_eq!(servers.servers()[1].auth, basic);
+        assert_eq!(servers.servers()[1].auth, Auth::None);
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }

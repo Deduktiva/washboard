@@ -257,19 +257,6 @@ impl App {
         Ok(())
     }
 
-    /// Removes the server's stored password, so that Basic auth sends an empty one.
-    pub fn clear_server_password(
-        &mut self,
-        key: ProjectKey,
-        server: ServerId,
-    ) -> Result<(), ModelError> {
-        let secrets = self.front.secrets.clone();
-        self.window(key)?
-            .project
-            .set_server_password(server, None, secrets.as_ref())?;
-        self.servers_changed(key)
-    }
-
     /// For the settings form's password field.
     pub fn server_password(
         &self,

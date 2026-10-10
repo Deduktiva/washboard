@@ -46,8 +46,6 @@ struct ServerForm {
     /// The User and Password rows, shown with Basic auth only.
     user_row: Retained<NSView>,
     password_row: Retained<NSView>,
-    /// Clear Password, in a row of its own, shown while a stored password would be kept.
-    clear_row: Retained<NSView>,
     delete: Retained<NSButton>,
 }
 
@@ -66,10 +64,8 @@ pub struct ServersIvars {
     form: OnceCell<ServerForm>,
     /// What the sheet edits while it is open: `Some(None)` for a server not added yet.
     editing: Cell<Option<Option<ServerId>>>,
-    /// Whether the edited server has a password in the secret store, and whether Clear
-    /// Password was pressed since the sheet opened; Save clears it then.
+    /// Whether the edited server has a password in the secret store, for the placeholder.
     stored_password: Cell<bool>,
-    clear_password: Cell<bool>,
 }
 
 define_class!(
@@ -112,11 +108,6 @@ define_class!(
             self.cancel();
         }
 
-        #[unsafe(method(clearPassword:))]
-        fn clear_password_action(&self, _sender: Option<&AnyObject>) {
-            self.clear_password();
-        }
-
         #[unsafe(method(deleteServer:))]
         fn delete_action(&self, _sender: Option<&AnyObject>) {
             self.delete();
@@ -143,7 +134,6 @@ impl ServersPane {
             form: OnceCell::new(),
             editing: Cell::new(None),
             stored_password: Cell::new(false),
-            clear_password: Cell::new(false),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
@@ -262,6 +252,10 @@ impl ServersPane {
         &self.form().password
     }
 
+    pub fn no_auth_button(&self) -> &NSButton {
+        &self.form().auth_none
+    }
+
     pub fn basic_auth_button(&self) -> &NSButton {
         &self.form().auth_basic
     }
@@ -303,7 +297,6 @@ impl ServersPane {
             .read(|app| app.server_password(key, server.id).ok().flatten().is_some())
             .unwrap_or(false);
         self.ivars().stored_password.set(stored);
-        self.ivars().clear_password.set(false);
         self.load(&server, &server.name);
         self.form().delete.setHidden(false);
         self.present();
@@ -321,7 +314,6 @@ impl ServersPane {
         };
         self.ivars().editing.set(Some(None));
         self.ivars().stored_password.set(false);
-        self.ivars().clear_password.set(false);
         self.load(&server, "New Server");
         self.form().delete.setHidden(true);
         self.present();
@@ -366,18 +358,6 @@ impl ServersPane {
                 return;
             }
         }
-        // A typed password replaces the stored one anyway; without auth it is already gone.
-        if self.ivars().clear_password.get()
-            && password.is_none()
-            && matches!(server.auth, Auth::Basic { .. })
-            && self
-                .command("Could not clear the password", |app| {
-                    app.clear_server_password(key, id)
-                })
-                .is_none()
-        {
-            return;
-        }
         self.close_sheet();
     }
 
@@ -395,18 +375,6 @@ impl ServersPane {
         self.command("Could not delete the server", |app| {
             app.ask_delete_server(key, id)
         });
-    }
-
-    /// Clear Password: Save removes the stored password.
-    pub fn clear_password(&self) {
-        self.ivars().clear_password.set(true);
-        self.show_auth_rows();
-    }
-
-    /// Whether the sheet offers Clear Password: a password is stored, Basic auth is on, and
-    /// it was not cleared yet.
-    pub fn offers_clear_password(&self) -> bool {
-        !self.form().clear_row.isHiddenOrHasHiddenAncestor()
     }
 
     pub fn password_placeholder(&self) -> String {
@@ -512,7 +480,7 @@ impl ServersPane {
     fn show_auth_rows(&self) {
         let form = self.form();
         let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
-        let stored = self.ivars().stored_password.get() && !self.ivars().clear_password.get();
+        let stored = self.ivars().stored_password.get();
         form.password
             .setPlaceholderString(Some(&NSString::from_str(if stored {
                 "Stored in the Keychain"
@@ -521,7 +489,6 @@ impl ServersPane {
             })));
         form::set_row_shown(&form.user_row, basic_auth);
         form::set_row_shown(&form.password_row, basic_auth);
-        form::set_row_shown(&form.clear_row, basic_auth && stored);
         form::fit_window(self.sheet(), self.sheet_body());
     }
 
@@ -628,8 +595,6 @@ impl ServersPane {
         );
         let user_row = form::field_row("User", &user, mtm);
         let password_row = form::field_row("Password", &password, mtm);
-        let clear = target_button("Clear Password", self, sel!(clearPassword:), mtm);
-        let clear_row = form::control_row("Stored password", &clear, mtm);
         let group = form::group(
             vec![
                 form::field_row("Name", &name, mtm),
@@ -638,7 +603,6 @@ impl ServersPane {
                 form::control_row("Authentication", &auth, mtm),
                 user_row.clone(),
                 password_row.clone(),
-                clear_row.clone(),
                 form::control_row("Timeout", &timeout_row, mtm),
             ],
             mtm,
@@ -688,7 +652,6 @@ impl ServersPane {
             timeout,
             user_row,
             password_row,
-            clear_row,
             delete,
         };
         (sheet, body, form)
