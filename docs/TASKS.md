@@ -59,7 +59,7 @@ those one at a time, or split the paths before handing them out in parallel.
 ### Manual checks on a Mac
 Not a coding package: what CI cannot see, done by a person from `make app` or the CI artifact.
 - The whole loop on a real project: restore on launch, edit, autosave, validate, send, history,
-  HTTP log, New Project, Replace WSDL, Project Settings, the Keychain prompt (the only check of
+  HTTP log, New Project, Replace WSDL, the Settings window, the Keychain prompt (the only check of
   `KeychainSecretStore` so far; it is type-checked on Linux).
 - Typing stays responsive in a 1 MB request; completion and hover appear where expected.
 - Layout and light/dark appearance against `docs/gui-draft.html`. Findings become app fixes.
@@ -80,18 +80,18 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
 | WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
-| WP-STATUS-COLORS | DARK-MODE (done); the UI review fixes (#81), which change the same lines; coordinate with WP-RULER-HOVER, whose warning markers use the new warning colour | new `crates/washboard-app/src/colors.rs`; the status-colour call sites in `panes.rs`, `editor.rs` (ruler markers, underlines), `sidebar.rs`, `http_log.rs`; a colour rule in `CLAUDE.md` | One function per meaning (error, warning, success) instead of `NSColor::system*Color()` at each call site with a comment saying what it means. Below. |
-| WP-WSDL-SERVERS | the Servers pane redesign (#85), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
+| WP-STATUS-COLORS | DARK-MODE (done); coordinate with WP-RULER-HOVER, whose warning markers use the new warning colour | new `crates/washboard-app/src/colors.rs`; the status-colour call sites in `panes.rs`, `editor.rs` (ruler markers, underlines), `sidebar.rs`, `http_log.rs`; a colour rule in `CLAUDE.md` | One function per meaning (error, warning, success) instead of `NSColor::system*Color()` at each call site with a comment saying what it means. Below. |
+| WP-WSDL-SERVERS | the Servers pane redesign (#85, done), which this builds on | the WSDL servers in `crates/washboard-ui-model` (`import.rs`, `window.rs`; `suggested_servers` and `confirm_suggested_server` go); the Servers pane in `crates/washboard-app/src/settings_window.rs`; New Project's follow-up in `sheets.rs`; PLAN §4 "Settings" | The WSDL's SOAP 1.1 addresses always appear in the server list as read-only "from WSDL" rows that can only be turned into a real server, instead of a "Suggested by the WSDL" section that exists only right after New Project. Below. |
 
 ### WP-OPERATION-PICKER in detail
 
-Today Project ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
+Today File ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
 else the first supported one (`App::default_operation`), so creating a request for any other
 operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
 scrolling, not typing. The picker becomes the only way to create a request for an operation:
 WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
 
-- **Where.** Project ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
+- **Where.** File ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
   both titles gain the ellipsis, since they now ask something first. Until WP-REQUEST-FOLDERS-APP
   removes the OPERATIONS list, an operation row's New Request and a double-click on an
   operation still create directly.
@@ -193,7 +193,7 @@ would leave folders for removed operations behind.
   disclosure triangle, requests as today. The OPERATIONS section is removed; unsupported
   operations are still shown in the picker (PLAN §1).
 - **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
-  The REQUESTS header: New Request…, New Folder. Project ▸ New Folder (⌥⌘N) creates one in the
+  The REQUESTS header: New Request…, New Folder. File ▸ New Folder (⌥⌘N) creates one in the
   selected folder, or the selected request's folder, and starts inline rename.
 - **Rename** by Return or double-click on a request or folder (PLAN §4); a double-click on a
   folder's triangle still only toggles it.
@@ -209,10 +209,10 @@ would leave folders for removed operations behind.
 
 ### WP-STATUS-COLORS in detail
 
-The app picks a status colour at each call site: once the UI review fixes (#81) are in,
-`systemRedColor` for errors in six places, `systemOrangeColor` for warnings in three and
-`systemGreenColor` for success in two. #81 also adds comments like "red like the issues bar's
-error count" to keep them consistent. A name says that once, and a change of mind is one line.
+The app picks a status colour at each call site: `systemRedColor` for errors in six places,
+`systemOrangeColor` for warnings in three and `systemGreenColor` for success in two, with
+comments like "red like the issues bar's error count" to keep them consistent. A name says
+that once, and a change of mind is one line.
 
 - **`colors.rs`**, one function per meaning, each returning `Retained<NSColor>`: `error()`
   (`systemRedColor`), `warning()` (`systemOrangeColor`), `success()` (`systemGreenColor`).
@@ -221,7 +221,7 @@ error count" to keep them consistent. A name says that once, and a change of min
   comment of each says where it is used.
 - **Call sites on main today:**
   - Error: the request bar's "XML error" (`panes.rs`); the issues bar's error count (twice,
-    `panes.rs`); after #81, the ruler's error marker and the error underline (`editor.rs`) and
+    `panes.rs`); the ruler's error marker and the error underline (`editor.rs`) and
     the sidebar's invalid-request marker (`sidebar.rs`).
   - Warning: the issues bar's "schema not checked" and warning count (`panes.rs`); the HTTP
     log's skipped certificate check (`http_log.rs`). WP-RULER-HOVER's warning markers and
@@ -273,7 +273,7 @@ server), so it should always be there, without becoming a server nobody configur
   loaded), so the first server is one Add as Server… away.
 - **Not changed:** the CLI (`server add` takes a URL; it has never offered WSDL addresses).
 - **Docs:** PLAN §4 "Settings" and its §8 sketch lose the suggestions section and show the
-  WSDL rows (they are #85's text until it merges).
+  WSDL rows.
 - **Tests:** model on Linux: `wsdl_servers()` after New Project, after reopening the project
   and after Replace WSDL (`customer` has one SOAP 1.1 address, `legacy-rpc` its own); none
   while loading. In `tests/appkit.rs`: the Servers pane lists the WSDL row after the servers,
