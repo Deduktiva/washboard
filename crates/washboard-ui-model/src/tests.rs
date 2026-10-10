@@ -1510,8 +1510,16 @@ fn a_missing_include_blocks_create() {
     app.begin_import(target);
     app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
         .expect("destination");
-    // Only the entry WSDL: the imported binding WSDL and the schemas are missing.
-    app.set_import_files(target, customer().join("CustomerService.wsdl"), Vec::new())
+    // Only the entry WSDL, alone in a folder: the imported binding WSDL and the schemas are
+    // missing and cannot be found next to it either.
+    let alone = setup.tmp.path().join("alone");
+    std::fs::create_dir(&alone).expect("dir");
+    std::fs::copy(
+        customer().join("CustomerService.wsdl"),
+        alone.join("CustomerService.wsdl"),
+    )
+    .expect("copy");
+    app.set_import_files(target, alone.join("CustomerService.wsdl"), Vec::new())
         .expect("files");
     assert!(app.take_events().contains(&Event::ImportChanged { target }));
     fake.pump_until(&mut app, |app| checked(app, target));
@@ -1525,6 +1533,29 @@ fn a_missing_include_blocks_create() {
         app.create_project(),
         Err(ModelError::ImportNotReady)
     ));
+}
+
+#[test]
+fn files_next_to_the_wsdl_are_found_without_adding_them() {
+    let setup = Setup::new();
+    let (fake, mut app) = setup.launch();
+    let target = ImportTarget::NewProject;
+    app.begin_import(target);
+    app.set_import_files(target, customer().join("CustomerService.wsdl"), Vec::new())
+        .expect("files");
+    fake.pump_until(&mut app, |app| checked(app, target));
+    let sheet = app.import_sheet(target).expect("sheet");
+    let CheckState::Done(result) = &sheet.check else {
+        panic!("{:?}", sheet.check);
+    };
+    assert!(result.is_usable(), "{:?}", result.check.diagnostics);
+    let found: Vec<&str> = result
+        .found
+        .iter()
+        .filter_map(|p| p.file_name()?.to_str())
+        .collect();
+    assert!(found.contains(&"CustomerBinding.wsdl"), "{found:?}");
+    assert!(found.contains(&"audit.xsd"), "{found:?}");
 }
 
 #[test]

@@ -25,7 +25,7 @@ use washboard_ui_model::{App, CheckState, ImportSheet, ImportTarget};
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout::{self, view};
 use crate::table::TextTable;
-use crate::text::{import_messages, import_status, reference_row};
+use crate::text::{import_files, import_messages, import_status, reference_row};
 
 /// The ✓/✗ columns: wide enough for the mark, so the reference text gets the room.
 const MARK_WIDTH: f64 = 22.0;
@@ -156,6 +156,8 @@ impl ImportSheetController {
             let control = NSPathControl::new(mtm);
             control.setPathStyle(NSPathStyle::Standard);
             control.setPlaceholderString(Some(ns_string!("Not chosen")));
+            // It only shows the choice; focus goes to the Choose… button beside it.
+            control.setRefusesFirstResponder(true);
             shrinkable(&control);
             control
         };
@@ -178,18 +180,13 @@ impl ImportSheetController {
                 ),
             ]);
         }
+        let choose_wsdl = button("Choose…", sel!(chooseWsdl:));
         rows.push(vec![
             label("WSDL:", mtm),
-            value_row(
-                vec![
-                    view(wsdl.clone()),
-                    view(button("Choose…", sel!(chooseWsdl:))),
-                ],
-                mtm,
-            ),
+            value_row(vec![view(wsdl.clone()), view(choose_wsdl.clone())], mtm),
         ]);
         rows.push(vec![
-            label("XSD files:", mtm),
+            label("Other files:", mtm),
             value_row(
                 vec![view(files.clone()), view(add.clone()), view(clear.clone())],
                 mtm,
@@ -197,8 +194,10 @@ impl ImportSheetController {
         ]);
         let form = grid(rows, mtm);
 
-        let references = TextTable::new(&["", "Reference", "Resolved to"], mtm);
+        let references = TextTable::new(&["", "In", "Reference", "Resolved to"], mtm);
         let messages = TextTable::new(&["", "Message"], mtm);
+        // Messages name files and locations; cut short they say little.
+        messages.wrap_column(1);
         let status = NSTextField::labelWithString(ns_string!(""), mtm);
         layout::truncating(&status, NSLineBreakMode::ByTruncatingTail);
         let cancel = button("Cancel", sel!(cancel:));
@@ -251,6 +250,12 @@ impl ImportSheetController {
             window.setDelegate(Some(ProtocolObject::from_ref(&*this)));
         }
         window.setContentView(Some(&content));
+        // New Project starts with the name; Replace WSDL with choosing the WSDL.
+        if new_project {
+            window.setInitialFirstResponder(Some(&name));
+        } else {
+            window.setInitialFirstResponder(Some(&choose_wsdl));
+        }
 
         let _ = this.ivars().views.set(ImportViews {
             window,
@@ -285,7 +290,7 @@ impl ImportSheetController {
         &self.views().location
     }
 
-    /// One row per reference: mark, reference as written, resolved file.
+    /// One row per reference: mark, importing file, reference as written, resolved file.
     pub fn references(&self) -> &TextTable {
         &self.views().references
     }
@@ -420,7 +425,7 @@ impl ImportSheetController {
                     if let Some(project) = d.project(key)
                         && suggested
                     {
-                        project.show_settings();
+                        project.show_settings_servers();
                     }
                 });
             }
@@ -527,36 +532,19 @@ impl Shown {
             ),
             _ => (Vec::new(), Vec::new()),
         };
-        let files = sheet
-            .extra
-            .iter()
-            .map(|p| file_name(p))
-            .collect::<Vec<_>>()
-            .join(", ");
         Self {
             name: sheet.name.clone(),
             location: sheet.parent.clone(),
             wsdl: sheet.entry.clone(),
-            files: if files.is_empty() {
-                "None".to_owned()
-            } else {
-                files
-            },
+            files: import_files(sheet),
             has_entry: sheet.entry.is_some(),
             has_extra: !sheet.extra.is_empty(),
             references,
             messages,
-            status: import_status(sheet),
+            status: import_status(sheet, target),
             can_finish: sheet.can_finish(target),
         }
     }
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .unwrap_or(path.as_os_str())
-        .to_string_lossy()
-        .into_owned()
 }
 
 /// Ends `sheet` on whatever window it is attached to.

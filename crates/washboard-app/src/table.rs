@@ -9,63 +9,32 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSControl, NSControlTextEditingDelegate, NSEvent, NSLineBreakMode,
-    NSResponder, NSScrollView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
+    NSApplication, NSAutoresizingMaskOptions, NSControlTextEditingDelegate, NSEventType,
+    NSLineBreakMode, NSScrollView, NSTableColumn, NSTableColumnResizingOptions, NSTableView,
     NSTableViewDataSource, NSTableViewDelegate, NSTextAlignment, NSTextField, NSView,
 };
-use objc2_foundation::{NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString,
+};
 
 use crate::layout;
 
 type OnClick = Box<dyn Fn(usize)>;
 
-#[derive(Debug, Default)]
-pub struct KeyTableIvars {
-    /// Set while the table handles a key press.
-    in_key_down: Cell<bool>,
-}
-
-define_class!(
-    // SAFETY:
-    // - NSTableView has no subclassing requirements beyond its designated initializers, which
-    //   we inherit.
-    // - `KeyTableView` does not implement `Drop`.
-    #[unsafe(super(NSTableView, NSControl, NSView, NSResponder, NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[ivars = KeyTableIvars]
-    #[derive(Debug)]
-    pub struct KeyTableView;
-
-    impl KeyTableView {
-        // SAFETY: the signature matches `keyDown:`.
-        #[unsafe(method(keyDown:))]
-        fn key_down(&self, event: &NSEvent) {
-            // A selection change during a key press (↑/↓, Home, End, type-select) is the
-            // user's; one made by code or by a mouse down is not, and a click is reported by
-            // the table's action.
-            let was = self.ivars().in_key_down.replace(true);
-            // SAFETY: `keyDown:` takes the event.
-            let _: () = unsafe { msg_send![super(self), keyDown: event] };
-            self.ivars().in_key_down.set(was);
-        }
-    }
-);
-
-impl KeyTableView {
-    fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(KeyTableIvars::default());
-        // SAFETY: `init` is NSTableView's designated initializer for code-built views.
-        unsafe { msg_send![super(this), init] }
-    }
-}
+/// Above and below a wrapped cell's text.
+const WRAP_PADDING: f64 = 2.0;
 
 pub struct TableIvars {
     columns: usize,
     rows: RefCell<Vec<Vec<String>>>,
     /// Columns fixed by `fix_column_width`, whose text is centred.
     fixed: RefCell<Vec<usize>>,
+    /// Columns set by `wrap_column`, whose text wraps and makes its row taller.
+    wrapped: RefCell<Vec<usize>>,
     on_click: RefCell<Option<OnClick>>,
-    table: OnceCell<Retained<KeyTableView>>,
+    /// Set while code selects a row, which is not the user picking it.
+    applying: Cell<bool>,
+    table: OnceCell<Retained<NSTableView>>,
     scroll: OnceCell<Retained<NSScrollView>>,
 }
 
@@ -119,8 +88,14 @@ define_class!(
             let text = usize::try_from(row).ok().and_then(|r| rows.get(r)?.get(index));
             text.map(|text| {
                 let mtm = self.mtm();
-                let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
-                layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+                let label = match column.filter(|_| self.wraps(index)) {
+                    Some(column) => self.wrapping_label(text, column.width()),
+                    None => {
+                        let label = NSTextField::labelWithString(&NSString::from_str(text), mtm);
+                        layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);
+                        label
+                    }
+                };
                 if self.ivars().fixed.borrow().contains(&index) {
                     label.setAlignment(NSTextAlignment::Center);
                 }
@@ -132,11 +107,48 @@ define_class!(
         // SAFETY: the signature matches `tableViewSelectionDidChange:`.
         #[unsafe(method(tableViewSelectionDidChange:))]
         fn selection_did_change(&self, _notification: &NSNotification) {
-            let table = self.ivars().table.get();
-            let by_key = table.is_some_and(|t| t.ivars().in_key_down.get());
-            let row = table.map_or(-1, |t| t.selectedRow());
-            if let (true, Ok(row)) = (by_key, usize::try_from(row)) {
+            // Clicks are reported by the table's action, also on the row already selected; a
+            // change made by code is not the user's. What remains is the keyboard.
+            let mouse = NSApplication::sharedApplication(self.mtm())
+                .currentEvent()
+                .is_some_and(|e| e.r#type() == NSEventType::LeftMouseDown);
+            if let (false, false, Ok(row)) = (
+                mouse,
+                self.ivars().applying.get(),
+                usize::try_from(self.table().selectedRow()),
+            ) {
                 self.click(row);
+            }
+        }
+
+        // SAFETY: the signature matches `tableView:heightOfRow:`.
+        #[unsafe(method(tableView:heightOfRow:))]
+        fn height_of_row(&self, table: &NSTableView, row: NSInteger) -> f64 {
+            let base = table.rowHeight();
+            let rows = self.ivars().rows.borrow();
+            let Some(cells) = usize::try_from(row).ok().and_then(|r| rows.get(r)) else {
+                return base;
+            };
+            let columns = table.tableColumns();
+            self.ivars()
+                .wrapped
+                .borrow()
+                .iter()
+                .filter_map(|&i| {
+                    let text = cells.get(i)?;
+                    let column = columns.iter().nth(i)?;
+                    let label = self.wrapping_label(text, column.width());
+                    Some(label.intrinsicContentSize().height + 2.0 * WRAP_PADDING)
+                })
+                .fold(base, f64::max)
+        }
+
+        // SAFETY: the signature matches `tableViewColumnDidResize:`.
+        #[unsafe(method(tableViewColumnDidResize:))]
+        fn column_did_resize(&self, _notification: &NSNotification) {
+            // A wider or narrower column wraps its text onto other lines.
+            if !self.ivars().wrapped.borrow().is_empty() {
+                self.table().reloadData();
             }
         }
     }
@@ -159,14 +171,16 @@ impl TextTable {
             columns: titles.len().max(1),
             rows: RefCell::new(Vec::new()),
             fixed: RefCell::new(Vec::new()),
+            wrapped: RefCell::new(Vec::new()),
             on_click: RefCell::new(None),
+            applying: Cell::new(false),
             table: OnceCell::new(),
             scroll: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
-        let table = KeyTableView::new(mtm);
+        let table = NSTableView::new(mtm);
         for i in 0..this.ivars().columns {
             let id = NSString::from_str(&i.to_string());
             let column = NSTableColumn::initWithIdentifier(NSTableColumn::alloc(mtm), &id);
@@ -218,6 +232,25 @@ impl TextTable {
         }
     }
 
+    /// Wraps the text of `column` onto as many lines as it needs, making its row taller,
+    /// instead of shortening it: for messages that are only useful when read in full.
+    pub fn wrap_column(&self, column: usize) {
+        self.ivars().wrapped.borrow_mut().push(column);
+        self.table().reloadData();
+    }
+
+    fn wraps(&self, column: usize) -> bool {
+        self.ivars().wrapped.borrow().contains(&column)
+    }
+
+    /// A label for a cell of a wrapped column `width` wide; the same label measures its row.
+    fn wrapping_label(&self, text: &str, width: f64) -> Retained<NSTextField> {
+        let label = NSTextField::wrappingLabelWithString(&NSString::from_str(text), self.mtm());
+        label.setSelectable(false);
+        label.setPreferredMaxLayoutWidth((width - 2.0 * layout::CELL_INSET).max(1.0));
+        label
+    }
+
     pub fn set_rows(&self, rows: Vec<Vec<String>>) {
         *self.ivars().rows.borrow_mut() = rows;
         self.table().reloadData();
@@ -231,6 +264,14 @@ impl TextTable {
     /// or moves the selection to it with the keyboard.
     pub fn on_click(&self, f: impl Fn(usize) + 'static) {
         *self.ivars().on_click.borrow_mut() = Some(Box::new(f));
+    }
+
+    /// Selects `row` without reporting it as picked.
+    pub fn select(&self, row: usize) {
+        self.ivars().applying.set(true);
+        self.table()
+            .selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row), false);
+        self.ivars().applying.set(false);
     }
 
     /// What picking `row` does; also called by tests.

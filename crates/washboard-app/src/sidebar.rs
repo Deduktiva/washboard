@@ -14,10 +14,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource,
-    NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn, NSTableView, NSTableViewStyle,
-    NSTextField, NSTextFieldDelegate, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
+    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSEventModifierFlags,
+    NSLayoutAttribute, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView,
+    NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn,
+    NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
@@ -330,6 +331,9 @@ pub struct SidebarIvars {
     stale: Cell<bool>,
 }
 
+const MODIFIER_NONE: NSEventModifierFlags = NSEventModifierFlags(0);
+const MODIFIER_CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
+
 define_class!(
     // SAFETY:
     // - NSObject has no subclassing requirements.
@@ -573,27 +577,33 @@ impl SidebarController {
             return;
         };
         let node = node(&clicked);
-        let items: &[(&str, Sel)] = match node.kind() {
+        let items: &[(&str, Sel, &str, NSEventModifierFlags)] = match node.kind() {
             NodeKind::Request => &[
-                ("Rename", sel!(sidebarRenameRequest:)),
-                ("Duplicate", sel!(sidebarDuplicateRequest:)),
-                ("Validate", sel!(sidebarValidateRequest:)),
-                ("Delete", sel!(sidebarDeleteRequest:)),
+                ("Rename", sel!(sidebarRenameRequest:), "", MODIFIER_NONE),
+                (
+                    "Duplicate",
+                    sel!(sidebarDuplicateRequest:),
+                    "d",
+                    MODIFIER_CMD,
+                ),
+                ("Validate", sel!(sidebarValidateRequest:), "b", MODIFIER_CMD),
+                ("Delete", sel!(sidebarDeleteRequest:), "\u{8}", MODIFIER_CMD),
             ],
-            NodeKind::Operation => &[("New Request", sel!(sidebarNewRequest:))],
+            NodeKind::Operation => &[("New Request", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)],
             NodeKind::Group if node.ivars().path == "group:requests" => {
-                &[("New Request", sel!(sidebarNewRequest:))]
+                &[("New Request", sel!(sidebarNewRequest:), "n", MODIFIER_CMD)]
             }
             _ => &[],
         };
         let object: &AnyObject = node.as_ref();
-        for &(title, action) in items {
-            let item = menu_item(title, Some(action), "", self.mtm());
+        for &(title, action, key, modifiers) in items {
+            let item = menu_item(title, Some(action), key, self.mtm());
             // SAFETY: the target is this controller, which implements every action used here
             // and outlives the menu (the outline view owns it); the represented object is a
             // `SidebarNode`, which is what `menu_node` expects back.
             unsafe {
                 item.setTarget(Some(self));
+                item.setKeyEquivalentModifierMask(modifiers);
                 item.setRepresentedObject(Some(object));
             }
             // An unsupported operation gets no request, as a double-click shows.

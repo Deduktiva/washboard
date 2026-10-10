@@ -100,17 +100,18 @@ fn utf8(bytes: &[u8], had_bom: bool) -> Result<Decoded, DecodeError> {
 
 fn utf16(bytes: &[u8], encoding: Encoding, had_bom: bool) -> Result<Decoded, DecodeError> {
     let bom_len = if had_bom { 2 } else { 0 };
-    if !bytes.len().is_multiple_of(2) {
+    let chunks = bytes.as_chunks::<2>();
+    if !chunks.1.is_empty() {
         return Err(DecodeError::Invalid {
             encoding,
             offset: bom_len + bytes.len() - 1,
         });
     }
-    let units = bytes.chunks_exact(2).map(|c| match encoding {
+    let units = chunks.0.iter().map(|c| match encoding {
         Encoding::Utf16Be => u16::from_be_bytes([c[0], c[1]]),
         _ => u16::from_le_bytes([c[0], c[1]]),
     });
-    let mut text = String::with_capacity(bytes.len() / 2);
+    let mut text = String::with_capacity(units.len());
     for (i, r) in char::decode_utf16(units).enumerate() {
         match r {
             Ok(ch) => text.push(ch),

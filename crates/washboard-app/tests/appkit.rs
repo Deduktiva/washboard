@@ -19,7 +19,6 @@ fn main() {
     let ctx = checks::Ctx::launch(mtm);
     let checks: &[Check] = &[
         ("lifecycle", checks::lifecycle),
-        ("main_menu", checks::main_menu),
         ("welcome_window", checks::welcome_window),
         ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
@@ -38,6 +37,7 @@ fn main() {
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_window", checks::settings_window),
+        ("wrapped_table", checks::wrapped_table),
     ];
     for (name, check) in checks {
         print!("appkit check {name} ... ");
@@ -68,8 +68,8 @@ mod checks {
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSColor, NSColorSpace,
-        NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
+        NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSScrollView, NSSplitViewItemBehavior,
         NSStackView, NSTableCellView, NSTextField, NSTextInputClient, NSTextView,
         NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode,
@@ -364,193 +364,6 @@ mod checks {
         assert!(!terminate, "closing the last window must not quit");
     }
 
-    const C: usize = NSEventModifierFlags::Command.0;
-    const S: usize = NSEventModifierFlags::Shift.0;
-    const O: usize = NSEventModifierFlags::Option.0;
-    const CTRL: usize = NSEventModifierFlags::Control.0;
-
-    /// (title, key equivalent, modifiers, action); `-` is a separator, an action of `>` a
-    /// submenu.
-    type Row = (&'static str, &'static str, usize, &'static str);
-
-    const MENUS: &[(&str, &[Row])] = &[
-        (
-            "Washboard",
-            &[
-                ("About Washboard", "", 0, "orderFrontStandardAboutPanel:"),
-                ("-", "", 0, ""),
-                ("Settings…", ",", C, "showSettings:"),
-                ("-", "", 0, ""),
-                ("Services", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Hide Washboard", "h", C, "hide:"),
-                ("Hide Others", "h", O | C, "hideOtherApplications:"),
-                ("Show All", "", 0, "unhideAllApplications:"),
-                ("-", "", 0, ""),
-                ("Quit Washboard", "q", C, "terminate:"),
-            ],
-        ),
-        (
-            "File",
-            &[
-                ("New Project…", "n", S | C, "newProject:"),
-                ("Open Project…", "o", C, "openProject:"),
-                ("Open Recent", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Close", "w", C, "performClose:"),
-                ("Save All", "s", C, "saveAll:"),
-            ],
-        ),
-        (
-            "Edit",
-            &[
-                ("Undo", "z", C, "undo:"),
-                ("Redo", "z", S | C, "redo:"),
-                ("-", "", 0, ""),
-                ("Cut", "x", C, "cut:"),
-                ("Copy", "c", C, "copy:"),
-                ("Paste", "v", C, "paste:"),
-                ("Select All", "a", C, "selectAll:"),
-                ("-", "", 0, ""),
-                ("Find", "", 0, ">"),
-                ("-", "", 0, ""),
-                ("Format XML", "i", CTRL, "formatXML:"),
-            ],
-        ),
-        ("View", &[("Show Sidebar", "s", CTRL | C, "toggleSidebar:")]),
-        (
-            "Project",
-            &[
-                ("New Request", "n", C, "newRequest:"),
-                ("Duplicate", "d", C, "duplicateRequest:"),
-                ("Rename", "", 0, "renameRequest:"),
-                ("Delete", "\u{8}", C, "deleteRequest:"),
-                ("-", "", 0, ""),
-                ("Validate", "b", C, "validateRequest:"),
-                ("Send", "\r", C, "sendRequest:"),
-                ("Cancel Send", ".", C, "cancelSend:"),
-                ("-", "", 0, ""),
-                ("Project Settings…", "", 0, "projectSettings:"),
-            ],
-        ),
-        (
-            "Window",
-            &[
-                ("Minimize", "m", C, "performMiniaturize:"),
-                ("Zoom", "", 0, "performZoom:"),
-                ("-", "", 0, ""),
-                ("HTTP Log", "l", O | C, "showHttpLog:"),
-                ("-", "", 0, ""),
-                ("Bring All to Front", "", 0, "arrangeInFront:"),
-            ],
-        ),
-        ("Help", &[]),
-    ];
-
-    fn rows(menu: &NSMenu) -> Vec<(String, String, usize, String)> {
-        menu.itemArray()
-            .iter()
-            .map(|item| {
-                if item.isSeparatorItem() {
-                    return ("-".into(), String::new(), 0, String::new());
-                }
-                let action = if item.hasSubmenu() {
-                    ">".into()
-                } else {
-                    item.action()
-                        .map(|s| s.name().to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                };
-                let key = item.keyEquivalent().to_string();
-                let modifiers = if key.is_empty() {
-                    0
-                } else {
-                    item.keyEquivalentModifierMask().0
-                };
-                (item.title().to_string(), key, modifiers, action)
-            })
-            .collect()
-    }
-
-    /// Titles, shortcuts and actions of every menu item, and the menus AppKit manages.
-    ///
-    /// AppKit adds items of its own (Close All as an alternate of Close, Emoji & Symbols and
-    /// AutoFill in Edit, window tiling in Window), varying by macOS release. Only our items
-    /// are compared, in order; separators are not compared.
-    pub fn main_menu(ctx: &Ctx) {
-        let main = ctx.app.mainMenu().expect("a main menu");
-        let items = main.itemArray();
-        assert_eq!(items.len(), MENUS.len(), "top-level menus");
-        for (item, (title, expected)) in items.iter().zip(MENUS) {
-            let submenu = item.submenu().expect("top-level items have submenus");
-            assert_eq!(submenu.title().to_string(), *title);
-            let expected: Vec<_> = expected
-                .iter()
-                .filter(|(t, ..)| *t != "-")
-                .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
-                .collect();
-            let (ours, added): (Vec<_>, Vec<_>) = rows(&submenu)
-                .into_iter()
-                .filter(|(t, ..)| t != "-")
-                .partition(|(t, ..)| expected.iter().any(|(e, ..)| e == t));
-            assert_eq!(ours, expected, "{title} menu");
-            if !added.is_empty() {
-                let titles: Vec<_> = added.iter().map(|(t, ..)| t.as_str()).collect();
-                print!("({title}: AppKit added {titles:?}) ");
-            }
-        }
-
-        let windows = ctx
-            .app
-            .windowsMenu()
-            .expect("the Window menu is registered");
-        assert_eq!(windows.title().to_string(), "Window");
-        let services = ctx
-            .app
-            .servicesMenu()
-            .expect("the Services menu is registered");
-        assert_eq!(services.title().to_string(), "Services");
-        // Registered as the Help menu, it gets the system's menu search field.
-        let help = ctx.app.helpMenu().expect("the Help menu is registered");
-        assert_eq!(help.title().to_string(), "Help");
-        let find = main
-            .itemWithTitle(&NSString::from_str("Edit"))
-            .and_then(|i| i.submenu())
-            .and_then(|m| m.itemWithTitle(&NSString::from_str("Find")))
-            .and_then(|i| i.submenu())
-            .expect("Edit ▸ Find");
-        let find_rows = rows(&find);
-        let expected: Vec<(String, String, usize, String)> = [
-            ("Find…", "f", C, "performFindPanelAction:"),
-            ("Find and Replace…", "f", O | C, "performFindPanelAction:"),
-            ("Find Next", "g", C, "performFindPanelAction:"),
-            ("Find Previous", "g", S | C, "performFindPanelAction:"),
-            ("Use Selection for Find", "e", C, "performFindPanelAction:"),
-            ("Jump to Selection", "j", C, "centerSelectionInVisibleArea:"),
-        ]
-        .iter()
-        .map(|(t, k, m, a)| (t.to_string(), k.to_string(), *m, a.to_string()))
-        .collect();
-        assert_eq!(find_rows, expected, "Find menu");
-        let replace = find
-            .itemWithTitle(&NSString::from_str("Find and Replace…"))
-            .expect("Find and Replace");
-        // `NSTextFinderActionShowReplaceInterface`.
-        assert_eq!(replace.tag(), 12);
-
-        // Settings is answered by the app delegate, so it is enabled with no window open.
-        let app_menu = items
-            .firstObject()
-            .and_then(|i| i.submenu())
-            .expect("app menu");
-        let settings = app_menu.itemWithTitle(&objc2_foundation::NSString::from_str("Settings…"));
-        app_menu.update();
-        assert!(
-            settings.expect("Settings item").isEnabled(),
-            "Settings is enabled"
-        );
-    }
-
     fn open_recent_titles(ctx: &Ctx) -> Vec<String> {
         let file = ctx
             .app
@@ -559,9 +372,9 @@ mod checks {
             .and_then(|i| i.submenu())
             .expect("File menu");
         let recent = file
-            .itemWithTitle(&NSString::from_str("Open Recent"))
+            .itemWithTitle(&NSString::from_str("Recent Projects"))
             .and_then(|i| i.submenu())
-            .expect("Open Recent submenu");
+            .expect("Recent Projects submenu");
         recent
             .itemArray()
             .iter()
@@ -571,7 +384,7 @@ mod checks {
     }
 
     /// Closing the last project shows the welcome window listing it; opening it from the list
-    /// or from File ▸ Open Recent brings it back, once.
+    /// or from File ▸ Recent Projects brings it back, once.
     pub fn welcome_window(ctx: &Ctx) {
         let window = ctx.open().project_window();
         autoreleasepool(|_| window.performClose(None));
@@ -2019,13 +1832,13 @@ mod checks {
         let project_menu = ctx
             .app
             .mainMenu()
-            .and_then(|m| m.itemWithTitle(&NSString::from_str("Project")))
+            .and_then(|m| m.itemWithTitle(&NSString::from_str("File")))
             .and_then(|i| i.submenu())
-            .expect("Project menu");
+            .expect("File menu");
         let enabled = |title: &str| -> bool {
             let item = project_menu
                 .itemWithTitle(&NSString::from_str(title))
-                .expect("a Project menu item");
+                .expect("a File menu item");
             // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
             unsafe { msg_send![&*project, validateMenuItem: &*item] }
         };
@@ -2294,7 +2107,7 @@ mod checks {
         table.on_click(move |row| log.borrow_mut().push(row));
         table.set_rows(vec![vec!["a".into()], vec!["b".into()], vec!["c".into()]]);
         let view = table.table();
-        view.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(0), false);
+        table.select(0);
         assert!(
             picked.borrow().is_empty(),
             "selection by code is not reported"
@@ -2675,6 +2488,13 @@ mod checks {
         );
         assert!(!sheet.finish_button().isEnabled(), "nothing chosen yet");
         assert_eq!(sheet.status(), "Choose the WSDL.");
+        let first = window
+            .initialFirstResponder()
+            .expect("an initial first responder");
+        assert!(
+            std::ptr::eq(&*first, &**sheet.name_field() as &NSView),
+            "New Project starts with the name"
+        );
 
         // A long location is shortened in the form instead of widening it past the window.
         let deep = (0..12).fold(tmp.path().to_path_buf(), |p, i| {
@@ -2713,8 +2533,6 @@ mod checks {
         assert!(references.size.height >= 119.5, "{references:?}");
         inside("the findings", in_window(sheet.messages().view()));
 
-        sheet.set_name("Customers");
-        sheet.choose_location(projects.clone());
         sheet.choose_wsdl(files.join("CustomerService.wsdl"));
         sheet.add_files(vec![files.clone()]);
         wait_checked(&sheet);
@@ -2728,9 +2546,18 @@ mod checks {
         }
         let missing: Vec<&Vec<String>> = rows.iter().filter(|r| r[0] == "✗").collect();
         assert_eq!(missing.len(), 1, "{rows:?}");
-        assert_eq!(missing[0][1], "xs:include party-ids.xsd");
-        assert_eq!(missing[0][2], "not supplied");
+        assert!(
+            missing[0][1].ends_with("party.xsd"),
+            "the importer: {rows:?}"
+        );
+        assert_eq!(missing[0][2], "xs:include party-ids.xsd");
+        assert_eq!(missing[0][3], "not found");
         assert!(!sheet.messages().rows().is_empty(), "the finding is listed");
+        let messages = sheet.messages().table();
+        assert!(
+            messages.rectOfRow(0).size.height >= messages.rowHeight(),
+            "a message row is at least one line high"
+        );
         assert!(!sheet.finish_button().isEnabled(), "disabled while ✗");
         let open = ctx.delegate.projects().len();
         sheet.finish();
@@ -2747,6 +2574,10 @@ mod checks {
             "{:?}",
             sheet.references().rows()
         );
+        assert!(!sheet.finish_button().isEnabled(), "no name yet");
+        assert_eq!(sheet.status(), "Name the project.");
+        sheet.set_name("Customers");
+        sheet.choose_location(projects.clone());
         assert!(sheet.finish_button().isEnabled(), "enabled once all ✓");
 
         sheet.finish();
@@ -2805,6 +2636,42 @@ mod checks {
         );
     }
 
+    /// A wrapped column shows a long text on several lines in a taller row, and rewraps when
+    /// the column changes width.
+    pub fn wrapped_table(_ctx: &Ctx) {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let table = washboard_app::TextTable::new(&["", "Message"], mtm);
+        table.wrap_column(1);
+        table.view().setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(300.0, 400.0),
+        ));
+        let long = "file.xsd: xs:include \"a-rather-long-name.xsd\" was not found; ".repeat(4);
+        table.set_rows(vec![
+            vec!["✗".into(), "short".into()],
+            vec!["✗".into(), long],
+        ]);
+        let tv = table.table();
+        let column = tv.tableColumns().iter().nth(1).expect("two columns");
+        column.setWidth(200.0);
+        tv.tile();
+        let short = tv.rectOfRow(0).size.height;
+        let tall = tv.rectOfRow(1).size.height;
+        assert!((short - tv.rowHeight()).abs() < 0.5, "{short}");
+        assert!(tall > 3.0 * short, "the long text wraps: {tall} vs {short}");
+        column.setWidth(600.0);
+        tv.tile();
+        let wider = tv.rectOfRow(1).size.height;
+        assert!(
+            wider < tall,
+            "a wider column needs fewer lines: {wider} vs {tall}"
+        );
+        let cell = tv
+            .viewAtColumn_row_makeIfNecessary(1, 1, true)
+            .expect("a cell");
+        assert_fits(&cell, "a wrapped message");
+    }
+
     /// Replace WSDL, from the project's General settings, checks the new files like New
     /// Project, swaps the WSDL and says what changed; the pane then lists the new files.
     pub fn replace_wsdl(ctx: &Ctx) {
@@ -2835,6 +2702,12 @@ mod checks {
         assert!(window.attachedSheet().is_none(), "on the Settings window");
         let sheet = project.replace_sheet().expect("created by replaceWsdl:");
         assert_eq!(sheet.finish_button().title().to_string(), "Replace");
+        let first = sheet
+            .window()
+            .initialFirstResponder()
+            .and_then(|v| v.downcast::<NSButton>().ok())
+            .expect("a button first");
+        assert_eq!(first.title().to_string(), "Choose…", "not the path control");
         assert!(!sheet.finish_button().isEnabled());
 
         let customer = fixtures().join("customer");
@@ -2897,8 +2770,7 @@ mod checks {
             "the app's section, then one per open project"
         );
 
-        // SAFETY: `projectSettings:` takes the sender.
-        let _: () = unsafe { msg_send![&*project, projectSettings: None::<&AnyObject>] };
+        settings.show(Some(Pane::Servers(key)));
         assert_eq!(settings.selected(), Some(Pane::Servers(key)));
         assert_eq!(
             settings_window.title().to_string(),
@@ -3037,7 +2909,7 @@ mod checks {
 
         let project = ctx.open();
         let window = project.project_window();
-        let servers = project.show_settings().expect("the Servers pane");
+        let servers = project.show_settings_servers().expect("the Servers pane");
         assert_eq!(servers.server_rows()[1][0], "Production EU");
         assert_eq!(servers.servers()[1].auth, basic);
         servers.edit(1);

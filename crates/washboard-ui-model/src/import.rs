@@ -11,7 +11,7 @@ use washboard_core::model::{OperationRef, RequestId};
 use washboard_core::project::{OpenProject, Project, WsdlSet};
 use washboard_core::validate::validate_request;
 use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::wsdl::{self, ImportCheck, Sources, StructuralReport};
+use washboard_core::wsdl::{self, ImportCheck, StructuralReport};
 
 use crate::app::{App, ModelError, ProjectKey};
 use crate::event::Event;
@@ -59,6 +59,9 @@ pub struct CheckedImport {
     pub compile: Vec<Diagnostic>,
     /// `(port, address)` of each SOAP 1.1 port, offered as servers after creation.
     pub addresses: Vec<(String, String)>,
+    /// Files read because a relative reference named them and they exist next to the
+    /// importing file; the user did not add them.
+    pub found: Vec<PathBuf>,
     set: WsdlSet,
     operations: Vec<OperationRef>,
 }
@@ -293,8 +296,11 @@ impl App {
 
 /// Runs on a worker.
 fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String> {
-    let sources = Sources::from_disk(entry, extra).map_err(|e| e.to_string())?;
-    let w = wsdl::load(&sources);
+    let wsdl::Loaded {
+        sources,
+        wsdl: w,
+        found,
+    } = wsdl::load_from_disk(entry, extra).map_err(|e| e.to_string())?;
     let compile = if w.check.has_errors() {
         Vec::new()
     } else {
@@ -310,6 +316,7 @@ fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String
         check: w.check,
         report: w.report,
         compile,
+        found,
         set,
     })
 }

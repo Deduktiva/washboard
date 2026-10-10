@@ -22,6 +22,7 @@
 
 mod bundle;
 mod defs;
+mod discover;
 mod graph;
 mod report;
 mod source;
@@ -42,6 +43,7 @@ pub use defs::{
     OperationFault, OperationMessage, Part, PartContent, Port, PortType, Protocol, Service, Style,
     Support, UnsupportedReason, Use,
 };
+pub use discover::{Loaded, load_from_disk};
 pub use graph::{FileKind, RefKind, Reference, Resolution, Unresolved, Xsd11Construct};
 pub use report::StructuralReport;
 pub(crate) use source::split_scheme;

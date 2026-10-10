@@ -127,7 +127,8 @@ pub fn cell(
     cell
 }
 
-const CELL_INSET: f64 = 2.0;
+/// From a table cell's edges to its content.
+pub const CELL_INSET: f64 = 2.0;
 
 /// Lets a label give up width before its neighbours do, shortening its text with an ellipsis
 /// (`mode`) and showing the whole of it in a tool tip on hover.

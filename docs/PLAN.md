@@ -9,7 +9,7 @@ Decisions taken so far:
 |---|---|
 | UI binding | `objc2` + `objc2-app-kit` / `objc2-foundation`, UI built in code (no nibs) |
 | Schema validation | libxml2 XSD validation via FFI, **vendored and statically linked** (system copy is 2.9.13 from 2022, see §5) |
-| WSDL/XSD imports | User supplies all referenced files; they are copied into the project. Unresolved imports are errors. Never fetched. |
+| WSDL/XSD imports | User supplies the referenced files; local files named by a relative path next to the importing file are picked up automatically. All are copied into the project. Unresolved imports are errors. Never fetched. |
 | Basic-auth passwords | macOS Keychain; username and everything else in the project database |
 | Minimum OS | macOS 26 (the GitHub macOS runners run 26, so CI can launch the app) |
 | Distribution | Developer ID, notarized; sandbox-ready but not sandboxed in v1 |
@@ -267,11 +267,17 @@ selected pane (`SettingsPane`) is kept there too.
    supplied folder structure is preserved on copy. Remote `http(s)://` locations are never fetched;
    they are matched against supplied files by the longest matching path suffix, and an ambiguous
    match (two `common.xsd` in different folders) is reported, not guessed.
+   A relative location that is not among the supplied files but exists on disk relative to the
+   importing file is read and added, transitively, and listed as found rather than supplied:
+   real WSDLs ship with their XSDs beside them. Absolute paths are not followed this way.
+   Each reference row names the file it comes from, since the same file is often imported from
+   several places.
    The check also reports the facts from §5.1 (namespaces split across files, XSD 1.1 constructs,
    unsupported bindings) as warnings.
 3. *Create* is enabled when nothing is unresolved and the schema set compiles.
-4. Copy files, create DB, default server pre-filled from `soap:address`
-   (disabled until the user confirms the URL — no implicit connection).
+4. Copy files, create DB. The WSDL's SOAP 1.1 `soap:address`es are not servers: Settings ▸
+   Servers always lists them as read-only "from WSDL" rows, and Add as Server… turns one into a
+   server once the user has saved it (no implicit connection).
 
 ### Replace WSDL (Settings ▸ the project's General ▸ Replace WSDL…)
 Same import sheet, on the Settings window. After replacing: recompile, re-validate every request, show a report
@@ -400,8 +406,7 @@ folder. Layout follows System Settings, decided once in `crates/washboard-app/sr
 groups 20 pt from the content edges and at most 640 pt wide, every header, footnote and row
 label on one leading line inside the group, controls on the trailing edge, text fields one width.
 Changes apply as they are made;
-there is no Done button. Project ▸ Project Settings… and New Project's server confirmation open
-the window on that project's Servers pane. A closed project's section leaves the window.
+there is no Done button. New Project's server confirmation opens the window on that project's Servers pane. A closed project's section leaves the window.
 
 ### Save / autosave
 - Each editor is a buffer with a dirty flag. Autosave 1 s after the last keystroke, and
@@ -451,7 +456,7 @@ libxml2 cannot compile a WSDL directly. Steps:
    split namespace that `xs:include`s all its files, with every import of that namespace pointed
    at it (also used for `rpc/literal`, §5.4).
 
-### libxml2: vendored, not system
+### libxml2 vendored
 The system library on current macOS is 2.9.13 (Feb 2022), built with HTTP and FTP support.
 Reasons to vendor a pinned current release instead:
 - Several years of XSD validator fixes and security fixes are missing from 2.9.13, and we cannot
@@ -461,10 +466,6 @@ Reasons to vendor a pinned current release instead:
 - Newer releases have per-context resource loaders; with them (plus the thread-local global
   loader, §5 step 3) schema compiles need no global lock.
 - Same version in CI (Linux) and in the app, so test results carry over.
-
-For faster local builds, `WASHBOARD_LIBXML2=pkg-config` links a Homebrew/distro copy instead;
-release builds and CI always use the vendored one (a Homebrew dylib would not exist on users'
-Macs, and a static Homebrew copy makes releases depend on the build machine).
 
 Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static linking
 is fine). Pinned release and how we watch for advisories: `crates/libxml2-sys/README.md`.

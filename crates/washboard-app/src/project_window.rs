@@ -19,8 +19,9 @@ use objc2_app_kit::{
     NSAlert, NSBeep, NSBox, NSBoxType, NSButton, NSColor, NSImage, NSLayoutAttribute,
     NSLineBreakMode, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView,
     NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
-    NSStackViewGravity, NSTextField, NSTitlePosition, NSTitlebarAccessoryViewController, NSToolbar,
-    NSToolbarDelegate, NSToolbarDisplayMode, NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
+    NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
+    NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
     NSWindowToolbarStyle,
@@ -31,7 +32,7 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, WellFormedness};
+use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, SchemaState, WellFormedness};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
@@ -191,14 +192,8 @@ define_class!(
                 return false.into();
             }
             // The menu's Send only sends and Cancel Send only cancels; the toolbar item, which
-            // AppKit does not validate here, toggles. Every other item this controller answers
-            // is always enabled, as before it validated anything.
-            match item.action() {
-                Some(action) if action == sel!(formatXML:) => self.has_editor(),
-                Some(action) if action == sel!(sendRequest:) => !self.is_sending(),
-                Some(action) if action == sel!(cancelSend:) => self.is_sending(),
-                _ => true,
-            }
+            // AppKit does not validate here, toggles.
+            item.action().is_none_or(|action| self.validates(action))
         }
     }
 
@@ -273,11 +268,6 @@ define_class!(
             if self.is_sending() {
                 self.cancel_send();
             }
-        }
-
-        #[unsafe(method(projectSettings:))]
-        fn project_settings(&self, _sender: Option<&AnyObject>) {
-            self.show_settings();
         }
 
         #[unsafe(method(showLatest:))]
@@ -551,6 +541,54 @@ impl ProjectWindowController {
         .unwrap_or(false)
     }
 
+    /// Whether the menu item sending `action` is enabled while this window is key.
+    fn validates(&self, action: Sel) -> bool {
+        if action == sel!(formatXML:) {
+            self.has_editor()
+        } else if action == sel!(deleteRequest:) {
+            // ⌘⌫ in a text view deletes to the start of the line. Menu key equivalents are
+            // matched before the text view's key bindings, so while one has the focus Delete
+            // steps aside and the keystroke reaches it, as in Finder and Mail.
+            self.selected_request().is_some() && !self.text_has_focus()
+        } else if [
+            sel!(duplicateRequest:),
+            sel!(renameRequest:),
+            sel!(validateRequest:),
+        ]
+        .contains(&action)
+        {
+            // These act on the selected request; with none they did nothing.
+            self.selected_request().is_some()
+        } else if action == sel!(sendRequest:) {
+            self.selected_request().is_some() && !self.is_sending()
+        } else if action == sel!(cancelSend:) {
+            self.is_sending()
+        } else if action == sel!(newRequest:) {
+            // A request needs an operation from the loaded WSDL.
+            self.schema_ready()
+        } else {
+            true
+        }
+    }
+
+    /// Whether the window's first responder is a text view: the editor, the response body,
+    /// or a field editor (a rename in the sidebar, a text field).
+    fn text_has_focus(&self) -> bool {
+        self.project_window()
+            .firstResponder()
+            .is_some_and(|r| r.downcast::<NSTextView>().is_ok())
+    }
+
+    /// Whether the WSDL is loaded, so new requests have operations to use.
+    fn schema_ready(&self) -> bool {
+        let key = self.key();
+        self.read(|app| {
+            app.project(key)
+                .is_some_and(|w| matches!(w.schema(), SchemaState::Ready(_)))
+        })
+        .unwrap_or(false)
+    }
+
     /// Shows the latest exchange and the editor, or an older exchange whole: its request as
     /// sent in the editor's place and the accessory instead of the toolbar's items
     /// (`ShownExchangeChanged`). The editor keeps its text, selection and undo stack.
@@ -774,8 +812,8 @@ impl ProjectWindowController {
             .find(|i| i.itemIdentifier().to_string() == "send")
     }
 
-    /// Project ▸ Project Settings…: the Settings window on this project's Servers pane.
-    pub fn show_settings(&self) -> Option<Retained<ServersPane>> {
+    /// Settings window on this project's Servers pane.
+    pub fn show_settings_servers(&self) -> Option<Retained<ServersPane>> {
         let key = self.key();
         with_delegate(self.mtm(), |d| {
             d.show_settings(Some(Pane::Servers(key))).servers(key)

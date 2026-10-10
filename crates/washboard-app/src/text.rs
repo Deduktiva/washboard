@@ -1,15 +1,19 @@
 //! Text helpers of the app that need no AppKit, so their tests run on Linux too.
 
+use std::path::Path;
+
 use washboard_core::diag::{Diagnostic, Severity};
 use washboard_core::http::TlsInfo;
 use washboard_core::model::OperationRef;
 use washboard_core::wsdl::{Protocol, Reference, Resolution, Unresolved};
 use washboard_ui_model::{
-    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ReplaceOutcome, WellFormedness,
+    CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ImportTarget, ReplaceOutcome,
+    WellFormedness,
 };
 
-/// A row of the import sheet's reference table: mark, the reference as written, and where it
-/// resolved to.
+/// A row of the import sheet's reference table: mark, the file the reference is in, the
+/// reference as written, and where it resolved to. The same file is often imported from
+/// several places, so without the importer two rows can look identical.
 pub(crate) fn reference_row(r: &Reference) -> Vec<String> {
     let target = r
         .location
@@ -20,17 +24,55 @@ pub(crate) fn reference_row(r: &Reference) -> Vec<String> {
     let (mark, resolved) = match &r.resolution {
         Resolution::Resolved { file, .. } => ("✓", file.clone()),
         Resolution::ByNamespace => ("✓", "by namespace".to_owned()),
-        Resolution::Unresolved(Unresolved::NotSupplied) => ("✗", "not supplied".to_owned()),
+        Resolution::Unresolved(Unresolved::NotSupplied) => ("✗", "not found".to_owned()),
         Resolution::Unresolved(Unresolved::NoLocation) => ("✗", "no location".to_owned()),
         Resolution::Unresolved(Unresolved::Ambiguous { candidates }) => {
             ("✗", format!("ambiguous: {}", candidates.join(", ")))
         }
     };
-    vec![mark.to_owned(), written, resolved]
+    vec![mark.to_owned(), r.from.clone(), written, resolved]
 }
 
-/// The import sheet's one-line summary under the reference table.
-pub(crate) fn import_status(sheet: &ImportSheet) -> String {
+/// The import sheet's list of other files: what the user added (not the WSDL itself, which
+/// has its own row), then how many were found next to the files that reference them.
+pub(crate) fn import_files(sheet: &ImportSheet) -> String {
+    let added: Vec<String> = sheet
+        .extra
+        .iter()
+        .filter(|p| Some(*p) != sheet.entry.as_ref())
+        .map(|p| file_name(p))
+        .collect();
+    let found = match &sheet.check {
+        CheckState::Done(checked) => checked.found.len(),
+        _ => 0,
+    };
+    let found = (found > 0).then(|| format!("{} found next to the WSDL", count(found, "file")));
+    match (added.is_empty(), found) {
+        (true, None) => "None".to_owned(),
+        (true, Some(found)) => capitalize(&found),
+        (false, None) => added.join(", "),
+        (false, Some(found)) => format!("{}; {found}", added.join(", ")),
+    }
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// The import sheet's one-line summary under the reference table; while Create is disabled
+/// it says why.
+pub(crate) fn import_status(sheet: &ImportSheet, target: ImportTarget) -> String {
     match &sheet.check {
         CheckState::Empty => "Choose the WSDL.".to_owned(),
         CheckState::Checking => "Checking…".to_owned(),
@@ -41,6 +83,14 @@ pub(crate) fn import_status(sheet: &ImportSheet) -> String {
                 .count();
             if errors > 0 {
                 return format!("{} to fix first.", count(errors, "error"));
+            }
+            if target == ImportTarget::NewProject {
+                match (sheet.name.trim().is_empty(), sheet.parent.is_none()) {
+                    (true, true) => return "Name the project and choose its location.".into(),
+                    (true, false) => return "Name the project.".into(),
+                    (false, true) => return "Choose the project's location.".into(),
+                    (false, false) => {}
+                }
             }
             let files = checked.check.files.iter().filter(|f| f.used).count();
             format!(
@@ -161,11 +211,13 @@ mod tests {
     use washboard_core::http::TlsInfo;
     use washboard_core::model::{OperationRef, QName, RequestId};
     use washboard_core::wsdl::{MatchedBy, Protocol, RefKind, Reference, Resolution, Unresolved};
-    use washboard_ui_model::{CompletionKind, Hover, ReplaceOutcome, WellFormedness};
+    use washboard_ui_model::{
+        CompletionKind, Hover, ImportSheet, ImportTarget, ReplaceOutcome, WellFormedness,
+    };
 
     use super::{
-        completion_kinds, hover_text, operation_chip, port_chip, reference_row, replace_summary,
-        tls_line, well_formedness_text,
+        completion_kinds, hover_text, import_files, import_status, operation_chip, port_chip,
+        reference_row, replace_summary, tls_line, well_formedness_text,
     };
 
     #[test]
@@ -293,7 +345,12 @@ mod tests {
         );
         assert_eq!(
             reference_row(&r),
-            ["✓", "xs:import customer.xsd", "xsd/customer.xsd"]
+            [
+                "✓",
+                "CustomerService.wsdl",
+                "xs:import customer.xsd",
+                "xsd/customer.xsd"
+            ]
         );
         let r = reference(
             RefKind::XsdImport,
@@ -301,25 +358,54 @@ mod tests {
             Some("urn:c"),
             Resolution::ByNamespace,
         );
-        assert_eq!(reference_row(&r), ["✓", "xs:import urn:c", "by namespace"]);
+        assert_eq!(
+            reference_row(&r),
+            [
+                "✓",
+                "CustomerService.wsdl",
+                "xs:import urn:c",
+                "by namespace"
+            ]
+        );
         let missing = Resolution::Unresolved(Unresolved::NotSupplied);
         let r = reference(RefKind::XsdInclude, Some("ids.xsd"), None, missing);
         assert_eq!(
             reference_row(&r),
-            ["✗", "xs:include ids.xsd", "not supplied"]
+            [
+                "✗",
+                "CustomerService.wsdl",
+                "xs:include ids.xsd",
+                "not found"
+            ]
         );
         let ambiguous = Resolution::Unresolved(Unresolved::Ambiguous {
             candidates: vec!["a/x.xsd".into(), "b/x.xsd".into()],
         });
         let r = reference(RefKind::XsdInclude, Some("x.xsd"), None, ambiguous);
-        assert_eq!(reference_row(&r)[2], "ambiguous: a/x.xsd, b/x.xsd");
+        assert_eq!(reference_row(&r)[3], "ambiguous: a/x.xsd, b/x.xsd");
         let r = reference(
             RefKind::WsdlImport,
             None,
             None,
             Resolution::Unresolved(Unresolved::NoLocation),
         );
-        assert_eq!(reference_row(&r), ["✗", "wsdl:import", "no location"]);
+        assert_eq!(
+            reference_row(&r),
+            ["✗", "CustomerService.wsdl", "wsdl:import", "no location"]
+        );
+    }
+
+    #[test]
+    fn the_file_list_leaves_out_the_wsdl() {
+        let mut sheet = ImportSheet::default();
+        assert_eq!(import_files(&sheet), "None");
+        sheet.entry = Some("/w/S.wsdl".into());
+        sheet.extra = vec!["/w/S.wsdl".into(), "/w/xsd".into(), "/w/a.xsd".into()];
+        assert_eq!(import_files(&sheet), "xsd, a.xsd");
+        assert_eq!(
+            import_status(&sheet, ImportTarget::NewProject),
+            "Choose the WSDL."
+        );
     }
 
     #[test]
