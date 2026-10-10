@@ -113,13 +113,7 @@ impl HttpLog {
             )
         };
         let tls = NSTextField::labelWithString(ns_string!(""), mtm);
-        let header = layout::row(
-            &[
-                Retained::into_super(Retained::into_super(reveal)),
-                Retained::into_super(Retained::into_super(tls.clone())),
-            ],
-            mtm,
-        );
+        let header = layout::row(&[layout::view(reveal), layout::view(tls.clone())], mtm);
         header.setSpacing(12.0);
         let detail: [Retained<NSView>; 2] =
             [Retained::into_super(header), Retained::into_super(sides)];
@@ -259,12 +253,12 @@ impl HttpLog {
         let (colour, font) = if exchange.tls.verification_skipped {
             (
                 NSColor::systemOrangeColor(),
-                NSFont::boldSystemFontOfSize(12.0),
+                NSFont::boldSystemFontOfSize(layout::STATUS_FONT_SIZE),
             )
         } else {
             (
                 NSColor::secondaryLabelColor(),
-                NSFont::systemFontOfSize(12.0),
+                NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE),
             )
         };
         tls.setTextColor(Some(&colour));

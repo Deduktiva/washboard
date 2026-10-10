@@ -10,22 +10,20 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBackingStoreType, NSBorderType, NSButton, NSControlTextEditingDelegate, NSGridCellPlacement,
-    NSGridRowAlignment, NSGridView, NSLayoutAttribute, NSLayoutConstraintOrientation,
-    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow, NSLineBreakMode, NSModalResponse,
-    NSModalResponseOK, NSOpenPanel, NSPathControl, NSPathStyle, NSStackView,
-    NSStackViewDistribution, NSStackViewGravity, NSTextField, NSTextFieldDelegate,
-    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowDelegate, NSWindowStyleMask,
-    NSWindowTabbingMode,
+    NSBorderType, NSButton, NSControlTextEditingDelegate, NSGridCellPlacement, NSGridRowAlignment,
+    NSGridView, NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSModalResponse, NSModalResponseOK, NSOpenPanel,
+    NSPathControl, NSPathStyle, NSStackView, NSStackViewDistribution, NSStackViewGravity,
+    NSTextField, NSTextFieldDelegate, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
 };
 use objc2_foundation::{
-    NSArray, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSURL,
-    ns_string,
+    NSArray, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString, NSURL, ns_string,
 };
 use washboard_ui_model::{App, CheckState, ImportSheet, ImportTarget};
 
 use crate::app::{ModelAccess, with_delegate};
-use crate::layout;
+use crate::layout::{self, view};
 use crate::table::TextTable;
 use crate::text::{import_messages, import_status, reference_row};
 
@@ -578,22 +576,12 @@ fn dismiss(window: &NSWindow) {
 }
 
 fn sheet_window(title: &str, size: NSSize, mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            NSWindowStyleMask::Titled,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the sheet's controller keeps the `Retained<NSWindow>`, so AppKit must not
-    // release it on close as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str(title));
-    window
+    layout::owned_window(
+        &NSString::from_str(title),
+        size,
+        NSWindowStyleMask::Titled,
+        mtm,
+    )
 }
 
 fn target_button(
@@ -617,11 +605,6 @@ fn target_button(
 
 fn label(text: &str, mtm: MainThreadMarker) -> Retained<NSView> {
     view(NSTextField::labelWithString(&NSString::from_str(text), mtm))
-}
-
-fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
-    let v: &NSView = (*v).as_ref();
-    v.retain()
 }
 
 /// Dialog buttons, pushed to the trailing edge.

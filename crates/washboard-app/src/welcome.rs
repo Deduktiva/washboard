@@ -8,11 +8,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSButton, NSColor,
-    NSControlTextEditingDelegate, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
-    NSScrollView, NSStackView, NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource,
-    NSTableViewDelegate, NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView,
-    NSWindow, NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
+    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControlTextEditingDelegate,
+    NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode, NSScrollView, NSStackView,
+    NSTableCellView, NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewStyle, NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow,
+    NSWindowStyleMask, NSWindowTabbingMode, NSWindowTitleVisibility,
 };
 use objc2_foundation::{
     NSArray, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
@@ -174,24 +174,15 @@ impl WelcomeController {
 }
 
 fn window(mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::FullSizeContentView;
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the controller keeps the `Retained<NSWindow>`, so AppKit must not release it on
-    // close as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(ns_string!("Welcome to Washboard"));
+    let window = layout::owned_window(
+        ns_string!("Welcome to Washboard"),
+        NSSize::new(WIDTH, HEIGHT),
+        style,
+        mtm,
+    );
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
     // Not a document window, so it never joins the project windows' tabs.
@@ -220,17 +211,17 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
             .heightAnchor()
             .constraintEqualToConstant(ICON)
             .setActive(true);
-        views.push(Retained::into_super(Retained::into_super(image)));
+        views.push(layout::view(image));
     }
     let name = NSTextField::labelWithString(ns_string!("Washboard"), mtm);
     name.setFont(Some(&NSFont::boldSystemFontOfSize(20.0)));
-    views.push(Retained::into_super(Retained::into_super(name)));
+    views.push(layout::view(name));
     let version = NSTextField::labelWithString(
         &NSString::from_str(&format!("Version {}", env!("CARGO_PKG_VERSION"))),
         mtm,
     );
     version.setTextColor(Some(&NSColor::secondaryLabelColor()));
-    let version: Retained<NSView> = Retained::into_super(Retained::into_super(version));
+    let version: Retained<NSView> = layout::view(version);
     views.push(version.clone());
     for (title, action) in [
         ("New Project…", sel!(newProject:)),
@@ -250,7 +241,7 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
             .widthAnchor()
             .constraintEqualToConstant(BUTTON_WIDTH)
             .setActive(true);
-        views.push(Retained::into_super(Retained::into_super(button)));
+        views.push(layout::view(button));
     }
 
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
@@ -282,11 +273,8 @@ fn recent_table(mtm: MainThreadMarker) -> (Retained<NSScrollView>, Retained<NSTa
     table.setRowHeight(40.0);
     table.setStyle(NSTableViewStyle::SourceList);
 
-    let scroll = NSScrollView::initWithFrame(NSScrollView::alloc(mtm), frame);
-    scroll.setDocumentView(Some(&table));
-    scroll.setHasVerticalScroller(true);
-    // Shown only when the content does not fit, also with legacy (always-on) scrollers.
-    scroll.setAutohidesScrollers(true);
+    let scroll = layout::vertical_scroll(&table, mtm);
+    scroll.setFrame(frame);
     scroll.setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
@@ -300,10 +288,7 @@ fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSTableC
     layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
     // Long paths keep both ends: the folder's name is at the end.
     layout::truncating(&path, NSLineBreakMode::ByTruncatingMiddle);
-    let views = [
-        Retained::into_super(Retained::into_super(name.clone())),
-        Retained::into_super(Retained::into_super(path)),
-    ];
+    let views = [layout::view(name.clone()), layout::view(path)];
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Vertical);
     stack.setAlignment(NSLayoutAttribute::Leading);

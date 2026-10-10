@@ -13,8 +13,8 @@ use objc2_app_kit::{
     NSTabView, NSTabViewItem, NSTextField, NSView,
 };
 use objc2_foundation::{
-    NSArray, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString,
-    ns_string,
+    NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -47,7 +47,7 @@ impl RequestBar {
         let (operation, operation_label) = layout::chip("", mtm);
         operation.setHidden(true);
         let state = NSTextField::labelWithString(ns_string!(""), mtm);
-        state.setFont(Some(&NSFont::systemFontOfSize(12.0)));
+        state.setFont(Some(&NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE)));
         let view = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         view.addView_inGravity(&name, NSStackViewGravity::Leading);
         view.addView_inGravity(&operation, NSStackViewGravity::Leading);
@@ -177,10 +177,7 @@ impl IssuesBar {
         };
         hide.setControlSize(NSControlSize::Small);
         let header = layout::row(
-            &[
-                Retained::into_super(Retained::into_super(summary.clone())),
-                Retained::into_super(Retained::into_super(hide.clone())),
-            ],
+            &[layout::view(summary.clone()), layout::view(hide.clone())],
             mtm,
         );
         header.setEdgeInsets(layout::insets(4.0, 8.0, 4.0, 8.0));
@@ -394,12 +391,7 @@ impl ResponsePane {
             item.setView(Some(&layout::tab_page(page, mtm)));
             this.ivars().tabs.addTabViewItem(&item);
         }
-        let status = layout::row(
-            &[Retained::into_super(Retained::into_super(
-                this.ivars().status.clone(),
-            ))],
-            mtm,
-        );
+        let status = layout::row(&[layout::view(this.ivars().status.clone())], mtm);
         status.setEdgeInsets(layout::insets(6.0, 8.0, 2.0, 8.0));
         let view = layout::fill_column(
             &[
@@ -595,8 +587,8 @@ pub(crate) fn date_text(formatter: &NSDateFormatter, time: SystemTime) -> String
     formatter.stringFromDate(&date).to_string()
 }
 
-/// `200 · 120 ms · 1.2 KB`, `500 · SOAP Fault: soapenv:Server: no such customer`, or
-/// `Failed: connection refused`.
+/// `200 · 120 ms · 1 KB`, `500 · SOAP Fault: soapenv:Server: no such customer`, or
+/// `Failed: connection refused`. The size is in the user's locale and Finder's units.
 fn status_line(response: &ResponseView) -> String {
     if let Some(error) = &response.error {
         return format!("Failed: {error}");
@@ -609,7 +601,14 @@ fn status_line(response: &ResponseView) -> String {
     if let Some(duration) = response.duration {
         parts.push(format!("{} ms", duration.as_millis()));
     }
-    parts.push(format!("{:.1} KB", response.size as f64 / 1024.0));
+    let size = i64::try_from(response.size).unwrap_or(i64::MAX);
+    parts.push(
+        NSByteCountFormatter::stringFromByteCount_countStyle(
+            size,
+            NSByteCountFormatterCountStyle::File,
+        )
+        .to_string(),
+    );
     if let Some(fault) = &response.fault {
         parts.push(format!("SOAP Fault: {}: {}", fault.code, fault.string));
     }

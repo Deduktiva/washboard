@@ -1,18 +1,25 @@
-//! Stack view helpers shared by the windows.
+//! View and window helpers shared by the windows.
 //!
 //! NSStackView's default distribution (gravity areas) gives a view without an intrinsic size,
 //! such as a scroll view, no height at all, so its neighbours draw over it. Columns that hold
 //! scroll views use `Fill`, where the views that hug least (scroll views) take the slack.
 
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
+use objc2::{MainThreadMarker, MainThreadOnly, Message};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSFont, NSLayoutAttribute,
-    NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow,
-    NSLineBreakMode, NSStackView, NSStackViewDistribution, NSTableCellView, NSTextField,
-    NSTitlePosition, NSUserInterfaceLayoutOrientation, NSView,
+    NSAutoresizingMaskOptions, NSBackingStoreType, NSBox, NSBoxType, NSColor, NSFont,
+    NSLayoutAttribute, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSScrollView, NSStackView,
+    NSStackViewDistribution, NSTableCellView, NSTextField, NSTitlePosition,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSEdgeInsets, NSSize, NSString};
+use objc2_foundation::{NSArray, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
+
+/// `v` as a plain `NSView`, for stacks and grids, whatever its class's depth below `NSView`.
+pub fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
+    let v: &NSView = (*v).as_ref();
+    v.retain()
+}
 
 /// A vertical stack whose views span its width and fill its height.
 pub fn fill_column(views: &[Retained<NSView>], mtm: MainThreadMarker) -> Retained<NSStackView> {
@@ -142,6 +149,10 @@ pub fn small_label(text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
 
 const SMALL_FONT_SIZE: f64 = 11.0;
 
+/// Status text beside other controls (the request bar's well-formedness, the HTTP log's TLS
+/// line): a step above [`small_label`], still below the body size.
+pub const STATUS_FONT_SIZE: f64 = 12.0;
+
 /// A chip, as `docs/gui-draft.html` draws them: small secondary text in a rounded outline. For
 /// facts beside a name (a port's SOAP version, a request's operation). Returns the chip and
 /// its label, whose text the caller may change; the chip follows the label's size.
@@ -186,3 +197,39 @@ pub fn chip(text: &str, mtm: MainThreadMarker) -> (Retained<NSBox>, Retained<NST
 }
 
 const CHIP_PADDING: f64 = 5.0;
+
+/// A scroll view around `document` that scrolls vertically.
+pub fn vertical_scroll(document: &NSView, mtm: MainThreadMarker) -> Retained<NSScrollView> {
+    let scroll = NSScrollView::new(mtm);
+    scroll.setDocumentView(Some(document));
+    scroll.setHasVerticalScroller(true);
+    // Shown only when the content does not fit, also with legacy (always-on) scrollers.
+    scroll.setAutohidesScrollers(true);
+    scroll
+}
+
+/// A titled window of content size `size`, for a controller that keeps it in a `Retained`:
+/// closing it only hides it, and the controller decides when it goes.
+pub fn owned_window(
+    title: &NSString,
+    size: NSSize,
+    style: NSWindowStyleMask,
+    mtm: MainThreadMarker,
+) -> Retained<NSWindow> {
+    let rect = NSRect::new(NSPoint::new(0.0, 0.0), size);
+    // SAFETY: the designated initializer, on the main thread.
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
+            NSWindow::alloc(mtm),
+            rect,
+            style,
+            NSBackingStoreType::Buffered,
+            false,
+        )
+    };
+    // SAFETY: the caller keeps the `Retained<NSWindow>`, so AppKit must not release it on
+    // close as well.
+    unsafe { window.setReleasedWhenClosed(false) };
+    window.setTitle(title);
+    window
+}

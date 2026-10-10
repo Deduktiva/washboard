@@ -15,6 +15,26 @@ use objc2_foundation::NSString;
 
 use crate::welcome::RecentProject;
 
+/// A menu item sending `action`. Every action the app's menus send, its own and AppKit's
+/// (`copy:`, `performFindPanelAction:`, …), takes the sender as its only argument and returns
+/// nothing, whether it reaches a target set later or goes up the responder chain.
+pub fn menu_item(
+    title: &str,
+    action: Option<Sel>,
+    key: &str,
+    mtm: MainThreadMarker,
+) -> Retained<NSMenuItem> {
+    // SAFETY: `action` is `None` or an action method taking the sender, as above.
+    unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(title),
+            action,
+            &NSString::from_str(key),
+        )
+    }
+}
+
 const CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
 const SHIFT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Shift.0);
@@ -201,16 +221,8 @@ pub(crate) fn set_recent_projects(app: &NSApplication, recent: &[RecentProject])
     };
     submenu.removeAllItems();
     for (index, project) in recent.iter().enumerate() {
-        // SAFETY: no target: the action goes up the responder chain to the app delegate, whose
-        // handler takes the sender as its only argument.
-        let item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                &NSString::from_str(&project.name),
-                Some(sel!(openRecentProject:)),
-                &NSString::new(),
-            )
-        };
+        // No target: the action goes up the responder chain to the app delegate.
+        let item = menu_item(&project.name, Some(sel!(openRecentProject:)), "", mtm);
         item.setTag(index as isize);
         item.setToolTip(Some(&NSString::from_str(&project.path)));
         submenu.addItem(&item);
@@ -218,15 +230,7 @@ pub(crate) fn set_recent_projects(app: &NSApplication, recent: &[RecentProject])
     if !recent.is_empty() {
         submenu.addItem(&NSMenuItem::separatorItem(mtm));
     }
-    // SAFETY: as above.
-    let clear = unsafe {
-        NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm),
-            &NSString::from_str(CLEAR_MENU),
-            Some(sel!(clearRecentProjects:)),
-            &NSString::new(),
-        )
-    };
+    let clear = menu_item(CLEAR_MENU, Some(sel!(clearRecentProjects:)), "", mtm);
     submenu.addItem(&clear);
 }
 
@@ -247,17 +251,8 @@ fn build(
                 modifiers,
                 tag,
             } => {
-                let action = action.map(Sel::register);
-                // SAFETY: no target is set, so the action goes up the responder chain, where
-                // every receiver takes the sender as its only argument.
-                let item = unsafe {
-                    NSMenuItem::initWithTitle_action_keyEquivalent(
-                        NSMenuItem::alloc(mtm),
-                        &NSString::from_str(title),
-                        action,
-                        &NSString::from_str(key),
-                    )
-                };
+                // No target: the action goes up the responder chain.
+                let item = menu_item(title, action.map(Sel::register), key, mtm);
                 item.setKeyEquivalentModifierMask(*modifiers);
                 item.setTag(*tag);
                 menu.addItem(&item);

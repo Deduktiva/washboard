@@ -28,6 +28,7 @@ use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::layout;
+use crate::menu::menu_item;
 use crate::text::port_chip;
 
 /// On a SOAP 1.2 port's row; its operations give their own reason.
@@ -467,13 +468,9 @@ define_class!(
 
         #[unsafe(method(sidebarDuplicateRequest:))]
         fn context_duplicate(&self, sender: Option<&AnyObject>) {
-            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
-                return;
-            };
-            let key = self.ivars().key;
-            self.command("Could not duplicate the request", |app| {
-                app.duplicate_request(key, request)
-            });
+            if let Some(request) = menu_node(sender).and_then(|n| n.request()) {
+                self.duplicate_request(request);
+            }
         }
 
         #[unsafe(method(sidebarValidateRequest:))]
@@ -486,13 +483,9 @@ define_class!(
 
         #[unsafe(method(sidebarDeleteRequest:))]
         fn context_delete(&self, sender: Option<&AnyObject>) {
-            let Some(request) = menu_node(sender).and_then(|n| n.request()) else {
-                return;
-            };
-            let key = self.ivars().key;
-            self.command("Could not delete the request", |app| {
-                app.delete_request(key, request)
-            });
+            if let Some(request) = menu_node(sender).and_then(|n| n.request()) {
+                self.delete_request(request);
+            }
         }
     }
 
@@ -595,16 +588,7 @@ impl SidebarController {
         };
         let object: &AnyObject = node.as_ref();
         for &(title, action) in items {
-            // SAFETY: each action is one of this controller's context menu methods above,
-            // which take the sender.
-            let item = unsafe {
-                NSMenuItem::initWithTitle_action_keyEquivalent(
-                    NSMenuItem::alloc(self.mtm()),
-                    &NSString::from_str(title),
-                    Some(action),
-                    ns_string!(""),
-                )
-            };
+            let item = menu_item(title, Some(action), "", self.mtm());
             // SAFETY: the target is this controller, which implements every action used here
             // and outlives the menu (the outline view owns it); the represented object is a
             // `SidebarNode`, which is what `menu_node` expects back.
@@ -770,6 +754,22 @@ impl SidebarController {
         });
     }
 
+    /// Project ▸ Duplicate, and Duplicate in a request's context menu.
+    pub fn duplicate_request(&self, request: RequestId) {
+        let key = self.ivars().key;
+        self.command("Could not duplicate the request", |app| {
+            app.duplicate_request(key, request)
+        });
+    }
+
+    /// Project ▸ Delete, and Delete in a request's context menu.
+    pub fn delete_request(&self, request: RequestId) {
+        let key = self.ivars().key;
+        self.command("Could not delete the request", |app| {
+            app.delete_request(key, request)
+        });
+    }
+
     /// The first row whose node satisfies `f`.
     fn row_where(&self, f: impl Fn(&SidebarNode) -> bool) -> Option<NSInteger> {
         let outline = self.outline()?;
@@ -874,7 +874,7 @@ impl SidebarController {
             }
             NodeKind::Service | NodeKind::Port => {}
         }
-        let mut views = vec![Retained::into_super(Retained::into_super(name.clone()))];
+        let mut views = vec![layout::view(name.clone())];
         let chip = node.chip().map(|text| layout::chip(text, mtm));
         if let Some((chip, label)) = &chip {
             if node.is_soap12() {
@@ -891,7 +891,7 @@ impl SidebarController {
         if let Some((text, color)) = marker {
             let marker = layout::small_label(text, mtm);
             marker.setTextColor(Some(&color));
-            views.push(Retained::into_super(Retained::into_super(marker)));
+            views.push(layout::view(marker));
         }
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);

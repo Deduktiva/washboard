@@ -7,15 +7,16 @@
 //! name its project.
 
 use std::cell::{Cell, OnceCell, RefCell};
+use std::ops::Range;
 use std::path::Path;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBackingStoreType, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton,
-    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
-    NSSplitViewItem, NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
+    NSAlert, NSBeep, NSImage, NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder,
+    NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem,
+    NSStackView, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
     NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
     NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
@@ -186,11 +187,8 @@ define_class!(
 
         #[unsafe(method(duplicateRequest:))]
         fn duplicate_request(&self, _sender: Option<&AnyObject>) {
-            let key = self.key();
             if let Some(request) = self.selected_request() {
-                self.command("Could not duplicate the request", |app| {
-                    app.duplicate_request(key, request)
-                });
+                self.sidebar().duplicate_request(request);
             }
         }
 
@@ -204,11 +202,8 @@ define_class!(
 
         #[unsafe(method(deleteRequest:))]
         fn delete_request(&self, _sender: Option<&AnyObject>) {
-            let key = self.key();
             if let Some(request) = self.selected_request() {
-                self.command("Could not delete the request", |app| {
-                    app.delete_request(key, request)
-                });
+                self.sidebar().delete_request(request);
             }
         }
 
@@ -455,7 +450,7 @@ impl ProjectWindowController {
     pub fn format_request(&self, beep: bool) {
         let key = self.key();
         let selected = self.editor().text_view().selectedRange();
-        let selection = selected.location..selected.location + selected.length;
+        let selection = Range::from(selected);
         let Some(result) = self.read(|app| app.format_request(key, selection)) else {
             return;
         };
@@ -629,11 +624,7 @@ impl ProjectWindowController {
 
     fn sidebar_pane(&self, mtm: MainThreadMarker) -> Retained<NSView> {
         let outline = self.ivars().sidebar.outline_view(mtm);
-        let scroll = NSScrollView::new(mtm);
-        scroll.setDocumentView(Some(&outline));
-        scroll.setHasVerticalScroller(true);
-        // Shown only when the content does not fit, also with legacy (always-on) scrollers.
-        scroll.setAutohidesScrollers(true);
+        let scroll = layout::vertical_scroll(&outline, mtm);
         scroll.setDrawsBackground(false);
         // No buttons under the list: each row has a context menu, and the Project menu has
         // the same commands with shortcuts.
@@ -647,26 +638,17 @@ pub fn project_tabbing_id() -> &'static NSString {
 }
 
 fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
-    let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(1100.0, 700.0));
     let style = NSWindowStyleMask::Titled
         | NSWindowStyleMask::Closable
         | NSWindowStyleMask::Miniaturizable
         | NSWindowStyleMask::Resizable
         | NSWindowStyleMask::FullSizeContentView;
-    // SAFETY: the designated initializer, on the main thread.
-    let window = unsafe {
-        NSWindow::initWithContentRect_styleMask_backing_defer(
-            NSWindow::alloc(mtm),
-            rect,
-            style,
-            NSBackingStoreType::Buffered,
-            false,
-        )
-    };
-    // SAFETY: the window controller keeps the window, so AppKit must not release it on close
-    // as well.
-    unsafe { window.setReleasedWhenClosed(false) };
-    window.setTitle(&NSString::from_str(name));
+    let window = layout::owned_window(
+        &NSString::from_str(name),
+        NSSize::new(1100.0, 700.0),
+        style,
+        mtm,
+    );
     window.setContentMinSize(NSSize::new(720.0, 560.0));
     // Project windows tab with each other (Window ▸ Merge All Windows, or always when the
     // user prefers tabs in System Settings), never with the welcome or New Project window.
