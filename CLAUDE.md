@@ -64,6 +64,9 @@ must likewise skip its build when cross-checking for macOS from another host (se
   with `form.rs`, not hand-made stacks; it owns the margins and alignment, listed in its module
   doc. Add a row kind there rather than positioning a one-off. `tests/appkit.rs`
   (`assert_form_layout`) checks the geometry; call it for a new pane.
+- **Colours (`washboard-app`):** status colours come from `colors.rs` (`error`, `warning`,
+  `success`); `NSColor::system*Color` appears only there and in the editor's highlighting
+  palette. AppKit's semantic colours are used directly.
 - **Tests:** use `fixtures/` for WSDL/XSD inputs; build temp dirs for project tests. Fixture
   files are byte-exact (`.gitattributes`); never reformat them.
 - **Style:** match the surrounding code; doc comments on public items explain *why* and
