@@ -77,56 +77,22 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-RESPONSE-LAYOUT | APP-INTEGRATION, DRAFT-GAPS (done) | `crates/washboard-app/**`; additive API in `crates/washboard-ui-model` | PLAN §4 "Response pane and history" and `docs/gui-draft.html`: response beside the request, History tab replaced by a drawer under the response, an older exchange shown whole (request as sent, read-only) with a titlebar accessory instead of the toolbar items. The model needs: which history entry is shown (none = latest), the sent request's text, Send refused while an older one is shown, Restore Request returning text for the app to apply as one undo step, drawer state in `ui_state`. Tests: model side on Linux (send refused, request switch and send return to latest); in `tests/appkit.rs`, selecting an older row shows the accessory and hides Send, Esc returns, ⌘Z after Restore Request brings back the editor's text. |
 | WP-RULER-HOVER | APP-INTEGRATION (done) | the ruler and issue tooltips in `crates/washboard-app/**` | Hovering a gutter marker shows the messages of that line's issues, errors first, as a tooltip, like the underline hover in the text. Warnings get a marker too (orange, errors stay red); today only errors are marked. |
 | WP-SENT-HEADERS | WP-RESPONSE-LAYOUT | the Headers tab in `crates/washboard-app/**`; additive API in `crates/washboard-ui-model`; a `request_headers` column in `crates/washboard-core/src/project/history.rs` (additive migration) | The Headers tab shows only the response's headers. Add the request's as sent, from `Exchange::request` (`RawMessage` keeps the start line and headers in send order): a "Request" section with the start line and headers, then "Response". `Authorization` is masked as the HTTP log masks it. History stores only `response_headers` today, so older exchanges (WP-RESPONSE-LAYOUT's drawer) need the new column; rows written before it show "not recorded". |
-| WP-SIDEBAR-FLATTEN | FORMAT-XML, SIDEBAR-MENU (done) | the OPERATIONS tree in `crates/washboard-app/src/sidebar.rs`, a pure tree-shaping function in `crates/washboard-app/src/text.rs`, one setting in the app settings (`app_settings.rs`, or `settings_window.rs` once WP-SETTINGS-WINDOW has replaced it) | Most WSDLs have one service, and many have one port, so the OPERATIONS group spends two levels on rows with nothing to choose. Leave out a level that has only one row, behind a setting that is on by default. Below. |
-| WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); coordinate with WP-SIDEBAR-FLATTEN, which groups operations the same way | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
-
-### WP-SIDEBAR-FLATTEN in detail
-
-The model's tree stays service › port › operation (`Sidebar::services` is unchanged); only the
-app's OPERATIONS group is shaped differently.
-
-- **Rule.** With one service, its row is left out and its ports sit directly under OPERATIONS.
-  With one port in a service, that port's row is left out and its operations sit directly under
-  the service (or under OPERATIONS, when the service row is gone too). Each service is judged on
-  its own: in a WSDL with two services, one with a single port and one with two, the first
-  shows its operations directly and the second keeps its port rows.
-- **Only supported ports count.** Many WSDLs have one SOAP 1.1 port next to a SOAP 1.2 or
-  rpc/encoded one (both fixtures do), and flattening would rarely apply if those counted. So
-  a service whose ports include exactly one supported port loses that port's row; the
-  unsupported ports' operations move into one collapsed "Unsupported" row after the supported
-  operations, each still greyed with its reason (PLAN §1: shown, never dropped). The row's
-  tooltip lists the ports it holds. A service with no supported port, or more than one, keeps
-  its port rows.
-- **What a left-out row said** moves into the operations' tooltips: "Service › Port" in front of
-  what the tooltip says today (the unsupported reason, if any). WP-DRAFT-GAPS's port chip
-  ("1.1", "1.2 · unsupported") is not shown for a left-out port; with only one port, its
-  operations' greyed state already tells.
-- **Setting** (per app): "Flatten single services and ports in the sidebar", on by default, in
-  the user defaults as `SidebarFlatten` (bool) next to the format settings, and in the app
-  section of the Settings window. Changing it reshapes every open project window's sidebar at
-  once, keeping the selection and the collapsed rows that still exist. The Unsupported row starts collapsed.
-- **Collapsed state** is kept by row path as today (`service:…`, `port:…/…`); a left-out row has
-  no state to keep. Turning the setting off shows the restored rows expanded.
-- **Unchanged:** double-click on an operation creates a request; New Request picks the first
-  supported operation in sidebar order; the REQUESTS group.
-- **Tests:** the tree shaping on Linux (`text.rs`): one service with a 1.1 and an unsupported
-  port (both fixtures: `customer` has SOAP 1.2, `legacy-rpc` rpc/encoded; the operations sit
-  under OPERATIONS with an Unsupported row after them), and synthetic trees for one service with one port, two services with mixed port
-  counts, and the setting off. In `tests/appkit.rs`: the fixture project's OPERATIONS rows
-  with the setting on and off, an operation row's tooltip naming its service and port, and
-  the selection surviving the toggle.
+| WP-OPERATION-PICKER | UI-MODEL, SIDEBAR-MENU (done); before WP-REQUEST-FOLDERS-APP, which removes the OPERATIONS list the picker replaces | new `crates/washboard-app/src/operation_picker.rs`; the `newRequest:` action and its menu validation in `project_window.rs` and `sidebar.rs`; the New Request items' titles in `menu.rs` and the REQUESTS header's context menu; a filter function and its tests in `crates/washboard-ui-model` | PLAN §4 "Requests": New Request (⌘N) picks the operation from a searchable list instead of using the sidebar's selection or the first supported operation. Below. |
+| WP-REQUEST-FOLDERS | PROJECT, UI-MODEL, CLI (done) | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
+| WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS, WP-OPERATION-PICKER | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 
 ### WP-OPERATION-PICKER in detail
 
 Today Project ▸ New Request (⌘N) creates a request for the operation selected in the sidebar,
 else the first supported one (`App::default_operation`), so creating a request for any other
 operation means finding it in the OPERATIONS tree first. With up to 200 operations that is
-scrolling, not typing.
+scrolling, not typing. The picker becomes the only way to create a request for an operation:
+WP-REQUEST-FOLDERS-APP removes the OPERATIONS list.
 
 - **Where.** Project ▸ New Request… (⌘N) and the REQUESTS header's New Request… open the picker;
-  both titles gain the ellipsis, since they now ask something first. An operation row's New
-  Request and a double-click on an operation still create directly: the operation is already
-  chosen.
+  both titles gain the ellipsis, since they now ask something first. Until WP-REQUEST-FOLDERS-APP
+  removes the OPERATIONS list, an operation row's New Request and a double-click on an
+  operation still create directly.
 - **Window.** A sheet on the project window, like the import sheet: a search field on top,
   focused, and a list below. Return (default button "Create") creates the request for the
   highlighted row; Esc or Cancel closes the sheet and creates nothing; a double-click on a row
@@ -135,9 +101,10 @@ scrolling, not typing.
   defaults), not its search text.
 - **Rows.** One per operation: its name, and in secondary text the input element's QName
   (`cus:GetCustomer`) or, for rpc/literal, "rpc". Grouped under "Service › Port" section headers
-  in WSDL order, with the same rule as WP-SIDEBAR-FLATTEN: only supported ports count, and a
-  header is left out when there is only one supported port in the project (then the list is
-  just the operations). Unsupported operations sit in an "Unsupported" section at the end,
+  in WSDL order. A header is left out when the project has only one supported port, and then
+  the list is just the operations. Only supported ports count: many WSDLs have one SOAP 1.1
+  port next to a SOAP 1.2 or rpc/encoded one (both fixtures do), and those should get the
+  flat list. Unsupported operations sit in an "Unsupported" section at the end,
   greyed, with their reason as the tooltip (PLAN §1: shown, never dropped); they can be
   highlighted but not created, so Create is disabled on them.
 - **Search.** Case-insensitive; a row matches when every space-separated word of the query is a
@@ -145,9 +112,9 @@ scrolling, not typing.
   Rows whose operation name starts with the query come first, then the rest, each in WSDL order.
   An empty query shows everything. Sections with no match disappear; with no match at all, the
   list says "No operation matches" and Create is disabled.
-- **Initial highlight.** The operation selected in the sidebar; else the operation of the
-  selected request (another request for the same operation is the common case); else the first
-  supported operation. The search field starts empty.
+- **Initial highlight.** The operation selected in the sidebar (while the OPERATIONS list
+  exists); else the operation of the selected request (another request for the same operation
+  is the common case); else the first supported operation. The search field starts empty.
 - **When there is nothing to pick.** New Request is disabled while the WSDL loads or when it
   failed to load, in the menu and in the context menu, rather than opening a sheet that cannot
   do anything. A WSDL with no supported operation opens the sheet with only the Unsupported
@@ -165,3 +132,74 @@ scrolling, not typing.
   filters; ↓ then Return creates a request for that operation and starts rename; Esc creates
   nothing; Create is disabled on an unsupported row; New Request is disabled while the schema
   loads.
+
+### WP-REQUEST-FOLDERS in detail
+
+The sidebar's OPERATIONS list goes (WP-REQUEST-FOLDERS-APP); creating a request is the
+operation picker's job, and grouping requests becomes the user's, with folders. Folders are
+created when they are first needed, not for every operation up front: a WSDL with 200
+operations would get 200 empty folders, git does not keep empty directories, and Replace WSDL
+would leave folders for removed operations behind.
+
+- **On disk.** A folder is a subdirectory of `requests/`, nested to any depth, so the project
+  stays browsable in Finder and git (PLAN §3). Folder names follow the request name rules
+  (`names::validate_request_name`). Folders and files starting with `.` are ignored. The disk is
+  the truth for folders: they are not in the database, and an empty folder stays until it is
+  deleted.
+- **Database.** `request.file_name` already holds a path relative to `requests/`; it now may
+  contain `/` (always `/`, whatever the platform). No migration. `RequestMeta` gains
+  `folder: String` (`""` for the top level), additively.
+- **Names stay unique across the project** (case-insensitive, as now), not per folder, so
+  `<Operation> <n>` numbering and the CLI's `<name>` arguments keep working. Rename, Duplicate
+  and New Request check against every folder. Two files with the same name in different folders
+  can still arrive from Finder or git; reconciliation accepts both, the app shows both, and the
+  CLI asks for the path (below).
+- **Reconciliation** walks `requests/` recursively. A row whose file is gone is matched to a new
+  file with the same name elsewhere, when exactly one such file appeared, and treated as a move:
+  same id, same history. That covers a move in Finder; anything else stays as today (removed and
+  added).
+- **New Request placement.** The model's `new_request` takes the target folder. The app passes
+  the folder selected in the sidebar when a folder row is selected; otherwise the request goes
+  into its operation's folder, created if missing. That folder is named after the operation
+  (`GetCustomer`), or `Port/GetCustomer` when the project has more than one supported port, so
+  a typical WSDL with one SOAP 1.1 port gets one level. Only supported ports count, so a SOAP
+  1.1 port next to a SOAP 1.2 or rpc/encoded one still gives the flat layout. An existing folder
+  is matched case-insensitively; if the user renamed the operation's folder, a new one is
+  created. Duplicate puts the copy beside the original.
+- **Commands** (core, model): create folder, rename folder, delete folder (with every request in
+  it and their history; the model reports the count for the confirmation), move a request to a
+  folder, move a folder (refused into itself or its descendants, and when the move would put two
+  rows of the same name in one folder). All are renames on disk, atomic like other writes.
+  Collapsed folders are kept per project in `ui_state`.
+- **Sidebar model.** `Sidebar` gains the folder tree next to today's flat `requests`, sorted
+  folders first, then requests, each in Finder order (WP-SIDEBAR-MENU). `Sidebar::services`
+  stays: the picker uses it.
+- **CLI.** `request list` prints paths (`GetCustomer/GetCustomer 1`). Every `<name>` argument
+  also takes a path; a bare name that matches two requests fails and lists their paths.
+  `request mv <name> <folder>` moves a request (creating the folder; `/` for the top level).
+  `request new` places like New Request.
+- **Also affected:** WP-FSEVENTS must watch `requests/` recursively.
+- **Tests** (Linux): reconciliation of nested files, a move in Finder keeping history, the
+  duplicate-name case; placement with one and with several supported ports (both fixtures and a
+  synthetic two-port WSDL), the folder reused across case, a selected folder winning; folder
+  rename, move and delete with history; the CLI's paths and ambiguity error.
+
+### WP-REQUEST-FOLDERS-APP in detail
+
+- **Sidebar.** One section, REQUESTS: the folder tree, folders with a folder icon and a
+  disclosure triangle, requests as today. The OPERATIONS section is removed; unsupported
+  operations are still shown in the picker (PLAN §1).
+- **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
+  The REQUESTS header: New Request…, New Folder. Project ▸ New Folder (⌥⌘N) creates one in the
+  selected folder, or the selected request's folder, and starts inline rename.
+- **Rename** by Return or double-click on a request or folder (PLAN §4); a double-click on a
+  folder's triangle still only toggles it.
+- **Delete** of a folder confirms with what goes: "Delete “GetCustomer” and its 3 requests?
+  Their history is deleted too." An empty folder goes without asking.
+- **Drag and drop** moves requests and folders between folders and to the top level (an
+  internal pasteboard type, `NSDragOperation::Move` only). Drops the model refuses do not
+  highlight.
+- **Tests** (`tests/appkit.rs`): no OPERATIONS rows; New Request from the picker lands in the
+  operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
+  move by the model's command shows in the tree; collapsed folders survive reopening the
+  project.

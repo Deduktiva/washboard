@@ -239,18 +239,12 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
           <aside class="side">
             <div class="scroll">
               <div class="sect"><span>Requests</span><span>4</span></div>
-              <div class="row req sel" tabindex="0" data-req="0" id="reqList"><span class="doc"></span>GetCustomer 1</div>
-              <div class="row req" tabindex="0" data-req="1"><span class="doc"></span>GetCustomer 2<span class="dirty" title="Unsaved"></span></div>
-              <div class="row req" tabindex="0" data-req="2"><span class="doc"></span>CreateOrder 1<span class="badge warnmark" title="Fails validation">⚠</span></div>
-              <div class="row req" tabindex="0" data-req="3"><span class="doc"></span>ListOrders – March</div>
-              <div class="sect"><span>Operations</span></div>
-              <div class="row" id="opsRow"><span class="disc">▼</span>CustomerService</div>
-              <div class="row indent1"><span class="disc">▼</span>CustomerPort <span class="chip" style="margin-left:4px">1.1</span></div>
-              <div class="row indent2">GetCustomer</div>
-              <div class="row indent2">CreateOrder</div>
-              <div class="row indent2">ListOrders</div>
-              <div class="row indent2">DeleteCustomer</div>
-              <div class="row indent1" style="opacity:.5" title="SOAP 1.2 bindings are not supported"><span class="disc"></span>CustomerPort12 <span class="chip" style="margin-left:4px">1.2 · unsupported</span></div>
+              <div class="row" id="opsRow" title="Folder"><span class="disc">▼</span>GetCustomer</div>
+              <div class="row req sel indent1" tabindex="0" data-req="0" id="reqList"><span class="doc"></span>GetCustomer 1</div>
+              <div class="row req indent1" tabindex="0" data-req="1"><span class="doc"></span>GetCustomer 2<span class="dirty" title="Unsaved"></span></div>
+              <div class="row" title="Folder"><span class="disc">▼</span>CreateOrder</div>
+              <div class="row req indent1" tabindex="0" data-req="2"><span class="doc"></span>CreateOrder 1<span class="badge warnmark" title="Fails validation">⚠</span></div>
+              <div class="row req" tabindex="0" data-req="3"><span class="disc"></span><span class="doc"></span>ListOrders – March</div>
             </div>
           </aside>
           <div class="content">
@@ -281,7 +275,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
         <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Project ▸ Validate (⌘B) skips the wait.</span></li>
         <li><span>HTTP Log (⌥⌘L). Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
         <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
-        <li><span>Operations from the WSDL, grouped service › port. Double-click creates a request named <code>&lt;Operation&gt; &lt;n&gt;</code> from the generated template.</span></li>
+        <li><span>Folders: plain subfolders of the project's <code>requests/</code>. New Request (⌘N) picks the operation from a searchable list and files the request, named <code>&lt;Operation&gt; &lt;n&gt;</code>, in that operation's folder, created on first use. Drag to move.</span></li>
         <li><span>Response beside the request, in one vertical split. Its status line shares a band with the request bar; tabs Response and Headers.</span></li>
         <li><span>History drawer under the response, kept on disk (last 20). Collapsed it is one line with a dot per exchange (red: fault or failure; ringed: shown). Click it, then pick a row.</span></li>
         <li><span>An older exchange shows its request as sent, read-only, and this strip under the toolbar replaces the toolbar items, so it cannot be sent. Show Latest (Esc) returns to the editor; Restore Request copies the sent request into it.</span></li>

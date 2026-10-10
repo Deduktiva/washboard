@@ -111,8 +111,8 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 **Owns (all toolkit-independent):**
 - App state: open projects, recent projects, restore on launch (`project::AppState`), the
   welcome-window condition, the HTTP log ring buffer (50).
-- Per project window: the sidebar tree (requests with dirty/invalid markers, operations
-  incl. unsupported ones), selection, the server popup's items and selection, the response
+- Per project window: the sidebar tree (folders, requests with dirty/invalid markers), the
+  operations incl. unsupported ones for the New picker, selection, the server popup's items and selection, the response
   pane's state, history list, issues list, project settings form state.
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
@@ -188,7 +188,8 @@ Customer API/
 │  └─ xsd/                      supporting XSDs, relative structure preserved
 │     └─ common/types.xsd
 ├─ requests/
-│  ├─ GetCustomer 1.xml         full SOAP envelope, exactly what is sent
+│  ├─ GetCustomer/              a folder: a plain subdirectory, any depth
+│  │  └─ GetCustomer 1.xml      full SOAP envelope, exactly what is sent
 │  └─ CreateOrder 1.xml
 └─ history/
    └─ <request-uuid>/
@@ -197,6 +198,8 @@ Customer API/
 ```
 
 - **Request name = file stem.** Rename = file rename. Names may not contain `/`, `:` or start with `.`.
+  Names are unique across the project (case-insensitive), not per folder. Folders follow the
+  same rules; they exist only on disk, not in the database, and an empty one stays until deleted.
 - **Request files contain the full envelope.** What you see is what is sent; SOAP headers are editable.
 - **History** is keyed by request UUID (not name) so renames don't orphan it. The sent request is
   stored too — without it a response is hard to interpret later. Retention: last 20 per request
@@ -219,7 +222,7 @@ CREATE TABLE server   (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NUL
                        timeout_secs INTEGER NOT NULL DEFAULT 60,
                        sort_order INTEGER NOT NULL);
 CREATE TABLE request  (id TEXT PRIMARY KEY,
-                       file_name TEXT NOT NULL UNIQUE,  -- relative to requests/
+                       file_name TEXT NOT NULL UNIQUE,  -- relative to requests/, `/`-separated
                        operation TEXT,                  -- "{ns}Port#Operation" hint, may go stale
                        last_server_id TEXT REFERENCES server(id) ON DELETE SET NULL,
                        created_at TEXT NOT NULL, sort_order INTEGER NOT NULL);
@@ -275,16 +278,21 @@ Same import sheet. After replacing: recompile, re-validate every request, show a
 (operations added/removed, requests now invalid). Requests are never rewritten automatically.
 
 ### Requests
-- **New** (⌘N): pick an operation (searchable list grouped by service › port). Body is
-  generated from the schema (§5). Name: `<Operation> <n>` with the lowest free `n`
-  (`GetCustomer 1`, `GetCustomer 2`, …). The new row enters inline-rename immediately.
-- Double-clicking an operation in the sidebar's *Operations* section also creates a request.
-- **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`),
-  **Delete** (⌘⌫, confirms; history deleted with it). The same commands are in each request
-  row's context menu, which acts on the clicked row; an operation's and the REQUESTS header's
-  menus offer New Request.
-- Requests are listed by name in Finder order (case-insensitive, numbers by value); a new or
-  renamed request moves to its place and stays selected.
+- **New** (⌘N): pick an operation (searchable list grouped by service › port; unsupported
+  operations greyed with their reason). Body is generated from the schema (§5). Name:
+  `<Operation> <n>` with the lowest free `n` (`GetCustomer 1`, `GetCustomer 2`, …). It goes into
+  the selected folder, else into its operation's folder (`GetCustomer`, or `Port/GetCustomer`
+  when the project has more than one supported port), created on first use. The new row enters
+  inline-rename immediately.
+- **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`, beside the
+  original), **Delete** (⌘⌫, confirms; history deleted with it). The same commands are in each
+  row's context menu, which acts on the clicked row.
+- **Folders** group requests: New Folder, rename, delete (with the requests inside, confirmed),
+  drag and drop to move requests and folders. There is no list of the WSDL's operations in the
+  sidebar; the New picker is where they are shown.
+- The sidebar lists folders first, then requests, each by name in Finder order
+  (case-insensitive, numbers by value); a new or renamed row moves to its place and stays
+  selected.
 - Each request remembers `last_server_id`; the toolbar server popup shows it. A new request
   uses the most recently used server of the project.
 
@@ -643,18 +651,18 @@ Interactive version: [`gui-draft.html`](gui-draft.html).
 │ ● ● ●  Customer API                                           [Staging ▾] [▶]           [≣]        │
 ├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
 │ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCustomer  ✓  │ 200 · 143 ms · 1.2 KB · Staging │
-│  ▸ GetCustomer 1     │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
-│    GetCustomer 2  •  │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
-│    CreateOrder 1  ⚠  │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
-│                      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
-│ OPERATIONS           │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
-│  ▾ CustomerService   │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
-│   ▾ CustomerPort 1.1 │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
-│        GetCustomer   │ │  …│                                   │ │                                 │
-│        CreateOrder   │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
-│        ListOrders    │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
+│  ▾ GetCustomer/      │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
+│   ▸ GetCustomer 1    │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
+│     GetCustomer 2  • │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
+│  ▾ CreateOrder/      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
+│     CreateOrder 1  ⚠ │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
+│    Smoke test        │ │ ⚠5│    <cus:GetCustomer>              │ │                                 │
+│                      │ │  6│      <cus:customerId>?</cus:cust… │ │                                 │
+│                      │ │  …│                                   │ │                                 │
+│                      │ └───┴───────────────────────────────────┘ ├─────────────────────────────────┤
+│                      │ ⚠ 1 error  line 6: '?' is not a valid xs… │ ▸ History  6 earlier    ●●●●●●◉ │
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
-   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
+   / folder   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
 ```
 
 An older history entry selected (drawer open):
