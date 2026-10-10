@@ -452,10 +452,7 @@ impl ServersPane {
         let sheet = self.sheet();
         // Ending the field editor before the sheet goes.
         sheet.makeFirstResponder(None);
-        match sheet.sheetParent() {
-            Some(parent) => parent.endSheet(sheet),
-            None => sheet.orderOut(None),
-        }
+        layout::dismiss(sheet);
     }
 
     /// User and Password only with Basic auth; the sheet follows their height.
