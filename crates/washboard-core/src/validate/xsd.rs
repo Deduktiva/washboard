@@ -1,7 +1,7 @@
 //! XSD compilation and validation with libxml2.
 //!
 //! [`CompiledSchema::compile`] turns a [`SchemaBundle`] into a libxml2 schema;
-//! [`CompiledSchema::validate_text`] checks one document; the request pipeline
+//! [`CompiledSchema::validate`] checks one document; the request pipeline
 //! (`validate::request`) passes the whole SOAP envelope.
 //!
 //! # Resource loading
@@ -229,22 +229,11 @@ impl CompiledSchema {
     /// `text` is already decoded (by [`crate::xml::decode`]) and is parsed as UTF-8 whatever
     /// its XML declaration says, the same way [`crate::xml::check_well_formed`] parses it. This
     /// is what the editor and the request pipeline hold.
-    pub fn validate_text(&self, text: &str) -> Vec<Diagnostic> {
-        self.validate_with(text, None)
-    }
-
-    /// Like [`Self::validate_text`], but removes the attributes `strip` names from the parsed
-    /// document before validating it, so the schema never sees them. Positions are unaffected:
-    /// elements keep their line numbers and document order.
-    pub fn validate_text_stripping(
-        &self,
-        text: &str,
-        strip: &StripAttributes<'_>,
-    ) -> Vec<Diagnostic> {
-        self.validate_with(text, Some(strip))
-    }
-
-    fn validate_with(&self, text: &str, strip: Option<&StripAttributes<'_>>) -> Vec<Diagnostic> {
+    ///
+    /// With `strip`, the attributes it names are removed from the parsed document before
+    /// validating, so the schema never sees them. Positions are unaffected: elements keep their
+    /// line numbers and document order.
+    pub fn validate(&self, text: &str, strip: Option<&StripAttributes<'_>>) -> Vec<Diagnostic> {
         let (doc, parse_errors) = match parse_instance(text) {
             Ok(parsed) => parsed,
             Err(d) => return vec![d],
@@ -1242,7 +1231,7 @@ mod tests {
         let bytes = std::fs::read(fixtures().join("customer/requests/invalid-not-well-formed.xml"))
             .expect("fixture");
         let text = crate::xml::decode(&bytes).expect("decodes").text;
-        let diags = schema.validate_text(&text);
+        let diags = schema.validate(&text, None);
         assert!(
             diags.iter().any(|d| d.source == DiagSource::WellFormedness
                 && d.is_error()
@@ -1254,7 +1243,7 @@ mod tests {
     #[test]
     fn multi_line_start_tag_maps_to_its_first_line() {
         let xml = "<r xmlns=\"urn:t\">\n  <n\n     >abc</n>\n</r>\n";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(2, 3), "{diags:#?}");
         assert!(diags[0].message.contains("'abc'"), "{diags:#?}");
@@ -1263,7 +1252,7 @@ mod tests {
     #[test]
     fn attribute_errors_point_at_the_element() {
         let xml = "<r xmlns=\"urn:t\"\n   count=\"0\">\n  <n>1</n>\n</r>\n";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(1, 1));
         assert!(diags[0].message.contains("count"), "{diags:#?}");
@@ -1280,7 +1269,7 @@ mod tests {
     #[test]
     fn attribute_errors_span_the_attribute() {
         let xml = "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\"\n   count=\"0\" x:y='a&amp;b'>\n  <n>1</n>\n</r>\n";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 2, "{diags:#?}");
         assert_eq!(diags[0].span, span((2, 4), (2, 13)), "{diags:#?}");
         let detail = diags[0].detail.as_ref().expect("detail");
@@ -1297,7 +1286,7 @@ mod tests {
     #[test]
     fn value_errors_span_the_trimmed_text() {
         let xml = "<r xmlns=\"urn:t\">\n  <n>1</n><n> <!-- c -->abc\n </n>\n</r>";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(2, 11));
         assert_eq!(diags[0].span, span((2, 15), (2, 28)), "{diags:#?}");
@@ -1305,14 +1294,14 @@ mod tests {
         assert_eq!((detail.code, detail.element_index), (1824, Some(2)));
 
         // Nothing to underline in an empty element: the start tag.
-        let diags = small().validate_text("<r xmlns=\"urn:t\"><n/></r>");
+        let diags = small().validate("<r xmlns=\"urn:t\"><n/></r>", None);
         assert_eq!(diags[0].span, span((1, 18), (1, 22)), "{diags:#?}");
     }
 
     #[test]
     fn content_model_errors_span_the_start_tag() {
         let xml = "<r xmlns=\"urn:t\">\n  <n>1</n><a\n  >x</a>\n</r>";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(2, 11));
         assert_eq!(diags[0].span, span((2, 11), (3, 4)), "{diags:#?}");
@@ -1333,8 +1322,8 @@ mod tests {
         };
         let schema = small();
         let ok = "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">1</n>\n</r>";
-        assert_eq!(schema.validate_text(ok).len(), 1);
-        assert_eq!(schema.validate_text_stripping(ok, &strip), Vec::new());
+        assert_eq!(schema.validate(ok, None).len(), 1);
+        assert_eq!(schema.validate(ok, Some(&strip)), Vec::new());
 
         // Another name, another namespace, or on the parent itself: still an error.
         for bad in [
@@ -1342,13 +1331,13 @@ mod tests {
             "<r xmlns=\"urn:t\" xmlns:y=\"urn:y\">\n  <n y:flag=\"1\">1</n>\n</r>",
             "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\" x:flag=\"1\">\n  <n>1</n>\n</r>",
         ] {
-            let diags = schema.validate_text_stripping(bad, &strip);
+            let diags = schema.validate(bad, Some(&strip));
             assert_eq!(diags.len(), 1, "{bad}: {diags:#?}");
         }
 
-        let diags = schema.validate_text_stripping(
+        let diags = schema.validate(
             "<r xmlns=\"urn:t\" xmlns:x=\"urn:x\">\n  <n x:flag=\"1\">no</n>\n</r>",
-            &strip,
+            Some(&strip),
         );
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(2, 3));
@@ -1357,7 +1346,7 @@ mod tests {
     #[test]
     fn columns_count_chars() {
         let xml = "<r xmlns=\"urn:t\">\n  <a>üü</a><n\n>x</n>\n</r>";
-        let diags = small().validate_text(xml);
+        let diags = small().validate(xml, None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         // `  <a>üü</a>` is 11 chars (13 bytes), so `<n` starts in column 12.
         assert_eq!(diags[0].pos, pos(2, 12));
@@ -1366,10 +1355,10 @@ mod tests {
     #[test]
     fn missing_content_and_unknown_root() {
         let schema = small();
-        let diags = schema.validate_text("<r xmlns=\"urn:t\"/>");
+        let diags = schema.validate("<r xmlns=\"urn:t\"/>", None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert_eq!(diags[0].pos, pos(1, 1));
-        let diags = schema.validate_text("<x:other xmlns:x=\"urn:t\"/>");
+        let diags = schema.validate("<x:other xmlns:x=\"urn:t\"/>", None);
         assert_eq!(diags.len(), 1, "{diags:#?}");
         assert!(
             diags[0].message.contains("No matching global"),
@@ -1377,7 +1366,7 @@ mod tests {
         );
         assert!(
             schema
-                .validate_text("<r xmlns=\"urn:t\"><n>1</n><n>2</n></r>")
+                .validate("<r xmlns=\"urn:t\"><n>1</n><n>2</n></r>", None)
                 .is_empty()
         );
     }
@@ -1392,7 +1381,7 @@ mod tests {
              <r xmlns=\"urn:t\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n   \
              xsi:schemaLocation=\"urn:t {url}\"><a>&e;</a><n>1</n></r>"
         );
-        let diags = small().validate_text(&xml);
+        let diags = small().validate(&xml, None);
         assert!(
             diags.iter().all(|d| !d.message.contains("TOP-SECRET")),
             "{diags:#?}"
@@ -1537,7 +1526,7 @@ mod tests {
         assert_eq!(schema.warnings(), &[] as &[Diagnostic]);
         assert!(
             schema
-                .validate_text("<größe xmlns=\"urn:t\">x</größe>")
+                .validate("<größe xmlns=\"urn:t\">x</größe>", None)
                 .is_empty()
         );
     }
@@ -1574,8 +1563,9 @@ mod tests {
         let handles: Vec<_> = (0..4).map(|_| std::thread::spawn(small)).collect();
         for h in handles {
             let schema = h.join().expect("thread");
-            let moved =
-                std::thread::spawn(move || schema.validate_text("<r xmlns=\"urn:t\"><n>1</n></r>"));
+            let moved = std::thread::spawn(move || {
+                schema.validate("<r xmlns=\"urn:t\"><n>1</n></r>", None)
+            });
             assert!(moved.join().expect("thread").is_empty());
         }
     }
@@ -1624,9 +1614,9 @@ mod tests {
                 .collect();
             for h in handles {
                 let (own, other, schema) = h.join().expect("thread");
-                assert!(schema.validate_text(&instance(own)).is_empty(), "{own}");
+                assert!(schema.validate(&instance(own), None).is_empty(), "{own}");
                 assert!(
-                    !schema.validate_text(&instance(other)).is_empty(),
+                    !schema.validate(&instance(other), None).is_empty(),
                     "{other}"
                 );
             }
