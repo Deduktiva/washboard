@@ -606,9 +606,9 @@ type, each followed by a comment listing the alternatives. `xs:any` emits
 Each milestone ends in something runnable.
 
 M0 (libxml2 and ureq spikes), M1 (core library and the `washboard` CLI) and M2–M4 are done;
-M5 is under way: Replace WSDL with its report and the Dark Mode check are done; FSEvents,
-accessibility, the icon and distribution are left. Follow-up work and what is left of
-M5 are in `docs/TASKS.md`.
+M5 is under way: Replace WSDL with its report, the Dark Mode check and external-change
+detection are done; accessibility, the icon and distribution are left. Follow-up work and what
+is left of M5 are in `docs/TASKS.md`.
 
 **M2 — App shell + UI model**
 App delegate, main menu, welcome window, project window (toolbar, sidebar, editor, response pane),

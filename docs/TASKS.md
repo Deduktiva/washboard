@@ -48,7 +48,6 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | Package | Depends on | Owns | Scope |
 |---|---|---|---|
 | WP-DIST | — | `[package.metadata.packager]` and `icons/` in `crates/washboard-app/`, a release workflow in `.github/workflows/`, `Makefile` | The unsigned `.app` already builds (`make app`, CI artifact) with a placeholder icon. Left: the real icon, DMG via `cargo-packager`, codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
-| WP-FSEVENTS | — | file watching in `crates/washboard-ui-model`, `notify` in its `Cargo.toml`, the binding in `crates/washboard-app/**` | PLAN M5 and §2 (`notify`, FSEvents backend): notice request files edited outside the app. The PLAN does not say what happens to an open buffer; decide that first (proposal: reload a clean buffer, keep a dirty one and ask). |
 | WP-A11Y | — | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
 | WP-REQUEST-FOLDERS | — | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
@@ -98,7 +97,6 @@ would leave folders for removed operations behind.
   also takes a path; a bare name that matches two requests fails and lists their paths.
   `request mv <name> <folder>` moves a request (creating the folder; `/` for the top level).
   `request new` places like New Request.
-- **Also affected:** WP-FSEVENTS must watch `requests/` recursively.
 - **Tests** (Linux): reconciliation of nested files, a move in Finder keeping history, the
   duplicate-name case; placement with one and with several supported ports (both fixtures and a
   synthetic two-port WSDL), the folder reused across case, a selected folder winning; folder
