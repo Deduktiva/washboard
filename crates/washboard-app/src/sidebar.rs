@@ -1,9 +1,10 @@
-//! The project window's source list: REQUESTS and OPERATIONS (service › port › operation),
-//! with unsaved (•) and invalid (⚠) markers on requests, inline rename, each port's SOAP
-//! version as a chip, and a context menu per row.
+//! The project window's source list: REQUESTS, the requests' folder tree (PLAN §8), with
+//! unsaved (•) and invalid (⚠) markers on requests, inline rename of requests and folders,
+//! drag and drop moves, and a context menu per row. Creating a request is the operation
+//! picker's job; the WSDL's operations are listed there, unsupported ones included.
 //!
 //! The rows are the model's [`Sidebar`]; this controller only draws them and turns selection,
-//! rename and double-clicks into model commands. `NSOutlineView` identifies rows by object
+//! rename, drops and disclosure into model commands. `NSOutlineView` identifies rows by object
 //! pointer and does not retain its items, so every node is an Objective-C object
 //! (`SidebarNode`) owned by the tree in `SidebarController`, rebuilt on `SidebarChanged`.
 
@@ -12,69 +13,61 @@ use std::collections::HashSet;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSColor, NSControl, NSControlTextEditingDelegate, NSEvent, NSLayoutAttribute, NSLineBreakMode,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource,
-    NSOutlineViewDelegate, NSResponder, NSStackView, NSTableColumn, NSTableView, NSTableViewStyle,
-    NSTextField, NSTextFieldDelegate, NSTextView, NSUserInterfaceLayoutOrientation, NSView,
+    NSApplication, NSColor, NSControl, NSControlTextEditingDelegate, NSDragOperation,
+    NSDraggingInfo, NSDraggingSession, NSEvent, NSImage, NSImageView, NSLayoutAttribute,
+    NSLayoutConstraintOrientation, NSLayoutPriorityDefaultHigh, NSLineBreakMode, NSMenu,
+    NSMenuDelegate, NSMenuItem, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate,
+    NSOutlineViewDropOnItemIndex, NSPasteboardItem, NSPasteboardWriting, NSResponder, NSStackView,
+    NSTableColumn, NSTableView, NSTableViewStyle, NSTextField, NSTextFieldDelegate, NSTextView,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{
-    NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSString, ns_string,
+    NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSString,
+    ns_string,
 };
 use washboard_core::model::{OperationRef, RequestId};
-use washboard_core::wsdl::Protocol;
-use washboard_ui_model::{ProjectKey, SchemaState, Sidebar};
+use washboard_ui_model::{FolderNode, ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::colors;
 use crate::layout;
-use crate::menu::{self, BACKSPACE, CMD, Entry, NONE, item};
-use crate::text::port_chip;
+use crate::menu::{self, BACKSPACE, CMD, Entry, NONE, OPT_CMD, item};
 
-/// On a SOAP 1.2 port's row; its operations give their own reason.
-fn soap12_tool_tip() -> &'static NSString {
-    ns_string!("SOAP 1.2 bindings are not supported")
+/// The pasteboard type of a row being dragged inside the sidebar. Only this outline view
+/// accepts it; the row itself is kept in the controller while the drag lasts.
+fn drag_type() -> &'static NSString {
+    ns_string!("at.deduktiva.washboard.sidebar-row")
 }
 
 /// What a sidebar row stands for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeKind {
-    /// The REQUESTS or OPERATIONS header.
+    /// The REQUESTS header, which stands for the top level of `requests/`.
     Group,
+    Folder,
     Request,
-    Service,
-    Port,
-    Operation,
-    /// Stands in for the operations while the WSDL loads, or says why it could not be.
-    Placeholder,
 }
 
 #[derive(Debug)]
 enum NodeData {
     Group,
+    Folder {
+        path: String,
+    },
     Request {
         id: RequestId,
+        folder: String,
         dirty: bool,
         invalid: bool,
     },
-    Service,
-    Port {
-        protocol: Option<Protocol>,
-    },
-    Operation {
-        operation: OperationRef,
-        unsupported: Option<String>,
-    },
-    Placeholder,
 }
 
 #[derive(Debug)]
 pub struct NodeIvars {
     data: NodeData,
     title: String,
-    /// Names the node across rebuilds, to keep collapsed groups collapsed.
-    path: String,
     children: Vec<Retained<SidebarNode>>,
 }
 
@@ -96,14 +89,12 @@ impl SidebarNode {
     fn new(
         data: NodeData,
         title: &str,
-        path: String,
         children: Vec<Retained<SidebarNode>>,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(NodeIvars {
             data,
             title: title.to_owned(),
-            path,
             children,
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -113,11 +104,8 @@ impl SidebarNode {
     pub fn kind(&self) -> NodeKind {
         match self.ivars().data {
             NodeData::Group => NodeKind::Group,
+            NodeData::Folder { .. } => NodeKind::Folder,
             NodeData::Request { .. } => NodeKind::Request,
-            NodeData::Service => NodeKind::Service,
-            NodeData::Port { .. } => NodeKind::Port,
-            NodeData::Operation { .. } => NodeKind::Operation,
-            NodeData::Placeholder => NodeKind::Placeholder,
         }
     }
 
@@ -137,6 +125,24 @@ impl SidebarNode {
         }
     }
 
+    /// A folder row's path; `""` for the REQUESTS header, the top level.
+    pub fn folder(&self) -> Option<&str> {
+        match &self.ivars().data {
+            NodeData::Group => Some(""),
+            NodeData::Folder { path } => Some(path),
+            NodeData::Request { .. } => None,
+        }
+    }
+
+    /// The folder a row is in, or is: a request's folder, a folder's own path.
+    fn containing_folder(&self) -> &str {
+        match &self.ivars().data {
+            NodeData::Group => "",
+            NodeData::Folder { path } => path,
+            NodeData::Request { folder, .. } => folder,
+        }
+    }
+
     /// The (unsaved, invalid) markers of a request row.
     pub fn markers(&self) -> (bool, bool) {
         match self.ivars().data {
@@ -144,128 +150,35 @@ impl SidebarNode {
             _ => (false, false),
         }
     }
-
-    /// The operation an operation row stands for.
-    pub fn operation(&self) -> Option<&OperationRef> {
-        match &self.ivars().data {
-            NodeData::Operation { operation, .. } => Some(operation),
-            _ => None,
-        }
-    }
-
-    /// A port row's chip: its SOAP version, and "unsupported" for 1.2.
-    pub fn chip(&self) -> Option<&'static str> {
-        match &self.ivars().data {
-            NodeData::Port { protocol } => port_chip(protocol.as_ref()),
-            _ => None,
-        }
-    }
-
-    /// Whether a port row stands for a SOAP 1.2 binding, which Washboard can't send to.
-    fn is_soap12(&self) -> bool {
-        matches!(
-            &self.ivars().data,
-            NodeData::Port {
-                protocol: Some(Protocol::Soap12)
-            }
-        )
-    }
-
-    /// Why an operation row can't be used, if it can't.
-    pub fn unsupported(&self) -> Option<&str> {
-        match &self.ivars().data {
-            NodeData::Operation { unsupported, .. } => unsupported.as_deref(),
-            _ => None,
-        }
-    }
 }
 
-/// The REQUESTS and OPERATIONS groups for `sidebar`; `placeholder` replaces an empty
-/// OPERATIONS group.
-fn tree(
-    sidebar: &Sidebar,
-    placeholder: Option<&str>,
-    mtm: MainThreadMarker,
-) -> Vec<Retained<SidebarNode>> {
-    let requests = sidebar
-        .requests
-        .iter()
-        .map(|r| {
+/// The REQUESTS group for `sidebar`: its folder tree, folders first.
+fn tree(sidebar: &Sidebar, mtm: MainThreadMarker) -> Vec<Retained<SidebarNode>> {
+    fn children(
+        folder: &FolderNode,
+        sidebar: &Sidebar,
+        mtm: MainThreadMarker,
+    ) -> Vec<Retained<SidebarNode>> {
+        let folders = folder.folders.iter().map(|f| {
+            let data = NodeData::Folder {
+                path: f.path.clone(),
+            };
+            SidebarNode::new(data, &f.name, children(f, sidebar, mtm), mtm)
+        });
+        let requests = folder.requests.iter().filter_map(|id| {
+            let r = sidebar.request(*id)?;
             let data = NodeData::Request {
                 id: r.id,
+                folder: r.folder.clone(),
                 dirty: r.dirty,
                 invalid: r.invalid,
             };
-            SidebarNode::new(data, &r.name, String::new(), vec![], mtm)
-        })
-        .collect();
-    let mut services: Vec<_> = sidebar
-        .services
-        .iter()
-        .map(|service| {
-            let ports = service
-                .ports
-                .iter()
-                .map(|port| {
-                    let operations = port
-                        .operations
-                        .iter()
-                        .map(|o| {
-                            let data = NodeData::Operation {
-                                operation: o.operation.clone(),
-                                unsupported: o.unsupported.clone(),
-                            };
-                            SidebarNode::new(data, o.name(), String::new(), vec![], mtm)
-                        })
-                        .collect();
-                    let path = format!("port:{}/{}", service.name, port.name);
-                    let data = NodeData::Port {
-                        protocol: port.protocol.clone(),
-                    };
-                    SidebarNode::new(data, &port.name, path, operations, mtm)
-                })
-                .collect();
-            let path = format!("service:{}", service.name);
-            SidebarNode::new(NodeData::Service, &service.name, path, ports, mtm)
-        })
-        .collect();
-    if services.is_empty()
-        && let Some(placeholder) = placeholder
-    {
-        let node = SidebarNode::new(
-            NodeData::Placeholder,
-            placeholder,
-            String::new(),
-            vec![],
-            mtm,
-        );
-        services.push(node);
+            Some(SidebarNode::new(data, &r.name, vec![], mtm))
+        });
+        folders.chain(requests).collect()
     }
-    vec![
-        SidebarNode::new(
-            NodeData::Group,
-            "REQUESTS",
-            "group:requests".into(),
-            requests,
-            mtm,
-        ),
-        SidebarNode::new(
-            NodeData::Group,
-            "OPERATIONS",
-            "group:ops".into(),
-            services,
-            mtm,
-        ),
-    ]
-}
-
-/// What the OPERATIONS group says while it has no operations.
-fn placeholder(schema: &SchemaState) -> String {
-    match schema {
-        SchemaState::Loading => "Loading the WSDL…".into(),
-        SchemaState::Failed(message) => format!("The WSDL could not be loaded: {message}"),
-        SchemaState::Ready(_) => "The WSDL has no services".into(),
-    }
+    let requests = children(&sidebar.tree, sidebar, mtm);
+    vec![SidebarNode::new(NodeData::Group, "REQUESTS", requests, mtm)]
 }
 
 /// The node behind an outline item. Every item the outline view hands back is one of ours.
@@ -298,7 +211,7 @@ define_class!(
                 c.to_string() == "\r"
             });
             if is_return && self.selectedRow() >= 0 {
-                // Return renames the selected request, as in Finder.
+                // Return renames the selected request or folder, as in Finder.
                 // SAFETY: `renameRequest:` takes the sender.
                 let _: () = unsafe { msg_send![self, renameRequest: None::<&AnyObject>] };
             } else {
@@ -310,41 +223,63 @@ define_class!(
         // SAFETY: the signature matches the menu action.
         #[unsafe(method(renameRequest:))]
         fn rename_request(&self, _sender: Option<&AnyObject>) {
-            let row = self.selectedRow();
-            let Some(item) = self.itemAtRow(row) else { return };
-            if node(&item).kind() == NodeKind::Request {
-                self.editColumn_row_withEvent_select(0, row, None, true);
-            }
+            self.edit_row(self.selectedRow());
         }
     }
 );
+
+impl SidebarOutlineView {
+    /// Starts inline rename of `row` if it is a request or a folder.
+    fn edit_row(&self, row: NSInteger) {
+        let Some(item) = self.itemAtRow(row) else {
+            return;
+        };
+        if matches!(node(&item).kind(), NodeKind::Request | NodeKind::Folder) {
+            self.editColumn_row_withEvent_select(0, row, None, true);
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SidebarIvars {
     key: ProjectKey,
     roots: RefCell<Vec<Retained<SidebarNode>>>,
     outline: OnceCell<Retained<SidebarOutlineView>>,
-    /// Set while the controller changes the outline itself, so its own selection changes
-    /// don't go back to the model as commands.
+    /// Set while the controller changes the outline itself, so its own selection and
+    /// disclosure changes don't go back to the model as commands.
     applying: Cell<bool>,
     /// A reload that arrived while a name was being edited; it would have ended the edit.
     stale: Cell<bool>,
+    /// The row being dragged, from the drag's start to its end.
+    dragged: RefCell<Option<Retained<SidebarNode>>>,
 }
 
-/// A request's context menu. The Project menu keeps the same commands for the selected
+/// A request's context menu. The File menu keeps the same commands for the selected
 /// request, with the same shortcuts.
 const REQUEST_MENU: &[Entry] = &[
-    item("Rename", c"sidebarRenameRequest:", "", NONE),
+    item("New Request…", c"sidebarNewRequest:", "n", CMD),
+    item("New Folder", c"sidebarNewFolder:", "n", OPT_CMD),
+    Entry::Separator,
+    item("Rename", c"sidebarRename:", "", NONE),
     item("Duplicate", c"sidebarDuplicateRequest:", "d", CMD),
     item("Validate", c"sidebarValidateRequest:", "b", CMD),
-    item("Delete", c"sidebarDeleteRequest:", BACKSPACE, CMD),
+    item("Delete", c"sidebarDelete:", BACKSPACE, CMD),
 ];
 
-/// An operation's context menu.
-const NEW_REQUEST_MENU: &[Entry] = &[item("New Request", c"sidebarNewRequest:", "n", CMD)];
+/// A folder's context menu: New Request… and New Folder create inside it.
+const FOLDER_MENU: &[Entry] = &[
+    item("New Request…", c"sidebarNewRequest:", "n", CMD),
+    item("New Folder", c"sidebarNewFolder:", "n", OPT_CMD),
+    Entry::Separator,
+    item("Rename", c"sidebarRename:", "", NONE),
+    item("Delete", c"sidebarDelete:", BACKSPACE, CMD),
+];
 
-/// The REQUESTS header's context menu, which asks for the operation.
-const PICK_REQUEST_MENU: &[Entry] = &[item("New Request…", c"sidebarNewRequest:", "n", CMD)];
+/// The REQUESTS header's context menu: both create at the top level.
+const HEADER_MENU: &[Entry] = &[
+    item("New Request…", c"sidebarNewRequest:", "n", CMD),
+    item("New Folder", c"sidebarNewFolder:", "n", OPT_CMD),
+];
 
 define_class!(
     // SAFETY:
@@ -397,6 +332,52 @@ define_class!(
         fn is_expandable(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
             !node(item).children().is_empty()
         }
+
+        // SAFETY: the signature matches `outlineView:pasteboardWriterForItem:`.
+        #[unsafe(method_id(outlineView:pasteboardWriterForItem:))]
+        fn pasteboard_writer(
+            &self,
+            _outline: &NSOutlineView,
+            item: &AnyObject,
+        ) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+            self.drag_started(node(item))
+        }
+
+        // SAFETY: the signature matches `outlineView:validateDrop:proposedItem:proposedChildIndex:`.
+        #[unsafe(method(outlineView:validateDrop:proposedItem:proposedChildIndex:))]
+        fn validate_drop(
+            &self,
+            outline: &NSOutlineView,
+            info: &ProtocolObject<dyn NSDraggingInfo>,
+            item: Option<&AnyObject>,
+            _index: NSInteger,
+        ) -> NSDragOperation {
+            self.validate_drop_on(outline, info, item)
+        }
+
+        // SAFETY: the signature matches `outlineView:acceptDrop:item:childIndex:`.
+        #[unsafe(method(outlineView:acceptDrop:item:childIndex:))]
+        fn accept_drop(
+            &self,
+            outline: &NSOutlineView,
+            info: &ProtocolObject<dyn NSDraggingInfo>,
+            item: Option<&AnyObject>,
+            _index: NSInteger,
+        ) -> bool {
+            self.accept_drop_on(outline, info, item)
+        }
+
+        // SAFETY: the signature matches `outlineView:draggingSession:endedAtPoint:operation:`.
+        #[unsafe(method(outlineView:draggingSession:endedAtPoint:operation:))]
+        fn dragging_ended(
+            &self,
+            _outline: &NSOutlineView,
+            _session: &NSDraggingSession,
+            _point: NSPoint,
+            _operation: NSDragOperation,
+        ) {
+            self.ivars().dragged.borrow_mut().take();
+        }
     }
 
     // SAFETY: `NSTextFieldDelegate` has no safety requirements.
@@ -443,7 +424,7 @@ define_class!(
         // SAFETY: the signature matches `outlineView:shouldSelectItem:`.
         #[unsafe(method(outlineView:shouldSelectItem:))]
         fn should_select(&self, _outline: &NSOutlineView, item: &AnyObject) -> bool {
-            matches!(node(item).kind(), NodeKind::Request | NodeKind::Operation)
+            node(item).kind() != NodeKind::Group
         }
 
         // SAFETY: the signature matches `outlineViewSelectionDidChange:`.
@@ -452,6 +433,18 @@ define_class!(
             if !self.ivars().applying.get() {
                 self.selection_changed_by_user();
             }
+        }
+
+        // SAFETY: the signature matches `outlineViewItemDidExpand:`.
+        #[unsafe(method(outlineViewItemDidExpand:))]
+        fn item_did_expand(&self, notification: &NSNotification) {
+            self.disclosure_changed(notification, false);
+        }
+
+        // SAFETY: the signature matches `outlineViewItemDidCollapse:`.
+        #[unsafe(method(outlineViewItemDidCollapse:))]
+        fn item_did_collapse(&self, notification: &NSNotification) {
+            self.disclosure_changed(notification, true);
         }
     }
 
@@ -471,20 +464,39 @@ define_class!(
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(sidebarNewRequest:))]
         fn context_new_request(&self, sender: Option<&AnyObject>) {
-            match menu_node(sender).and_then(|n| n.operation().cloned()) {
-                Some(operation) => self.new_request(operation),
-                // The REQUESTS header's New Request…
-                None => {
-                    let key = self.ivars().key;
-                    with_delegate(self.mtm(), |d| d.project(key)?.show_operation_picker());
+            // The picker files the request into the selected folder, so a folder's item
+            // selects it first, a request's item selects the request's folder, and the
+            // header's (or a top-level request's) clears the selection for the default place.
+            let Some(node) = menu_node(sender) else { return };
+            let folder = match node.kind() {
+                NodeKind::Folder => Some(node),
+                NodeKind::Request => self.folder_node(node.containing_folder()),
+                NodeKind::Group => None,
+            };
+            match folder {
+                Some(folder) => {
+                    self.select_node(&folder);
                 }
+                None => self.select_none(),
+            }
+            let key = self.ivars().key;
+            with_delegate(self.mtm(), |d| d.project(key)?.show_operation_picker());
+        }
+
+        #[unsafe(method(sidebarNewFolder:))]
+        fn context_new_folder(&self, sender: Option<&AnyObject>) {
+            if let Some(node) = menu_node(sender) {
+                self.new_folder_in(node.containing_folder());
             }
         }
 
-        #[unsafe(method(sidebarRenameRequest:))]
+        #[unsafe(method(sidebarRename:))]
         fn context_rename(&self, sender: Option<&AnyObject>) {
-            if let Some(request) = self.select_for_menu(sender) {
-                self.begin_rename(request);
+            let Some(node) = menu_node(sender) else { return };
+            if self.select_node(&node)
+                && let Some(outline) = self.outline()
+            {
+                outline.edit_row(outline.selectedRow());
             }
         }
 
@@ -497,16 +509,20 @@ define_class!(
 
         #[unsafe(method(sidebarValidateRequest:))]
         fn context_validate(&self, sender: Option<&AnyObject>) {
-            if self.select_for_menu(sender).is_some() {
+            let Some(node) = menu_node(sender) else { return };
+            if node.kind() == NodeKind::Request && self.select_node(&node) {
                 let key = self.ivars().key;
                 self.command("Could not validate the request", |app| app.validate(key));
             }
         }
 
-        #[unsafe(method(sidebarDeleteRequest:))]
+        #[unsafe(method(sidebarDelete:))]
         fn context_delete(&self, sender: Option<&AnyObject>) {
-            if let Some(request) = menu_node(sender).and_then(|n| n.request()) {
-                self.delete_request(request);
+            let Some(node) = menu_node(sender) else { return };
+            match (node.request(), node.folder()) {
+                (Some(request), _) => self.delete_request(request),
+                (None, Some(path)) if !path.is_empty() => self.delete_folder(path),
+                _ => {}
             }
         }
     }
@@ -518,12 +534,12 @@ define_class!(
             let Some(outline) = self.outline() else {
                 return;
             };
-            let Some(item) = outline.itemAtRow(outline.clickedRow()) else {
+            let row = outline.clickedRow();
+            if row < 0 || self.clicked_disclosure(outline, row) {
+                // A double-click on a folder's triangle only toggles it.
                 return;
-            };
-            if let Some(operation) = node(&item).operation() {
-                self.new_request(operation.clone());
             }
+            outline.edit_row(row);
         }
     }
 );
@@ -536,6 +552,7 @@ impl SidebarController {
             outline: OnceCell::new(),
             applying: Cell::new(false),
             stale: Cell::new(false),
+            dragged: RefCell::new(None),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         unsafe { msg_send![super(this), init] }
@@ -566,6 +583,10 @@ impl SidebarController {
         // header counts as floating, so the line came and went with hover redraws; the sidebar
         // is short enough that headers need not stay pinned while scrolling.
         outline.setFloatsGroupRows(false);
+        // Rows move inside the sidebar only, never to or from another app.
+        outline.registerForDraggedTypes(&NSArray::from_slice(&[drag_type()]));
+        outline.setDraggingSourceOperationMask_forLocal(NSDragOperation::Move, true);
+        outline.setDraggingSourceOperationMask_forLocal(NSDragOperation::None, false);
         // SAFETY: the project window controller owns this controller and the outline view's
         // window, so the controller outlives the outline view's weak references to it, the
         // target included; `sidebarDoubleClicked:` takes the sender.
@@ -586,50 +607,65 @@ impl SidebarController {
         outline
     }
 
-    /// The context menu for `row`: Rename, Duplicate, Validate and Delete on a request; New
-    /// Request on an operation and on the REQUESTS header; nothing elsewhere, so no menu opens.
+    /// The context menu for `row`: New Request… and New Folder, creating in the row's folder,
+    /// then Rename, Duplicate, Validate and Delete on a request, or Rename and Delete on a
+    /// folder; only the two on the REQUESTS header; nothing elsewhere, so no menu opens.
     pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
         let clicked = self.outline().and_then(|o| o.itemAtRow(row));
         let node = clicked.as_deref().map(node);
-        let entries = match node.map(|n| (n.kind(), n.ivars().path.as_str())) {
-            Some((NodeKind::Request, _)) => REQUEST_MENU,
-            Some((NodeKind::Operation, _)) => NEW_REQUEST_MENU,
-            Some((NodeKind::Group, "group:requests")) => PICK_REQUEST_MENU,
-            _ => &[],
+        let entries = match node.map(SidebarNode::kind) {
+            Some(NodeKind::Request) => REQUEST_MENU,
+            Some(NodeKind::Folder) => FOLDER_MENU,
+            Some(NodeKind::Group) => HEADER_MENU,
+            None => &[],
         };
         let object: Option<&AnyObject> = node.map(AsRef::as_ref);
-        // An unsupported operation gets no request, as a double-click shows; the header's
-        // picker needs the loaded WSDL.
-        let enabled = node.is_some_and(|n| match n.kind() {
-            NodeKind::Group => self.schema_ready(),
-            _ => n.unsupported().is_none(),
-        });
+        // The picker needs the loaded WSDL.
+        let schema_ready = self.schema_ready();
         let configure = |item: &NSMenuItem| {
             // SAFETY: a `SidebarNode`, which is what `menu_node` expects back.
             unsafe { item.setRepresentedObject(object) };
-            item.setEnabled(enabled);
+            item.setEnabled(item.action() != Some(sel!(sidebarNewRequest:)) || schema_ready);
         };
         // SAFETY: this controller implements every action in the tables and outlives the menu
         // (the outline view owns it).
         unsafe { menu::fill_context_menu(menu, entries, self, configure) };
     }
 
-    /// Selects the context menu's request, as clicking its row would, so a command on the
-    /// selected request applies to it. `None` if the model kept another selection (the
-    /// previous request could not be saved).
-    fn select_for_menu(&self, sender: Option<&AnyObject>) -> Option<RequestId> {
-        let request = menu_node(sender)?.request()?;
+    /// Selects `node`'s row, as clicking it would, so a command on the selection applies to
+    /// it. `false` if the model kept another selection (the previous request could not be
+    /// saved).
+    fn select_node(&self, node: &SidebarNode) -> bool {
         let key = self.ivars().key;
+        let request = node.request();
         self.command("Could not open the request", |app| {
-            app.select_request(key, Some(request))
+            app.select_request(key, request)
         });
-        self.show_selection(None);
         let selected = self.read_project(key, |w| w.selected_request()).flatten();
-        (selected == Some(request)).then_some(request)
+        if selected != request {
+            self.show_selection();
+            return false;
+        }
+        if let (Some(outline), Some(row)) = (self.outline(), self.row_of(node)) {
+            self.applying(|| {
+                let rows = NSIndexSet::indexSetWithIndex(row as usize);
+                outline.selectRowIndexes_byExtendingSelection(&rows, false);
+            });
+        }
+        true
     }
 
-    /// Redraws the rows from the model (`SidebarChanged`), keeping collapsed groups collapsed
-    /// and the selection. Waits while a name is being edited.
+    /// Deselects every row (and the model's request), for commands on the top level.
+    fn select_none(&self) {
+        let key = self.ivars().key;
+        self.command("Could not open the request", |app| {
+            app.select_request(key, None)
+        });
+        self.show_selection();
+    }
+
+    /// Redraws the rows from the model (`SidebarChanged`), keeping collapsed folders
+    /// collapsed and the selection. Waits while a name is being edited.
     pub fn reload(&self) {
         if self.is_editing() {
             self.ivars().stale.set(true);
@@ -664,25 +700,34 @@ impl SidebarController {
 
     fn reload_now(&self) {
         let key = self.ivars().key;
-        let Some((sidebar, placeholder)) = self.read_project(key, |window| {
-            (window.sidebar().clone(), placeholder(window.schema()))
+        let Some((sidebar, collapsed)) = self.read_project(key, |window| {
+            let collapsed: HashSet<String> = window.collapsed_folders().iter().cloned().collect();
+            (window.sidebar().clone(), collapsed)
         }) else {
             return;
         };
-        let collapsed = self.collapsed_paths();
-        let selected_operation = self.selected_operation();
-        let roots = tree(&sidebar, Some(&placeholder), self.mtm());
+        let header_collapsed = self.header_collapsed();
+        let selected_folder = self.selected_folder();
+        let roots = tree(&sidebar, self.mtm());
         let old = std::mem::replace(&mut *self.ivars().roots.borrow_mut(), roots);
         if let Some(outline) = self.outline() {
             self.applying(|| {
                 outline.reloadData();
                 // SAFETY: nil expands every root item and, with `true`, all their descendants.
                 unsafe { outline.expandItem_expandChildren(None, true) };
+                // Children before their parents, so a collapsed folder inside a collapsed one
+                // is collapsed too when its parent is expanded again.
                 for row in (0..outline.numberOfRows()).rev() {
                     let Some(item) = outline.itemAtRow(row) else {
                         continue;
                     };
-                    if collapsed.contains(&node(&item).ivars().path) {
+                    let n = node(&item);
+                    let collapse = match n.kind() {
+                        NodeKind::Group => header_collapsed,
+                        NodeKind::Folder => n.folder().is_some_and(|p| collapsed.contains(p)),
+                        NodeKind::Request => false,
+                    };
+                    if collapse {
                         // SAFETY: `item` is one of the tree's nodes.
                         unsafe { outline.collapseItem(Some(&item)) };
                     }
@@ -691,12 +736,16 @@ impl SidebarController {
         }
         // The outline view no longer refers to the old nodes.
         drop(old);
-        self.show_selection(selected_operation.as_ref());
+        self.show_selection_or_folder(selected_folder.as_deref());
     }
 
     /// Selects the model's selected request (`SelectionChanged`). With no request selected,
-    /// an operation the user selected stays selected.
-    pub fn show_selection(&self, operation: Option<&OperationRef>) {
+    /// a folder the user selected stays selected.
+    pub fn show_selection(&self) {
+        self.show_selection_or_folder(self.selected_folder().as_deref());
+    }
+
+    fn show_selection_or_folder(&self, folder: Option<&str>) {
         let key = self.ivars().key;
         let request = self.read_project(key, |w| w.selected_request()).flatten();
         let Some(outline) = self.outline() else {
@@ -704,9 +753,9 @@ impl SidebarController {
         };
         let row = match request {
             Some(id) => self.row_where(|n| n.request() == Some(id)),
-            None => operation
-                .or(self.selected_operation().as_ref())
-                .and_then(|op| self.row_where(|n| n.operation() == Some(op))),
+            None => folder.and_then(|path| {
+                self.row_where(|n| n.kind() == NodeKind::Folder && n.folder() == Some(path))
+            }),
         };
         self.applying(|| match row {
             Some(row) => {
@@ -721,32 +770,67 @@ impl SidebarController {
 
     /// Starts inline rename of `request`'s row (`BeginRename`).
     pub fn begin_rename(&self, request: RequestId) {
-        let (Some(outline), Some(row)) = (
-            self.outline(),
-            self.row_where(|n| n.request() == Some(request)),
-        ) else {
+        self.begin_rename_where(|n| n.request() == Some(request));
+    }
+
+    /// Starts inline rename of the folder at `path` (`BeginRenameFolder`).
+    pub fn begin_rename_folder(&self, path: &str) {
+        self.begin_rename_where(|n| n.kind() == NodeKind::Folder && n.folder() == Some(path));
+    }
+
+    fn begin_rename_where(&self, f: impl Fn(&SidebarNode) -> bool) {
+        let (Some(outline), Some(row)) = (self.outline(), self.row_where(f)) else {
             return;
         };
         self.applying(|| {
             let rows = NSIndexSet::indexSetWithIndex(row as usize);
             outline.selectRowIndexes_byExtendingSelection(&rows, false);
         });
+        outline.scrollRowToVisible(row);
         outline.editColumn_row_withEvent_select(0, row, None, true);
     }
 
-    /// The operation selected in the outline, if an operation row is selected.
-    pub fn selected_operation(&self) -> Option<OperationRef> {
+    /// The folder selected in the outline, if a folder row is selected.
+    pub fn selected_folder(&self) -> Option<String> {
         let outline = self.outline()?;
         let item = outline.itemAtRow(outline.selectedRow())?;
-        node(&item).operation().cloned()
+        let node = node(&item);
+        (node.kind() == NodeKind::Folder)
+            .then(|| node.folder().map(str::to_owned))
+            .flatten()
     }
 
-    /// A request for `operation`: the operation picker's Create, an operation's New Request
-    /// and a double-click on it.
+    /// Where New Folder and a new request go from the selection: the selected folder, else the
+    /// selected request's folder, else the top level.
+    fn selection_folder(&self) -> String {
+        let Some(outline) = self.outline() else {
+            return String::new();
+        };
+        outline
+            .itemAtRow(outline.selectedRow())
+            .map(|item| node(&item).containing_folder().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// A request for `operation`, the operation picker's Create: into the selected folder,
+    /// else into the operation's folder.
     pub fn new_request(&self, operation: OperationRef) {
         let key = self.ivars().key;
+        let folder = self.selected_folder();
         self.command("Could not create a request", |app| {
-            app.new_request(key, &operation)
+            app.new_request(key, &operation, folder.as_deref())
+        });
+    }
+
+    /// File ▸ New Folder: in the selected folder, or the selected request's folder.
+    pub fn new_folder(&self) {
+        self.new_folder_in(&self.selection_folder());
+    }
+
+    fn new_folder_in(&self, parent: &str) {
+        let key = self.ivars().key;
+        self.command("Could not create a folder", |app| {
+            app.new_folder(key, parent)
         });
     }
 
@@ -757,7 +841,7 @@ impl SidebarController {
             .unwrap_or(false)
     }
 
-    /// Project ▸ Duplicate, and Duplicate in a request's context menu.
+    /// File ▸ Duplicate, and Duplicate in a request's context menu.
     pub fn duplicate_request(&self, request: RequestId) {
         let key = self.ivars().key;
         self.command("Could not duplicate the request", |app| {
@@ -765,11 +849,19 @@ impl SidebarController {
         });
     }
 
-    /// Project ▸ Delete, and Delete in a request's context menu.
+    /// File ▸ Delete, and Delete in a request's context menu.
     pub fn delete_request(&self, request: RequestId) {
         let key = self.ivars().key;
         self.command("Could not delete the request", |app| {
             app.delete_request(key, request)
+        });
+    }
+
+    /// Delete in a folder's context menu: asks first unless the folder is empty.
+    pub fn delete_folder(&self, path: &str) {
+        let key = self.ivars().key;
+        self.command("Could not delete the folder", |app| {
+            app.delete_folder(key, path)
         });
     }
 
@@ -779,19 +871,177 @@ impl SidebarController {
         (0..outline.numberOfRows()).find(|&row| outline.itemAtRow(row).is_some_and(|i| f(node(&i))))
     }
 
-    /// Paths of the expandable rows that are collapsed now.
-    fn collapsed_paths(&self) -> HashSet<String> {
+    /// The row node of the folder at `path`; `None` for the top level, which has no row.
+    fn folder_node(&self, path: &str) -> Option<Retained<SidebarNode>> {
+        let outline = self.outline()?;
+        let row = self.row_where(|n| {
+            n.kind() == NodeKind::Folder && !path.is_empty() && n.folder() == Some(path)
+        })?;
+        let item = outline.itemAtRow(row)?;
+        item.downcast::<SidebarNode>().ok()
+    }
+
+    fn row_of(&self, target: &SidebarNode) -> Option<NSInteger> {
+        self.row_where(|n| std::ptr::eq(n, target))
+    }
+
+    /// Whether the REQUESTS header is collapsed now. Kept for the window's lifetime only;
+    /// folders are kept in the project.
+    fn header_collapsed(&self) -> bool {
         let Some(outline) = self.outline() else {
-            return HashSet::new();
+            return false;
         };
-        (0..outline.numberOfRows())
-            .filter_map(|row| outline.itemAtRow(row))
-            .filter(|item| {
-                // SAFETY: `item` is one of the tree's nodes.
-                !node(item).children().is_empty() && !unsafe { outline.isItemExpanded(Some(item)) }
-            })
-            .map(|item| node(&item).ivars().path.clone())
-            .collect()
+        let header = self.ivars().roots.borrow().first().cloned();
+        header.is_some_and(|h| {
+            let item: &AnyObject = h.as_ref();
+            // SAFETY: `item` is one of the tree's nodes.
+            !h.children().is_empty() && !unsafe { outline.isItemExpanded(Some(item)) }
+        })
+    }
+
+    /// A folder's disclosure triangle, clicked by the user: remembered in the project.
+    fn disclosure_changed(&self, notification: &NSNotification, collapsed: bool) {
+        if self.ivars().applying.get() {
+            return;
+        }
+        let item = notification
+            .userInfo()
+            .and_then(|info| info.objectForKey(ns_string!("NSObject")));
+        let Some(path) = item
+            .as_deref()
+            .and_then(|i| i.downcast_ref::<SidebarNode>())
+            .filter(|n| n.kind() == NodeKind::Folder)
+            .and_then(|n| n.folder().map(str::to_owned))
+        else {
+            return;
+        };
+        let key = self.ivars().key;
+        self.command("Could not remember the folder", |app| {
+            app.set_folder_collapsed(key, &path, collapsed)
+        });
+    }
+
+    /// Whether the click that made `row`'s double action landed on its disclosure triangle.
+    fn clicked_disclosure(&self, outline: &SidebarOutlineView, row: NSInteger) -> bool {
+        let Some(event) = NSApplication::sharedApplication(self.mtm()).currentEvent() else {
+            return false;
+        };
+        let point = outline.convertPoint_fromView(event.locationInWindow(), None);
+        let frame = outline.frameOfOutlineCellAtRow(row);
+        point.x >= frame.origin.x
+            && point.x <= frame.origin.x + frame.size.width
+            && point.y >= frame.origin.y
+            && point.y <= frame.origin.y + frame.size.height
+    }
+
+    /// The folder a drag would drop into, as a node: the proposed folder or header, or the
+    /// folder of a request it is over. `None` when the drag is not one of this sidebar's rows
+    /// or the model would refuse the move, so the target is not highlighted.
+    fn drop_target(
+        &self,
+        outline: &NSOutlineView,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
+        item: Option<&AnyObject>,
+    ) -> Option<Retained<SidebarNode>> {
+        let ours = info.draggingSource().is_some_and(|s| {
+            let outline: &AnyObject = outline.as_ref();
+            std::ptr::eq(&*s, outline)
+        });
+        let dragged = self.ivars().dragged.borrow().clone()?;
+        if !ours {
+            return None;
+        }
+        let proposed = item?.downcast_ref::<SidebarNode>()?.retain();
+        let target = if proposed.kind() == NodeKind::Request {
+            let item: &AnyObject = proposed.as_ref();
+            // SAFETY: `item` is one of the tree's nodes.
+            unsafe { outline.parentForItem(Some(item)) }?
+                .downcast::<SidebarNode>()
+                .ok()?
+        } else {
+            proposed
+        };
+        let folder = target.folder()?;
+        let key = self.ivars().key;
+        let allowed = self.read_project(key, |window| match &dragged.ivars().data {
+            NodeData::Request {
+                id, folder: from, ..
+            } => from != folder && window.can_move_request(*id, folder),
+            NodeData::Folder { path } => {
+                let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
+                parent != folder && window.can_move_folder(path, folder)
+            }
+            NodeData::Group => false,
+        });
+        allowed.unwrap_or(false).then_some(target)
+    }
+
+    /// A request or folder row starts a drag. The pasteboard only says that a row is being
+    /// dragged; which one is kept here, since the drag never leaves the outline view.
+    fn drag_started(
+        &self,
+        node: &SidebarNode,
+    ) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+        if node.kind() == NodeKind::Group {
+            return None;
+        }
+        *self.ivars().dragged.borrow_mut() = Some(node.retain());
+        let writer = NSPasteboardItem::new();
+        writer.setString_forType(&NSString::from_str(&node.title()), drag_type());
+        Some(ProtocolObject::from_retained(writer))
+    }
+
+    fn validate_drop_on(
+        &self,
+        outline: &NSOutlineView,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
+        item: Option<&AnyObject>,
+    ) -> NSDragOperation {
+        let Some(target) = self.drop_target(outline, info, item) else {
+            return NSDragOperation::None;
+        };
+        // Always onto the folder itself, never between its rows: their order is the name's.
+        let target: &AnyObject = target.as_ref();
+        // SAFETY: `target` is one of the tree's nodes; -1 means onto the item.
+        unsafe {
+            outline
+                .setDropItem_dropChildIndex(Some(target), NSOutlineViewDropOnItemIndex as NSInteger)
+        };
+        NSDragOperation::Move
+    }
+
+    fn accept_drop_on(
+        &self,
+        outline: &NSOutlineView,
+        info: &ProtocolObject<dyn NSDraggingInfo>,
+        item: Option<&AnyObject>,
+    ) -> bool {
+        let Some(target) = self.drop_target(outline, info, item) else {
+            return false;
+        };
+        let Some(dragged) = self.ivars().dragged.borrow_mut().take() else {
+            return false;
+        };
+        let folder = target.containing_folder().to_owned();
+        self.move_node(&dragged, &folder)
+    }
+
+    /// Moves the dragged row into `folder` through the model.
+    fn move_node(&self, dragged: &SidebarNode, folder: &str) -> bool {
+        let key = self.ivars().key;
+        match &dragged.ivars().data {
+            NodeData::Request { id, .. } => self
+                .command("Could not move the request", |app| {
+                    app.move_request(key, *id, folder)
+                })
+                .is_some(),
+            NodeData::Folder { path } => self
+                .command("Could not move the folder", |app| {
+                    app.move_folder(key, path, folder)
+                })
+                .is_some(),
+            NodeData::Group => false,
+        }
     }
 
     fn applying(&self, f: impl FnOnce()) {
@@ -805,16 +1055,15 @@ impl SidebarController {
             return;
         };
         let key = self.ivars().key;
-        let request = match outline.itemAtRow(outline.selectedRow()) {
-            Some(item) if node(&item).kind() == NodeKind::Operation => None,
-            Some(item) => node(&item).request(),
-            None => None,
-        };
+        // A folder row selects no request: the editor closes, as for an empty selection.
+        let request = outline
+            .itemAtRow(outline.selectedRow())
+            .and_then(|item| node(&item).request());
         self.command("Could not open the request", |app| {
             app.select_request(key, request)
         });
         // If the model kept its selection (the old request could not be saved), show it.
-        self.show_selection(None);
+        self.show_selection();
     }
 
     fn rename_ended(&self, field: &NSTextField) {
@@ -826,18 +1075,25 @@ impl SidebarController {
             return;
         };
         let node = node(&item);
-        let Some(request) = node.request() else {
-            return;
-        };
         let name = field.stringValue().to_string();
         if name == node.title() {
             return;
         }
         let key = self.ivars().key;
-        let renamed = self.command("Could not rename the request", |app| {
-            app.rename_request(key, request, &name)
-        });
-        if renamed.is_none() {
+        let renamed = match &node.ivars().data {
+            NodeData::Request { id, .. } => self
+                .command("Could not rename the request", |app| {
+                    app.rename_request(key, *id, &name)
+                })
+                .is_some(),
+            NodeData::Folder { path } => self
+                .command("Could not rename the folder", |app| {
+                    app.rename_folder(key, path, &name)
+                })
+                .is_some(),
+            NodeData::Group => true,
+        };
+        if !renamed {
             // The field still shows the refused name.
             // SAFETY: `item` is one of the tree's nodes.
             unsafe { outline.reloadItem(Some(&item)) };
@@ -849,43 +1105,28 @@ impl SidebarController {
         let title = NSString::from_str(&node.title());
         let name = NSTextField::labelWithString(&title, mtm);
         layout::truncating(&name, NSLineBreakMode::ByTruncatingTail);
-        let alone = |name: &NSTextField| Retained::into_super(layout::cell(name, Some(name), mtm));
-        match node.kind() {
-            NodeKind::Group => return alone(&name),
-            NodeKind::Placeholder => {
-                name.setTextColor(Some(&NSColor::secondaryLabelColor()));
-                name.setToolTip(Some(&title));
-                return alone(&name);
-            }
-            NodeKind::Request => {
-                name.setEditable(true);
-                // SAFETY: the project window controller owns this controller and the window
-                // the field lives in, so the controller outlives the field's weak delegate
-                // reference.
-                unsafe { name.setDelegate(Some(ProtocolObject::from_ref(self))) };
-            }
-            NodeKind::Operation => {
-                if let Some(why) = node.unsupported() {
-                    name.setTextColor(Some(&NSColor::disabledControlTextColor()));
-                    name.setToolTip(Some(&NSString::from_str(why)));
-                }
-            }
-            NodeKind::Port if node.is_soap12() => {
-                // Greyed like its operations, which say the same in their tool tips.
-                name.setTextColor(Some(&NSColor::disabledControlTextColor()));
-                name.setToolTip(Some(soap12_tool_tip()));
-            }
-            NodeKind::Service | NodeKind::Port => {}
+        if node.kind() == NodeKind::Group {
+            return Retained::into_super(layout::cell(&name, Some(&name), mtm));
         }
-        let mut views = vec![layout::view(name.clone())];
-        let chip = node.chip().map(|text| layout::chip(text, mtm));
-        if let Some((chip, label)) = &chip {
-            if node.is_soap12() {
-                label.setTextColor(Some(&NSColor::disabledControlTextColor()));
-                chip.setToolTip(Some(soap12_tool_tip()));
-            }
-            views.push(Retained::into_super(chip.clone()));
+        name.setEditable(true);
+        // SAFETY: the project window controller owns this controller and the window the field
+        // lives in, so the controller outlives the field's weak delegate reference.
+        unsafe { name.setDelegate(Some(ProtocolObject::from_ref(self))) };
+        let mut views = vec![];
+        if node.kind() == NodeKind::Folder
+            && let Some(image) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                ns_string!("folder"),
+                Some(ns_string!("Folder")),
+            )
+        {
+            let icon = NSImageView::imageViewWithImage(&image, mtm);
+            icon.setContentHuggingPriority_forOrientation(
+                NSLayoutPriorityDefaultHigh,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+            views.push(layout::view(icon));
         }
+        views.push(layout::view(name.clone()));
         let marker = match node.markers() {
             (_, true) => Some(("⚠", colors::error())),
             (true, false) => Some(("•", NSColor::secondaryLabelColor())),
@@ -898,8 +1139,8 @@ impl SidebarController {
         }
         let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
         stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
-        // A box has no baseline to line up with the name's; centre a chip instead.
-        stack.setAlignment(if chip.is_some() {
+        // An icon has no baseline to line up with the name's; centre it instead.
+        stack.setAlignment(if node.kind() == NodeKind::Folder {
             NSLayoutAttribute::CenterY
         } else {
             NSLayoutAttribute::FirstBaseline

@@ -41,7 +41,7 @@ fn menu_item(
 pub(crate) const CMD: NSEventModifierFlags = NSEventModifierFlags::Command;
 const SHIFT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Shift.0);
-const OPT_CMD: NSEventModifierFlags =
+pub(crate) const OPT_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Option.0);
 const CTRL_CMD: NSEventModifierFlags =
     NSEventModifierFlags(NSEventModifierFlags::Command.0 | NSEventModifierFlags::Control.0);
@@ -139,6 +139,8 @@ const FILE: &[Entry] = &[
             item("New Project…", c"newProject:", "n", SHIFT_CMD),
             Entry::Separator,
             item("New Request…", c"newRequest:", "n", CMD),
+            // In the selected folder, or the selected request's.
+            item("New Folder", c"newFolder:", "n", OPT_CMD),
         ],
     ),
     item("Open Project…", c"openProject:", "o", CMD),

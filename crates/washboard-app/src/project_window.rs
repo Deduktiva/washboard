@@ -207,6 +207,11 @@ define_class!(
             self.show_operation_picker();
         }
 
+        #[unsafe(method(newFolder:))]
+        fn new_folder(&self, _sender: Option<&AnyObject>) {
+            self.sidebar().new_folder();
+        }
+
         #[unsafe(method(duplicateRequest:))]
         fn duplicate_request(&self, _sender: Option<&AnyObject>) {
             if let Some(request) = self.selected_request() {
@@ -800,8 +805,7 @@ impl ProjectWindowController {
     }
 
     /// New Request…: the operation picker on this window, unless the WSDL has not loaded or
-    /// the window already has a sheet. It starts on the operation selected in the sidebar, else
-    /// on the selected request's.
+    /// the window already has a sheet. It starts on the selected request's operation.
     pub fn show_operation_picker(&self) -> Option<Retained<OperationPicker>> {
         let window = self.project_window();
         if window.attachedSheet().is_some() || !self.sidebar().schema_ready() {
@@ -812,8 +816,7 @@ impl ProjectWindowController {
             let operation = window.request_summary().and_then(|r| r.operation);
             (window.sidebar().services.clone(), operation)
         })?;
-        let preferred = self.sidebar().selected_operation().or(request_operation);
-        let picker = OperationPicker::new(key, services, preferred, self.mtm());
+        let picker = OperationPicker::new(key, services, request_operation, self.mtm());
         picker.present(&window);
         *self.ivars().picker.borrow_mut() = Some(picker.clone());
         Some(picker)

@@ -23,8 +23,8 @@ fn main() {
         ("window_frames", checks::window_frames),
         ("open_project_panel", checks::open_project_panel),
         ("project_window", checks::project_window),
-        ("port_chips", checks::port_chips),
         ("sidebar_commands", checks::sidebar_commands),
+        ("sidebar_folders", checks::sidebar_folders),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
@@ -69,7 +69,7 @@ mod checks {
     use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send, sel};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBox, NSButton, NSColor,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSButton, NSColor,
         NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
         NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSScrollView, NSSplitViewItemBehavior,
         NSStackView, NSTableCellView, NSTextField, NSTextInputClient, NSTextView,
@@ -157,14 +157,9 @@ mod checks {
         folder
     }
 
-    /// Waits until the project's WSDL has loaded into the sidebar.
+    /// Waits until the project's WSDL has loaded, so New Request… has operations.
     fn wait_loaded(project: &ProjectWindowController) {
-        wait_until("the WSDL to load", || {
-            project.sidebar().roots()[1]
-                .children()
-                .first()
-                .is_some_and(|n| n.kind() == NodeKind::Service)
-        });
+        wait_until("the WSDL to load", || project.sidebar().schema_ready());
     }
 
     /// New Request… and Create on the operation the picker starts on.
@@ -219,26 +214,69 @@ mod checks {
         assert!(sent, "{title:?} reached the sidebar");
     }
 
+    /// The REQUESTS tree as rows: `Folder/` for a folder, indented by depth, in sidebar order.
     fn request_names(project: &ProjectWindowController) -> Vec<String> {
-        project.sidebar().roots()[0]
-            .children()
-            .iter()
-            .map(|n| n.title())
-            .collect()
+        fn walk(nodes: &[Retained<SidebarNode>], depth: usize, out: &mut Vec<String>) {
+            for n in nodes {
+                let indent = "  ".repeat(depth);
+                if n.kind() == NodeKind::Folder {
+                    out.push(format!("{indent}{}/", n.title()));
+                    walk(n.children(), depth + 1, out);
+                } else {
+                    out.push(format!("{indent}{}", n.title()));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(project.sidebar().roots()[0].children(), 0, &mut out);
+        out
     }
 
-    /// The request files in the project folder, sorted.
+    /// The request files under the project's `requests/`, as `/`-separated paths without
+    /// `.xml`, sorted.
     fn request_files(folder: &Path) -> Vec<String> {
-        let mut names: Vec<String> = std::fs::read_dir(folder.join("requests"))
-            .expect("requests dir")
-            .filter_map(|e| {
-                let path = e.ok()?.path();
-                (path.extension()? == "xml")
-                    .then(|| path.file_stem()?.to_str().map(String::from))?
-            })
-            .collect();
+        fn walk(dir: &Path, prefix: &str, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(dir).expect("requests dir").flatten() {
+                let path = e.path();
+                let name = e.file_name().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    walk(&path, &format!("{prefix}{name}/"), out);
+                } else if let Some(stem) = name.strip_suffix(".xml") {
+                    out.push(format!("{prefix}{stem}"));
+                }
+            }
+        }
+        let mut names = Vec::new();
+        walk(&folder.join("requests"), "", &mut names);
         names.sort();
         names
+    }
+
+    /// The row of the first node satisfying `f`.
+    fn row_where(
+        project: &ProjectWindowController,
+        f: &dyn Fn(&SidebarNode) -> bool,
+    ) -> Option<NSInteger> {
+        let outline = project.sidebar().outline()?;
+        (0..outline.numberOfRows()).find(|&row| {
+            outline
+                .itemAtRow(row)
+                .is_some_and(|i| i.downcast_ref::<SidebarNode>().is_some_and(f))
+        })
+    }
+
+    fn request_row(project: &ProjectWindowController, name: &str) -> NSInteger {
+        row_where(project, &|n| {
+            n.kind() == NodeKind::Request && n.title() == name
+        })
+        .unwrap_or_else(|| panic!("a row for the request {name:?}"))
+    }
+
+    fn folder_row(project: &ProjectWindowController, path: &str) -> NSInteger {
+        row_where(project, &|n| {
+            n.kind() == NodeKind::Folder && n.folder() == Some(path)
+        })
+        .unwrap_or_else(|| panic!("a row for the folder {path:?}"))
     }
 
     pub struct Ctx {
@@ -640,7 +678,11 @@ mod checks {
                 .expect("the REQUESTS header");
             assert_eq!(
                 context_menu(&project, header),
-                [("New Request…".to_string(), false)]
+                [
+                    ("New Request…".to_string(), false),
+                    ("New Folder".to_string(), true)
+                ],
+                "folders don't need the WSDL"
             );
         } else {
             print!("(the WSDL had loaded, loading checks skipped) ");
@@ -740,11 +782,19 @@ mod checks {
             NSSplitViewItemBehavior::Sidebar
         );
 
-        // Two groups, the requests, and every service, port and operation, all expanded.
+        // One group, REQUESTS, with the requests' folders, all expanded; the WSDL's
+        // operations are the picker's, not the sidebar's.
         wait_loaded(&project);
         let rows = all_nodes(&project.sidebar().roots()).len();
         let outline = project.sidebar().outline().expect("outline built");
         assert_eq!(outline.numberOfRows() as usize, rows, "sidebar rows");
+        let titles: Vec<String> = project
+            .sidebar()
+            .roots()
+            .iter()
+            .map(|n| n.title())
+            .collect();
+        assert_eq!(titles, ["REQUESTS"], "no OPERATIONS section");
         assert!(
             !outline.floatsGroupRows(),
             "headers do not float, so the first one draws no separator"
@@ -762,37 +812,15 @@ mod checks {
             "sidebar rows after reload"
         );
 
-        // Context menus: New Request on the REQUESTS header and on operations (disabled on an
-        // unsupported one), nothing on the OPERATIONS header, services and ports.
-        let row_of = |f: &dyn Fn(&SidebarNode) -> bool| {
-            (0..outline.numberOfRows())
-                .find(|&row| {
-                    outline
-                        .itemAtRow(row)
-                        .is_some_and(|i| i.downcast_ref::<SidebarNode>().is_some_and(f))
-                })
-                .expect("a matching row")
-        };
-        let requests_header = row_of(&|n| n.title() == "REQUESTS");
+        // The REQUESTS header's context menu creates at the top level.
+        let requests_header =
+            row_where(&project, &|n| n.title() == "REQUESTS").expect("the header row");
         assert_eq!(
             context_menu(&project, requests_header),
-            [("New Request…".to_string(), true)]
-        );
-        let ops_header = row_of(&|n| n.title() == "OPERATIONS");
-        assert!(context_menu(&project, ops_header).is_empty());
-        let service = row_of(&|n| n.kind() == NodeKind::Service);
-        assert!(context_menu(&project, service).is_empty());
-        let port = row_of(&|n| n.kind() == NodeKind::Port);
-        assert!(context_menu(&project, port).is_empty());
-        let supported = row_of(&|n| n.kind() == NodeKind::Operation && n.unsupported().is_none());
-        assert_eq!(
-            context_menu(&project, supported),
-            [("New Request".to_string(), true)]
-        );
-        let unsupported = row_of(&|n| n.unsupported().is_some());
-        assert_eq!(
-            context_menu(&project, unsupported),
-            [("New Request".to_string(), false)]
+            [
+                ("New Request…".to_string(), true),
+                ("New Folder".to_string(), true)
+            ]
         );
         let menu = outline.menu().expect("the outline has a context menu");
         // AppKit holds the menu's delegate weakly, too.
@@ -810,38 +838,6 @@ mod checks {
             "no buttons under the sidebar, only the list"
         );
 
-        // Operations are listed, unsupported ones too, and can be selected.
-        let nodes = all_nodes(&project.sidebar().roots());
-        let chips: Vec<_> = nodes
-            .iter()
-            .filter(|n| n.kind() == NodeKind::Port)
-            .map(|n| (n.title(), n.chip()))
-            .collect();
-        assert_eq!(
-            chips,
-            [
-                ("LegacyPort".to_owned(), Some("1.1")),
-                ("LegacyEncodedPort".to_owned(), Some("1.1")),
-            ]
-        );
-        assert!(
-            nodes.iter().any(|n| n.unsupported().is_some()),
-            "the rpc/encoded operation is shown"
-        );
-        let operation_row = (0..outline.numberOfRows())
-            .find(|&row| {
-                outline.itemAtRow(row).is_some_and(|item| {
-                    item.downcast_ref::<SidebarNode>()
-                        .is_some_and(|n| n.kind() == NodeKind::Operation)
-                })
-            })
-            .expect("an operation row") as usize;
-        outline.selectRowIndexes_byExtendingSelection(
-            &NSIndexSet::indexSetWithIndex(operation_row),
-            false,
-        );
-        assert_eq!(outline.selectedRow() as usize, operation_row);
-
         autoreleasepool(|_| window.performClose(None));
         assert!(!window.isVisible(), "project window closed");
         assert!(ctx.delegate.projects().is_empty(), "controller released");
@@ -849,73 +845,6 @@ mod checks {
             ctx.delegate.welcome().window().isVisible(),
             "welcome window back"
         );
-    }
-
-    /// A project with a SOAP 1.2 port marks it "1.2 · unsupported" beside the 1.1 port, and the
-    /// chips fit their rows.
-    pub fn port_chips(ctx: &Ctx) {
-        let tmp = TempDir::new().expect("temp dir");
-        let from = fixtures().join("customer");
-        let set = WsdlSet {
-            files: CUSTOMER_FILES
-                .iter()
-                .map(|f| WsdlFile {
-                    source: from.join(f),
-                    dest: (*f).into(),
-                })
-                .collect(),
-            entry: "CustomerService.wsdl".into(),
-        };
-        let folder = tmp.path().join("Customers");
-        Project::create(&folder, "Customers", &set).expect("create project");
-        let key = ctx
-            .delegate
-            .open_project_at(&folder)
-            .expect("the customer project opens");
-        let project = ctx.delegate.project(key).expect("a window for the project");
-        wait_loaded(&project);
-
-        let outline = project.sidebar().outline().expect("outline built").retain();
-        let ports: Vec<(NSInteger, Retained<SidebarNode>)> = (0..outline.numberOfRows())
-            .filter_map(|row| {
-                let item = outline.itemAtRow(row)?;
-                let node = item.downcast::<SidebarNode>().ok()?;
-                (node.kind() == NodeKind::Port).then_some((row, node))
-            })
-            .collect();
-        let chips: Vec<_> = ports.iter().map(|(_, n)| (n.title(), n.chip())).collect();
-        assert_eq!(
-            chips,
-            [
-                ("CustomerPort".to_owned(), Some("1.1")),
-                ("CustomerPort12".to_owned(), Some("1.2 · unsupported")),
-            ]
-        );
-        project.project_window().layoutIfNeeded();
-        for (row, node) in &ports {
-            let cell = outline
-                .viewAtColumn_row_makeIfNecessary(0, *row, true)
-                .expect("a cell");
-            assert_fits(&cell, &node.title());
-            cell.layoutSubtreeIfNeeded();
-            // The chip is the box beside the name, inside the cell and as tall as a line.
-            let stack = cell.subviews().firstObject().expect("the cell has content");
-            let chip = stack
-                .subviews()
-                .iter()
-                .find(|v| v.downcast_ref::<NSBox>().is_some())
-                .expect("a chip");
-            let frame = chip.convertRect_toView(chip.bounds(), Some(&cell));
-            let outer = cell.bounds();
-            assert!(
-                frame.size.width > 15.0
-                    && frame.size.height > 10.0
-                    && frame.origin.x + frame.size.width <= outer.size.width + 0.5,
-                "{}'s chip fits: {frame:?} in {outer:?}",
-                node.title()
-            );
-        }
-        autoreleasepool(|_| project.project_window().performClose(None));
     }
 
     /// New, rename, duplicate and delete through the window's actions change the rows and the
@@ -970,22 +899,9 @@ mod checks {
             "reload restores the list"
         );
 
-        // New Request… starts on the operation selected in the sidebar: here the unsupported
-        // one, which cannot be created.
-        let encoded_row = (0..outline.numberOfRows())
-            .find(|&row| {
-                outline.itemAtRow(row).is_some_and(|i| {
-                    i.downcast_ref::<SidebarNode>()
-                        .is_some_and(|n| n.unsupported().is_some())
-                })
-            })
-            .expect("the unsupported operation");
-        outline.selectRowIndexes_byExtendingSelection(
-            &NSIndexSet::indexSetWithIndex(encoded_row as usize),
-            false,
-        );
-        let encoded = project.sidebar().selected_operation();
-        assert!(encoded.is_some());
+        // New Request… starts on the first operation that can be created: no request is
+        // selected yet.
+        assert!(request_names(&project).is_empty());
         send("newRequest:");
         let picker = project
             .operation_picker()
@@ -994,7 +910,13 @@ mod checks {
             picker.window().sheetParent().is_some()
         });
         assert_eq!(picker.shown(), ["Lookup", "Unsupported", "Lookup"]);
-        assert_eq!(picker.highlighted(), encoded);
+        let lookup = picker.highlighted();
+        assert!(lookup.is_some());
+        assert!(picker.create_button().isEnabled());
+        // ↓ skips the header to the unsupported row, which cannot be created.
+        assert!(picker.key_command(sel!(moveDown:)));
+        let encoded = picker.highlighted();
+        assert!(encoded.is_some() && encoded != lookup);
         assert!(!picker.create_button().isEnabled());
         assert!(picker.key_command(sel!(insertNewline:)));
         assert!(request_names(&project).is_empty(), "Return creates nothing");
@@ -1005,9 +927,7 @@ mod checks {
         assert!(picker.shown().is_empty());
         assert!(!picker.create_button().isEnabled());
         picker.search("");
-        let lookup = picker.highlighted();
-        assert!(lookup.is_some() && lookup != encoded);
-        // ↓ skips the header to the unsupported row, ↑ comes back; Return creates.
+        assert_eq!(picker.highlighted(), lookup);
         assert!(picker.key_command(sel!(moveDown:)));
         assert_eq!(picker.highlighted(), encoded);
         assert!(picker.key_command(sel!(moveUp:)));
@@ -1015,16 +935,19 @@ mod checks {
         assert!(picker.create_button().isEnabled());
         assert!(picker.key_command(sel!(insertNewline:)));
         wait_until("the picker to end", || window.attachedSheet().is_none());
-        assert_eq!(request_names(&project), ["Lookup 1"]);
-        assert_eq!(request_files(&ctx.project), ["Lookup 1"]);
+        // The request lands in its operation's folder, created on first use, and its row
+        // enters inline rename.
+        assert_eq!(request_names(&project), ["Lookup/", "  Lookup 1"]);
+        assert_eq!(request_files(&ctx.project), ["Lookup/Lookup 1"]);
         assert!(
             project.selected_request().is_some(),
             "the new request is selected"
         );
         assert_eq!(selected_row(), Some(outline.selectedRow()), "and its row");
+        assert!(project.sidebar().is_editing(), "inline rename started");
         // End the inline rename that New Request starts, without renaming.
         window.makeFirstResponder(Some(&outline));
-        assert_eq!(request_names(&project), ["Lookup 1"]);
+        assert_eq!(request_names(&project), ["Lookup/", "  Lookup 1"]);
         // Esc closes the picker and creates nothing.
         send("newRequest:");
         let picker = project.operation_picker().expect("the picker");
@@ -1033,11 +956,10 @@ mod checks {
         });
         assert!(picker.key_command(sel!(cancelOperation:)));
         wait_until("the picker to end", || window.attachedSheet().is_none());
-        assert_eq!(request_names(&project), ["Lookup 1"]);
+        assert_eq!(request_names(&project), ["Lookup/", "  Lookup 1"]);
 
         // Inline rename: what the field holds when editing ends.
-        let rename = |name: &str| {
-            let row = selected_row().expect("a selected request");
+        let rename_row = |row: NSInteger, name: &str| {
             let view = outline
                 .viewAtColumn_row_makeIfNecessary(0, row, true)
                 .expect("row view");
@@ -1059,9 +981,10 @@ mod checks {
             // SAFETY: the text field delegate method takes the notification.
             let _: () = unsafe { msg_send![sidebar, controlTextDidEndEditing: &*notification] };
         };
+        let rename = |name: &str| rename_row(selected_row().expect("a selected request"), name);
         rename("Find customer");
-        assert_eq!(request_names(&project), ["Find customer"]);
-        assert_eq!(request_files(&ctx.project), ["Find customer"]);
+        assert_eq!(request_names(&project), ["Lookup/", "  Find customer"]);
+        assert_eq!(request_files(&ctx.project), ["Lookup/Find customer"]);
         // A long name is shortened inside its row, not run past the sidebar.
         rename("Find customer by every field we have ever stored about them, twice over");
         let row = selected_row().expect("still selected");
@@ -1071,7 +994,7 @@ mod checks {
         assert_fits(&cell, "a long request name");
         rename("Find customer");
         rename("");
-        assert_eq!(request_names(&project), ["Find customer"]);
+        assert_eq!(request_names(&project), ["Lookup/", "  Find customer"]);
         assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
 
         // The popup remembers the server per request.
@@ -1081,11 +1004,11 @@ mod checks {
         send("duplicateRequest:");
         assert_eq!(
             request_names(&project),
-            ["Find customer", "Find customer copy"]
+            ["Lookup/", "  Find customer", "  Find customer copy"]
         );
         assert_eq!(
             request_files(&ctx.project),
-            ["Find customer", "Find customer copy"]
+            ["Lookup/Find customer", "Lookup/Find customer copy"]
         );
         assert_eq!(
             selected_row(),
@@ -1094,11 +1017,14 @@ mod checks {
         );
         popup.selectItemAtIndex(0);
         send("chooseServer:");
-        let original = NSIndexSet::indexSetWithIndex(1);
-        outline.selectRowIndexes_byExtendingSelection(&original, false);
+        let original = request_row(&project, "Find customer");
+        outline.selectRowIndexes_byExtendingSelection(
+            &NSIndexSet::indexSetWithIndex(original as usize),
+            false,
+        );
         assert_eq!(
             selected_row(),
-            Some(1),
+            Some(original),
             "selecting a row selects its request"
         );
         assert_eq!(popup.indexOfSelectedItem(), 1, "the original's server");
@@ -1112,8 +1038,8 @@ mod checks {
             .expect("delete asks first");
         assert!(confirm.title.contains("Find customer"), "{confirm:?}");
         ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
-        assert_eq!(request_names(&project), ["Find customer copy"]);
-        assert_eq!(request_files(&ctx.project), ["Find customer copy"]);
+        assert_eq!(request_names(&project), ["Lookup/", "  Find customer copy"]);
+        assert_eq!(request_files(&ctx.project), ["Lookup/Find customer copy"]);
         assert_eq!(
             selected_row(),
             Some(outline.selectedRow()),
@@ -1122,39 +1048,49 @@ mod checks {
         assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
         assert!(ctx.alerts().is_empty());
 
-        // The context menu acts on the clicked row. New Request on an operation puts the
-        // request in its place by name and selects it.
-        let operation_row = |name: &str| {
-            (0..outline.numberOfRows())
-                .find(|&row| {
-                    outline.itemAtRow(row).is_some_and(|item| {
-                        item.downcast_ref::<SidebarNode>().is_some_and(|n| {
-                            n.kind() == NodeKind::Operation
-                                && n.unsupported().is_none()
-                                && n.title() == name
-                        })
-                    })
-                })
-                .expect("the operation's row")
-        };
-        let request_row = |name: &str| {
-            (0..outline.numberOfRows())
-                .find(|&row| {
-                    outline.itemAtRow(row).is_some_and(|item| {
-                        item.downcast_ref::<SidebarNode>()
-                            .is_some_and(|n| n.kind() == NodeKind::Request && n.title() == name)
-                    })
-                })
-                .expect("the request's row")
-        };
-        context_click(ctx, &project, operation_row("Lookup"), "New Request");
-        window.makeFirstResponder(Some(&outline));
-        assert_eq!(request_names(&project), ["Find customer copy", "Lookup 1"]);
-        assert_eq!(selected_row(), Some(outline.selectedRow()));
-        assert_eq!(selected_row(), Some(request_row("Lookup 1")));
+        // The context menu acts on the clicked row. A folder's New Request… creates in that
+        // folder, by name in its place, and selects the new request.
+        let items: Vec<_> = context_menu(&project, folder_row(&project, "Lookup"))
+            .into_iter()
+            .filter(|(title, _)| !title.is_empty())
+            .collect();
         assert_eq!(
-            context_menu(&project, request_row("Lookup 1")),
+            items,
             [
+                ("New Request…".to_string(), true),
+                ("New Folder".to_string(), true),
+                ("Rename".to_string(), true),
+                ("Delete".to_string(), true),
+            ]
+        );
+        context_click(
+            ctx,
+            &project,
+            folder_row(&project, "Lookup"),
+            "New Request…",
+        );
+        let picker = project.operation_picker().expect("the picker");
+        wait_until("the picker to attach", || {
+            picker.window().sheetParent().is_some()
+        });
+        picker.create();
+        wait_until("the picker to end", || window.attachedSheet().is_none());
+        window.makeFirstResponder(Some(&outline));
+        assert_eq!(
+            request_names(&project),
+            ["Lookup/", "  Find customer copy", "  Lookup 1"]
+        );
+        assert_eq!(selected_row(), Some(outline.selectedRow()));
+        assert_eq!(selected_row(), Some(request_row(&project, "Lookup 1")));
+        let items: Vec<_> = context_menu(&project, request_row(&project, "Lookup 1"))
+            .into_iter()
+            .filter(|(title, _)| !title.is_empty())
+            .collect();
+        assert_eq!(
+            items,
+            [
+                ("New Request…".to_string(), true),
+                ("New Folder".to_string(), true),
                 ("Rename".to_string(), true),
                 ("Duplicate".to_string(), true),
                 ("Validate".to_string(), true),
@@ -1164,23 +1100,34 @@ mod checks {
 
         // Renaming moves the request to its place; it stays selected.
         rename("A lookup");
-        assert_eq!(request_names(&project), ["A lookup", "Find customer copy"]);
-        assert_eq!(selected_row(), Some(request_row("A lookup")));
+        assert_eq!(
+            request_names(&project),
+            ["Lookup/", "  A lookup", "  Find customer copy"]
+        );
+        assert_eq!(selected_row(), Some(request_row(&project, "A lookup")));
         assert_eq!(selected_row(), Some(outline.selectedRow()));
 
         // Duplicate and Delete on a row that is not selected.
         context_click(
             ctx,
             &project,
-            request_row("Find customer copy"),
+            request_row(&project, "Find customer copy"),
             "Duplicate",
         );
         assert_eq!(
             request_names(&project),
-            ["A lookup", "Find customer copy", "Find customer copy copy"]
+            [
+                "Lookup/",
+                "  A lookup",
+                "  Find customer copy",
+                "  Find customer copy copy"
+            ]
         );
-        assert_eq!(selected_row(), Some(request_row("Find customer copy copy")));
-        context_click(ctx, &project, request_row("A lookup"), "Delete");
+        assert_eq!(
+            selected_row(),
+            Some(request_row(&project, "Find customer copy copy"))
+        );
+        context_click(ctx, &project, request_row(&project, "A lookup"), "Delete");
         let (id, confirm) = ctx
             .dialogs
             .borrow_mut()
@@ -1191,26 +1138,225 @@ mod checks {
         ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
         assert_eq!(
             request_names(&project),
-            ["Find customer copy", "Find customer copy copy"]
+            [
+                "Lookup/",
+                "  Find customer copy",
+                "  Find customer copy copy"
+            ]
         );
         assert_eq!(
             selected_row(),
-            Some(request_row("Find customer copy copy")),
+            Some(request_row(&project, "Find customer copy copy")),
             "deleting another row keeps the selection"
         );
 
         // Validate and Rename select the clicked request first.
-        context_click(ctx, &project, request_row("Find customer copy"), "Validate");
-        assert_eq!(selected_row(), Some(request_row("Find customer copy")));
         context_click(
             ctx,
             &project,
-            request_row("Find customer copy copy"),
+            request_row(&project, "Find customer copy"),
+            "Validate",
+        );
+        assert_eq!(
+            selected_row(),
+            Some(request_row(&project, "Find customer copy"))
+        );
+        context_click(
+            ctx,
+            &project,
+            request_row(&project, "Find customer copy copy"),
             "Rename",
         );
-        assert_eq!(selected_row(), Some(request_row("Find customer copy copy")));
+        assert_eq!(
+            selected_row(),
+            Some(request_row(&project, "Find customer copy copy"))
+        );
         assert!(project.sidebar().is_editing(), "inline rename started");
         window.makeFirstResponder(Some(&outline));
+        assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
+    }
+
+    /// Folders: New Folder starts inline rename, a rename and a move (by the model's command
+    /// and by the drop the sidebar accepts) show in the tree, Delete confirms with what goes
+    /// and an empty folder goes without asking, and collapsed folders survive reopening.
+    pub fn sidebar_folders(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let outline = project.sidebar().outline().expect("outline built").retain();
+        let window = project.project_window();
+        let key = project.key();
+        let send = |action: &str| {
+            let action = std::ffi::CString::new(action).expect("a selector name");
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(&action), Some(&project), None)
+            };
+            assert!(sent, "{action:?} reached the window controller");
+        };
+        let before = request_names(&project);
+        assert_eq!(before[0], "Lookup/", "{before:?}");
+
+        // File ▸ New Folder with a request selected: in that request's folder.
+        let copy = request_row(&project, "Find customer copy");
+        outline.selectRowIndexes_byExtendingSelection(
+            &NSIndexSet::indexSetWithIndex(copy as usize),
+            false,
+        );
+        send("newFolder:");
+        assert!(
+            project.sidebar().is_editing(),
+            "the new folder is renamed inline"
+        );
+        assert_eq!(
+            outline.selectedRow(),
+            folder_row(&project, "Lookup/New Folder")
+        );
+        // End that edit unchanged, then rename as the field would.
+        window.makeFirstResponder(Some(&outline));
+        assert!(ctx.project.join("requests/Lookup/New Folder").is_dir());
+        let view = outline
+            .viewAtColumn_row_makeIfNecessary(0, folder_row(&project, "Lookup/New Folder"), true)
+            .expect("row view");
+        let field = view
+            .downcast::<NSTableCellView>()
+            .ok()
+            // SAFETY: the sidebar's cells keep their text field alive for the row's lifetime.
+            .and_then(|cell| unsafe { cell.textField() })
+            .expect("name field");
+        field.setStringValue(&NSString::from_str("Archive"));
+        // SAFETY: the notification's object is the text field, as AppKit sends it.
+        let notification = unsafe {
+            NSNotification::notificationWithName_object(
+                &NSString::from_str("NSControlTextDidEndEditingNotification"),
+                Some(&field),
+            )
+        };
+        let sidebar = project.sidebar();
+        // SAFETY: the text field delegate method takes the notification.
+        let _: () = unsafe { msg_send![sidebar, controlTextDidEndEditing: &*notification] };
+        assert!(
+            ctx.project.join("requests/Lookup/Archive").is_dir(),
+            "renamed on disk"
+        );
+        assert_eq!(request_names(&project)[..2], ["Lookup/", "  Archive/"]);
+        assert_eq!(
+            context_menu(&project, folder_row(&project, "Lookup/Archive"))
+                .first()
+                .map(|(t, _)| t.as_str()),
+            Some("New Request…")
+        );
+
+        // A move by the model's command shows in the tree.
+        let request = project.selected_request();
+        let moved = ctx
+            .delegate
+            .read(|app| {
+                let window = app.project(key)?;
+                window
+                    .sidebar()
+                    .requests
+                    .iter()
+                    .find(|r| r.name == "Find customer copy")
+                    .map(|r| r.id)
+            })
+            .flatten()
+            .expect("the request");
+        ctx.delegate
+            .command("Could not move the request", |app| {
+                app.move_request(key, moved, "Lookup/Archive")
+            })
+            .expect("moved");
+        assert_eq!(
+            request_names(&project)[..3],
+            ["Lookup/", "  Archive/", "    Find customer copy"]
+        );
+        assert!(
+            ctx.project
+                .join("requests/Lookup/Archive/Find customer copy.xml")
+                .is_file()
+        );
+        assert_eq!(project.selected_request(), request, "the selection stays");
+        // The sidebar offers a drop only where the model would move the row.
+        let key_ok = |path: &str, parent: &str| {
+            ctx.delegate
+                .read(|app| app.project(key).map(|w| w.can_move_folder(path, parent)))
+                .flatten()
+                .unwrap_or(false)
+        };
+        assert!(key_ok("Lookup/Archive", ""));
+        assert!(!key_ok("Lookup", "Lookup/Archive"), "not into itself");
+
+        // Collapsed folders survive closing and reopening the project.
+        let archive = outline
+            .itemAtRow(folder_row(&project, "Lookup/Archive"))
+            .expect("the folder's item");
+        // SAFETY: `archive` is one of the sidebar's nodes.
+        unsafe { outline.collapseItem(Some(&archive)) };
+        let collapsed = || {
+            ctx.delegate
+                .read(|app| {
+                    app.project(key)
+                        .map(|w| w.collapsed_folders().iter().cloned().collect::<Vec<_>>())
+                })
+                .flatten()
+                .unwrap_or_default()
+        };
+        assert_eq!(collapsed(), ["Lookup/Archive"]);
+        autoreleasepool(|_| window.performClose(None));
+        let project = ctx.open();
+        let outline = project.sidebar().outline().expect("outline built").retain();
+        let archive = outline
+            .itemAtRow(folder_row(&project, "Lookup/Archive"))
+            .expect("the folder's item");
+        // SAFETY: `archive` is one of the sidebar's nodes.
+        assert!(
+            !unsafe { outline.isItemExpanded(Some(&archive)) },
+            "still collapsed"
+        );
+        let lookup = outline
+            .itemAtRow(folder_row(&project, "Lookup"))
+            .expect("the folder's item");
+        // SAFETY: `lookup` is one of the sidebar's nodes.
+        assert!(
+            unsafe { outline.isItemExpanded(Some(&lookup)) },
+            "the rest expanded"
+        );
+
+        // Delete on a folder with requests asks first, saying how many go.
+        context_click(
+            ctx,
+            &project,
+            folder_row(&project, "Lookup/Archive"),
+            "Delete",
+        );
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert_eq!(confirm.title, "Delete “Archive” and its request?");
+        assert_eq!(
+            confirm.message,
+            "Their history is deleted too. This can't be undone."
+        );
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert!(!ctx.project.join("requests/Lookup/Archive").exists());
+        assert_eq!(
+            request_names(&project),
+            ["Lookup/", "  Find customer copy copy"]
+        );
+        // An empty folder goes without asking; the REQUESTS header's New Folder makes one at
+        // the top level.
+        let header = row_where(&project, &|n| n.kind() == NodeKind::Group).expect("header");
+        context_click(ctx, &project, header, "New Folder");
+        project.project_window().makeFirstResponder(Some(&outline));
+        assert!(ctx.project.join("requests/New Folder").is_dir());
+        let confirms = ctx.dialogs.borrow().confirms.len();
+        context_click(ctx, &project, folder_row(&project, "New Folder"), "Delete");
+        assert_eq!(ctx.dialogs.borrow().confirms.len(), confirms, "no question");
+        assert!(!ctx.project.join("requests/New Folder").exists());
         assert!(ctx.alerts().is_empty(), "{:?}", ctx.alerts());
     }
 
@@ -1597,10 +1743,14 @@ mod checks {
         autoreleasepool(|_| window.performClose(None));
     }
 
-    /// The file of the request selected in `project`.
+    /// The file of the request selected in `project`, wherever its folder.
     fn selected_file(ctx: &Ctx, project: &ProjectWindowController) -> PathBuf {
-        let name = selected_row(project).title();
-        ctx.project.join("requests").join(format!("{name}.xml"))
+        let id = project.selected_request().expect("a selected request");
+        let key = project.key();
+        ctx.delegate
+            .read(|app| app.project(key)?.project().request_path(id).ok())
+            .flatten()
+            .expect("the selected request's file")
     }
 
     /// The sidebar row of the request selected in `project`.
@@ -2954,11 +3104,18 @@ mod checks {
         });
         let alert = settings_window.attachedSheet().expect("the outcome alert");
         settings_window.endSheet(&alert);
+        let key = project.key();
         wait_until("the new services", || {
-            project.sidebar().roots()[1]
-                .children()
-                .iter()
-                .any(|n| n.title() == "CustomerService")
+            ctx.delegate
+                .read(|app| {
+                    app.project(key).is_some_and(|w| {
+                        w.sidebar()
+                            .services
+                            .iter()
+                            .any(|s| s.name == "CustomerService")
+                    })
+                })
+                .unwrap_or(false)
         });
         // The pane lists the new set, the entry WSDL first, and not the previous set kept in
         // `wsdl/.previous`.

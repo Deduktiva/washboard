@@ -99,7 +99,8 @@ enum OperationCommand {
     Template {
         /// `Operation`, `Binding#Operation` or `{namespace}Binding#Operation`.
         operation: String,
-        /// Save as a new request (named `<Operation> <n>` unless --name) and print its name.
+        /// Save as a new request in the operation's folder (named `<Operation> <n>` unless
+        /// --name) and print its name.
         #[arg(long)]
         save: bool,
         #[arg(long, requires = "save")]
@@ -109,12 +110,14 @@ enum OperationCommand {
 
 #[derive(Debug, Subcommand)]
 enum RequestCommand {
-    /// List requests with their operation and last server.
+    /// List requests by path (`Folder/Name`) with their operation and last server. Every
+    /// `<name>` argument also takes a path.
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Create a request for an operation from its template, or from a file.
+    /// Create a request for an operation from its template, or from a file, in the
+    /// operation's folder.
     New {
         /// `Operation`, `Binding#Operation` or `{namespace}Binding#Operation`.
         operation: String,
@@ -136,6 +139,11 @@ enum RequestCommand {
     /// Copy a request as `<name> copy`; prints the new name.
     Duplicate {
         name: String,
+    },
+    /// Move a request into a folder (created if missing; `/` is the top level).
+    Mv {
+        name: String,
+        folder: String,
     },
     /// Delete a request together with its history.
     Delete {
@@ -285,6 +293,7 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
             RequestCommand::Show { name } => request::show(dir, &name),
             RequestCommand::Rename { name, new_name } => request::rename(dir, &name, &new_name),
             RequestCommand::Duplicate { name } => request::duplicate(dir, &name),
+            RequestCommand::Mv { name, folder } => request::mv(dir, &name, &folder),
             RequestCommand::Delete { name } => request::delete(dir, &name),
             RequestCommand::Format {
                 name,

@@ -45,6 +45,6 @@ pub use import::{CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOu
 pub use picker::{PickerSection, pick_operations};
 pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
 pub use window::{
-    OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary, SchemaState,
-    ServiceNode, Sidebar, WsdlServer,
+    FolderNode, OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary,
+    SchemaState, ServiceNode, Sidebar, WsdlServer,
 };

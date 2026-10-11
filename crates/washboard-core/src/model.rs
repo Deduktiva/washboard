@@ -156,6 +156,9 @@ pub struct RequestMeta {
     pub id: RequestId,
     /// File stem; also the display name.
     pub name: String,
+    /// The folder holding the file, relative to `requests/` and `/`-separated; `""` at the
+    /// top level.
+    pub folder: String,
     /// The operation the request was created for. A hint only; may go stale after a WSDL
     /// replacement. Dispatch at send time uses the Body content.
     pub operation: Option<OperationRef>,

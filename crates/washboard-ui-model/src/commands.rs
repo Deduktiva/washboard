@@ -5,6 +5,7 @@
 use std::time::Duration;
 
 use washboard_core::model::{Auth, OperationRef, RequestId, Server, ServerId};
+use washboard_core::project::operation_folder;
 use washboard_core::schema::TemplateOptions;
 use washboard_core::soap;
 
@@ -38,12 +39,15 @@ impl App {
         Ok(())
     }
 
-    /// Project ▸ New Request, or a double-click on an operation: generates the body from the
-    /// schema, names it `<Operation> <n>`, selects it and starts inline rename.
+    /// File ▸ New Request…: generates the body from the schema, names it `<Operation> <n>`,
+    /// selects it and starts inline rename. It goes into `folder` (the folder selected in the
+    /// sidebar), else into the operation's folder ([`operation_folder`]), created on first
+    /// use and matched ignoring case.
     pub fn new_request(
         &mut self,
         key: ProjectKey,
         operation: &OperationRef,
+        folder: Option<&str>,
     ) -> Result<RequestId, ModelError> {
         let opts = TemplateOptions {
             indent: " ".repeat(self.format.indent),
@@ -52,7 +56,12 @@ impl App {
         let window = self.window(key)?;
         let schema = window.schema.ready()?.clone();
         let text = soap::request_envelope(&schema.wsdl, &schema.model, operation, &opts)?;
-        let meta = window.project.create_request(operation, &text)?;
+        let folder =
+            folder.map_or_else(|| operation_folder(&schema.wsdl, operation), str::to_owned);
+        let meta = window
+            .project
+            .create_request_in(&folder, operation, &text)?;
+        window.expand(&meta.folder)?;
         self.requests_changed(key)?;
         self.select_request(key, Some(meta.id))?;
         self.events.push(Event::BeginRename {
@@ -123,19 +132,40 @@ impl App {
         key: ProjectKey,
         request: RequestId,
     ) -> Result<(), ModelError> {
+        self.delete_requests(key, &[request], |project| {
+            project.delete_request(request)?;
+            Ok(())
+        })
+    }
+
+    /// Runs `delete`, which removes `gone` from the project. If the selected request is
+    /// among them, the next request in the sidebar's order (else the previous) is selected;
+    /// the open editor's edits go with its request.
+    fn delete_requests(
+        &mut self,
+        key: ProjectKey,
+        gone: &[RequestId],
+        delete: impl FnOnce(&mut washboard_core::project::Project) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
         let window = self.window(key)?;
-        let rows = &window.sidebar.requests;
-        let neighbour = rows.iter().position(|r| r.id == request).and_then(|i| {
-            rows.get(i + 1)
-                .or_else(|| i.checked_sub(1).and_then(|p| rows.get(p)))
-                .map(|r| r.id)
-        });
-        let was_selected = window.selected_request() == Some(request);
-        window.project.delete_request(request)?;
+        let order = window.sidebar.request_order();
+        let selected = window.selected_request();
+        let was_selected = selected.is_some_and(|s| gone.contains(&s));
+        let neighbour = selected
+            .and_then(|s| order.iter().position(|r| *r == s))
+            .and_then(|i| {
+                let kept = |r: &&RequestId| !gone.contains(r);
+                order[i + 1..]
+                    .iter()
+                    .find(kept)
+                    .or_else(|| order[..i].iter().rev().find(kept))
+                    .copied()
+            });
+        delete(&mut window.project)?;
         if window
             .editor
             .as_ref()
-            .is_some_and(|e| e.request() == request)
+            .is_some_and(|e| gone.contains(&e.request()))
         {
             // Its edits go with it.
             window.editor = None;
@@ -144,6 +174,150 @@ impl App {
         self.requests_changed(key)?;
         if was_selected {
             self.select_request(key, neighbour)?;
+        }
+        Ok(())
+    }
+
+    /// File ▸ New Folder: `New Folder` (numbered when taken) in `parent`, which is shown
+    /// expanded; its row then enters inline rename. Returns its path.
+    pub fn new_folder(&mut self, key: ProjectKey, parent: &str) -> Result<String, ModelError> {
+        let window = self.window(key)?;
+        let path = window.project.create_untitled_folder(parent)?;
+        window.expand(&path)?;
+        self.requests_changed(key)?;
+        self.events.push(Event::BeginRenameFolder {
+            project: key,
+            path: path.clone(),
+        });
+        Ok(path)
+    }
+
+    /// Inline rename of a folder; the requests in it keep their ids and history. Name errors
+    /// come back like a request's. Returns the new path.
+    pub fn rename_folder(
+        &mut self,
+        key: ProjectKey,
+        path: &str,
+        name: &str,
+    ) -> Result<String, ModelError> {
+        let window = self.window(key)?;
+        let to = window.project.rename_folder(path, name)?;
+        window.folder_moved(path, &to);
+        window.save_collapsed()?;
+        self.requests_changed(key)?;
+        Ok(to)
+    }
+
+    /// Drag and drop of a folder onto another one or the top level (`""`). Refused into
+    /// itself or a folder inside it, and onto a folder of the same name. Returns the new path.
+    pub fn move_folder(
+        &mut self,
+        key: ProjectKey,
+        path: &str,
+        parent: &str,
+    ) -> Result<String, ModelError> {
+        let window = self.window(key)?;
+        let to = window.project.move_folder(path, parent)?;
+        window.folder_moved(path, &to);
+        window.expand(parent)?;
+        self.requests_changed(key)?;
+        Ok(to)
+    }
+
+    /// Drag and drop of a request onto a folder or the top level (`""`). The open editor
+    /// stays open: the request keeps its id.
+    pub fn move_request(
+        &mut self,
+        key: ProjectKey,
+        request: RequestId,
+        folder: &str,
+    ) -> Result<(), ModelError> {
+        let window = self.window(key)?;
+        let meta = window.project.move_request(request, folder)?;
+        window.expand(&meta.folder)?;
+        self.requests_changed(key)
+    }
+
+    /// A folder's Delete. A folder with requests asks first, saying how many go, since their
+    /// history goes with them; an empty one is deleted right away.
+    pub fn delete_folder(&mut self, key: ProjectKey, path: &str) -> Result<(), ModelError> {
+        let window = self.window(key)?;
+        let count = window
+            .sidebar
+            .tree
+            .folder(path)
+            .map_or(0, |f| f.request_count());
+        if count == 0 {
+            return self.delete_folder_now(key, path);
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let requests = if count == 1 {
+            "its request".to_owned()
+        } else {
+            format!("its {count} requests")
+        };
+        let id = DialogId(self.next());
+        self.dialogs.insert(
+            id,
+            PendingDialog::DeleteFolder {
+                project: key,
+                path: path.to_owned(),
+            },
+        );
+        self.front.dialogs.confirm(
+            id,
+            Confirm {
+                title: format!("Delete “{name}” and {requests}?"),
+                message: "Their history is deleted too. This can't be undone.".into(),
+                action: "Delete".into(),
+                cancel: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// After the confirmation, or right away for an empty folder.
+    pub(crate) fn delete_folder_now(
+        &mut self,
+        key: ProjectKey,
+        path: &str,
+    ) -> Result<(), ModelError> {
+        let window = self.window(key)?;
+        let gone: Vec<RequestId> = window
+            .sidebar
+            .requests
+            .iter()
+            .filter(|r| r.folder == path || r.folder.starts_with(&format!("{path}/")))
+            .map(|r| r.id)
+            .collect();
+        self.delete_requests(key, &gone, |project| {
+            project.delete_folder(path)?;
+            Ok(())
+        })?;
+        let window = self.window(key)?;
+        let inside = format!("{path}/");
+        window
+            .collapsed
+            .retain(|p| p != path && !p.starts_with(&inside));
+        window.save_collapsed()?;
+        Ok(())
+    }
+
+    /// The sidebar's disclosure triangle on a folder. Remembered per project.
+    pub fn set_folder_collapsed(
+        &mut self,
+        key: ProjectKey,
+        path: &str,
+        collapsed: bool,
+    ) -> Result<(), ModelError> {
+        let window = self.window(key)?;
+        let changed = if collapsed {
+            window.collapsed.insert(path.to_owned())
+        } else {
+            window.collapsed.remove(path)
+        };
+        if changed {
+            window.save_collapsed()?;
         }
         Ok(())
     }

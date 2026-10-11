@@ -72,11 +72,19 @@ fn fill_from_fixture(e: &Env, request: &str, fixture: &str) {
         .lines()
         .skip_while(|l| !l.starts_with("<soapenv:Envelope"))
         .collect();
-    fs::write(
-        e.project.join(format!("requests/{request}.xml")),
-        format!("{}\n", body.join("\n")),
-    )
-    .expect("write request");
+    fs::write(request_file(e, request), format!("{}\n", body.join("\n"))).expect("write request");
+}
+
+/// The file of the request named `name`, wherever its folder.
+fn request_file(e: &Env, name: &str) -> PathBuf {
+    let project = Project::open_read_only(&e.project).expect("open");
+    let r = project
+        .requests()
+        .expect("requests")
+        .into_iter()
+        .find(|r| r.name == name)
+        .expect("request");
+    project.request_path(r.id).expect("path")
 }
 
 /// Runs a command on the env's project (`-C`).
@@ -287,15 +295,27 @@ fn templates_and_request_management() {
         ]),
         "Order"
     );
-    let saved = fs::read_to_string(e.project.join("requests/GetCustomer 1.xml")).expect("file");
+    // Saved into the operation's folder: one supported port (the other is SOAP 1.2).
+    let saved =
+        fs::read_to_string(e.project.join("requests/GetCustomer/GetCustomer 1.xml")).expect("file");
     assert_eq!(saved, t);
+    assert!(e.project.join("requests/CreateOrder/Order.xml").is_file());
     assert_eq!(ok(wb(&e, &["request", "show", "GetCustomer 1"])), t);
+    assert_eq!(
+        ok(wb(&e, &["request", "show", "GetCustomer/GetCustomer 1"])),
+        t
+    );
 
     ok(wb(&e, &["request", "rename", "GetCustomer 2", "Second"]));
-    assert!(e.project.join("requests/Second.xml").is_file());
+    assert!(e.project.join("requests/GetCustomer/Second.xml").is_file());
     assert_eq!(save(&["request", "duplicate", "Second"]), "Second copy");
-    ok(wb(&e, &["request", "delete", "Second"]));
-    assert!(!e.project.join("requests/Second.xml").exists());
+    assert!(
+        e.project
+            .join("requests/GetCustomer/Second copy.xml")
+            .is_file()
+    );
+    ok(wb(&e, &["request", "delete", "GetCustomer/Second"]));
+    assert!(!e.project.join("requests/GetCustomer/Second.xml").exists());
     fails(
         &wb(&e, &["request", "show", "Second"]),
         2,
@@ -326,10 +346,36 @@ fn templates_and_request_management() {
         names,
         ["GetCustomer 1", "Second copy", "Order", "CreateOrder 1"]
     );
+    assert_eq!(json[2]["folder"], "CreateOrder");
+    assert_eq!(json[2]["path"], "CreateOrder/Order");
     assert_eq!(
         json[0]["operation"],
         "{urn:example:customer:service}CustomerBinding#GetCustomer"
     );
+
+    // mv creates the folder; `/` is the top level. The text list prints paths.
+    ok(wb(&e, &["request", "mv", "Second copy", "Kept/Old"]));
+    assert!(
+        e.project
+            .join("requests/Kept/Old/Second copy.xml")
+            .is_file()
+    );
+    let list = ok(wb(&e, &["request", "list"]));
+    assert!(list.contains("Kept/Old/Second copy "), "{list}");
+    assert!(list.contains("GetCustomer/GetCustomer 1 "), "{list}");
+    ok(wb(&e, &["request", "mv", "Kept/Old/Second copy", "/"]));
+    assert!(e.project.join("requests/Second copy.xml").is_file());
+
+    // Two files of one name from Finder or git: a bare name asks for the path.
+    fs::write(e.project.join("requests/Kept/Order.xml"), "<x/>").expect("write");
+    let o = wb(&e, &["request", "delete", "Order"]);
+    fails(&o, 2, "several requests are named \"Order\"");
+    assert!(
+        stderr(&o).contains("CreateOrder/Order, Kept/Order"),
+        "{}",
+        stderr(&o)
+    );
+    ok(wb(&e, &["request", "delete", "Kept/Order"]));
 
     fails(
         &wb(&e, &["request", "rename", "Order", "CreateOrder 1"]),
@@ -361,7 +407,7 @@ fn format_reindents_checks_and_leaves_malformed_requests_alone() {
     let e = legacy();
     let name = ok(wb(&e, &["operation", "template", "Lookup", "--save"]));
     let name = name.trim();
-    let file = e.project.join(format!("requests/{name}.xml"));
+    let file = request_file(&e, name);
     let generated = fs::read_to_string(&file).expect("file");
     // A generated request is already formatted at the default indent.
     ok(wb(&e, &["request", "format", name, "--check"]));
@@ -457,7 +503,7 @@ fn replace_wsdl_reports_operations_and_requests_that_no_longer_validate() {
     assert!(out.contains("request validate <name>"), "{out}");
 
     // A different service: its operations replace the old ones and both requests break.
-    let good = fs::read_to_string(e.project.join("requests/Good.xml")).expect("file");
+    let good = fs::read_to_string(request_file(&e, "Good")).expect("file");
     let legacy = env("legacy-rpc");
     let out = replace(&legacy.src.join("Legacy.wsdl"));
     assert!(
@@ -474,7 +520,7 @@ fn replace_wsdl_reports_operations_and_requests_that_no_longer_validate() {
     );
     // Requests are never rewritten.
     assert_eq!(
-        fs::read_to_string(e.project.join("requests/Good.xml")).expect("file"),
+        fs::read_to_string(request_file(&e, "Good")).expect("file"),
         good
     );
 }
@@ -645,7 +691,7 @@ fn send_records_history_and_last_server() {
         "{}",
         s.head
     );
-    let sent = fs::read_to_string(e.project.join(format!("requests/{req}.xml"))).expect("file");
+    let sent = fs::read_to_string(request_file(&e, req)).expect("file");
     assert_eq!(s.body, sent);
 
     // The last server is remembered, so --server is no longer needed.
@@ -761,7 +807,7 @@ fn skip_validation_sends_broken_requests_anyway() {
         stderr(&o)
     );
     let s = seen.recv().expect("request seen");
-    let sent = fs::read_to_string(e.project.join(format!("requests/{req}.xml"))).expect("file");
+    let sent = fs::read_to_string(request_file(&e, req)).expect("file");
     assert_eq!(s.body, sent);
 }
 

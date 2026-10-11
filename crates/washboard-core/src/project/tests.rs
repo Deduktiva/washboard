@@ -655,6 +655,289 @@ fn request_order() {
     assert_eq!(names(&p), ["B", "C", "A"]);
 }
 
+// ---- folders -----------------------------------------------------------------------------
+
+fn paths(p: &Project) -> Vec<String> {
+    p.requests()
+        .expect("requests")
+        .into_iter()
+        .map(|r| names::join(&r.folder, &r.name))
+        .collect()
+}
+
+fn load_wsdl(path: &Path) -> crate::wsdl::Wsdl {
+    crate::wsdl::load_from_disk(path, &[path.parent().expect("dir").to_owned()])
+        .expect("wsdl")
+        .wsdl
+}
+
+/// The operations of `wsdl`'s binding named `binding`.
+fn op_in(wsdl: &crate::wsdl::Wsdl, binding: &str, operation: &str) -> OperationRef {
+    let b = wsdl
+        .definitions
+        .bindings
+        .iter()
+        .find(|b| b.name.local == binding)
+        .expect("binding");
+    let o = b
+        .operations
+        .iter()
+        .find(|o| o.name == operation)
+        .expect("operation");
+    b.operation_ref(o)
+}
+
+#[test]
+fn requests_live_in_nested_folders() {
+    let (_tmp, folder, mut p) = new_project();
+    let a = p
+        .create_request_in("GetCustomer", &op("GetCustomer"), "<a/>")
+        .expect("a");
+    assert_eq!(a.folder, "GetCustomer");
+    assert_eq!(a.name, "GetCustomer 1");
+    let req = folder.join(REQUESTS_DIR);
+    assert!(req.join("GetCustomer/GetCustomer 1.xml").is_file());
+    assert_eq!(
+        p.request_path(a.id).expect("path"),
+        req.join("GetCustomer").join("GetCustomer 1.xml")
+    );
+    // An existing folder is reused whatever its case; a deeper one is created.
+    let b = p
+        .create_request_in("getcustomer", &op("GetCustomer"), "<b/>")
+        .expect("b");
+    assert_eq!(b.folder, "GetCustomer");
+    assert_eq!(b.name, "GetCustomer 2");
+    let c = p
+        .create_request_named_in("A/B", "Deep", None, "<c/>")
+        .expect("c");
+    assert_eq!(c.folder, "A/B");
+    // Names are unique across folders.
+    assert!(matches!(
+        p.create_request_named_in("A", "deep", None, "<d/>"),
+        Err(ProjectError::NameTaken(_))
+    ));
+    assert!(matches!(
+        p.create_request_named_in("A/.git", "X", None, "<d/>"),
+        Err(ProjectError::InvalidName { .. })
+    ));
+    assert_eq!(p.folders().expect("folders"), ["A", "A/B", "GetCustomer"]);
+    // Rename and duplicate stay in the folder.
+    let a = p.rename_request(a.id, "First").expect("rename");
+    assert_eq!(a.folder, "GetCustomer");
+    assert!(req.join("GetCustomer/First.xml").is_file());
+    let copy = p.duplicate_request(c.id).expect("duplicate");
+    assert_eq!(
+        (copy.folder.as_str(), copy.name.as_str()),
+        ("A/B", "Deep copy")
+    );
+    assert_eq!(p.read_request(copy.id).expect("read"), "<c/>");
+}
+
+#[test]
+fn reconciliation_walks_folders_and_keeps_moves() {
+    let (_tmp, folder, mut p) = new_project();
+    let a = p
+        .create_request_in("Old", &op("GetCustomer"), "<a/>")
+        .expect("a");
+    let entry = p
+        .record_exchange(
+            a.id,
+            &server("dev"),
+            &exchange(1000, Some("HTTP/1.1 200 OK")),
+            false,
+        )
+        .expect("record");
+    let b = p.create_request(&op("CreateOrder"), "<b/>").expect("b");
+    drop(p);
+
+    let req = folder.join(REQUESTS_DIR);
+    // A move in Finder, a file from git in a new folder, hidden things that stay ignored.
+    fs::create_dir_all(req.join("New/Deeper")).expect("mkdir");
+    fs::rename(
+        req.join("Old/GetCustomer 1.xml"),
+        req.join("New/Deeper/GetCustomer 1.xml"),
+    )
+    .expect("mv");
+    fs::create_dir(req.join("Git")).expect("mkdir");
+    fs::write(req.join("Git/From Git.xml"), "<g/>").expect("write");
+    fs::create_dir(req.join(".git")).expect("mkdir");
+    fs::write(req.join(".git/Ignored.xml"), "<i/>").expect("write");
+    fs::write(req.join("New/.wb-1.tmp"), "<t/>").expect("write");
+
+    let p = Project::open(&folder).expect("open");
+    let rec = p.reconciliation().clone();
+    assert!(rec.removed.is_empty(), "{rec:?}");
+    assert_eq!(rec.added.len(), 1);
+    let moved = p.request(a.id).expect("a");
+    assert_eq!(moved.folder, "New/Deeper");
+    assert_eq!(p.history(a.id).expect("history")[0].id, entry.id);
+    assert_eq!(p.request(b.id).expect("b").folder, "");
+    assert_eq!(
+        paths(&p),
+        ["New/Deeper/GetCustomer 1", "CreateOrder 1", "Git/From Git"]
+    );
+    // Empty folders are kept: the disk is the truth.
+    assert_eq!(
+        p.folders().expect("folders"),
+        ["Git", "New", "New/Deeper", "Old"]
+    );
+}
+
+#[test]
+fn same_name_in_two_folders_is_accepted() {
+    let (_tmp, folder, mut p) = new_project();
+    let a = p
+        .create_request_named_in("One", "Same", None, "<a/>")
+        .expect("a");
+    let req = folder.join(REQUESTS_DIR);
+    fs::create_dir(req.join("Two")).expect("mkdir");
+    fs::write(req.join("Two/Same.xml"), "<b/>").expect("write");
+    // A move by the user would clash; a removed row with two candidates is not a move.
+    let rec = p.reconcile().expect("reconcile");
+    assert_eq!(rec.added.len(), 1);
+    assert_eq!(paths(&p), ["One/Same", "Two/Same"]);
+    assert!(matches!(
+        p.move_request(a.id, "Two"),
+        Err(ProjectError::NameTaken(_))
+    ));
+    fs::remove_file(req.join("One/Same.xml")).expect("rm");
+    fs::create_dir(req.join("Three")).expect("mkdir");
+    fs::write(req.join("Three/Same.xml"), "<c/>").expect("write");
+    let rec = p.reconcile().expect("reconcile");
+    // Exactly one new file of that name: the move keeps the id.
+    assert!(rec.removed.is_empty(), "{rec:?}");
+    assert_eq!(p.request(a.id).expect("a").folder, "Three");
+}
+
+#[test]
+fn placement_follows_the_supported_ports() {
+    let customer = load_wsdl(&fixtures().join("customer/CustomerService.wsdl"));
+    let get = op_in(&customer, "CustomerBinding", "GetCustomer");
+    // One SOAP 1.1 port next to a SOAP 1.2 one: one level.
+    assert_eq!(operation_folder(&customer, &get), "GetCustomer");
+    let legacy = load_wsdl(&fixtures().join("legacy-rpc/Legacy.wsdl"));
+    let lookup = op_in(&legacy, "LegacyBinding", "Lookup");
+    // rpc/literal next to rpc/encoded: still one level.
+    assert_eq!(operation_folder(&legacy, &lookup), "Lookup");
+
+    // The same WSDL with the encoded binding made literal has two supported ports.
+    let tmp = TempDir::new().expect("tempdir");
+    let text = fs::read_to_string(fixtures().join("legacy-rpc/Legacy.wsdl")).expect("read");
+    let two = tmp.path().join("TwoPorts.wsdl");
+    fs::write(&two, text.replace("use=\"encoded\"", "use=\"literal\"")).expect("write");
+    let two = load_wsdl(&two);
+    assert_eq!(
+        operation_folder(&two, &op_in(&two, "LegacyBinding", "Lookup")),
+        "LegacyPort/Lookup"
+    );
+    assert_eq!(
+        operation_folder(&two, &op_in(&two, "LegacyEncodedBinding", "Lookup")),
+        "LegacyEncodedPort/Lookup"
+    );
+}
+
+#[test]
+fn folder_commands() {
+    let (_tmp, folder, mut p) = new_project();
+    let req = folder.join(REQUESTS_DIR);
+    assert_eq!(p.create_untitled_folder("").expect("new"), "New Folder");
+    assert_eq!(p.create_untitled_folder("").expect("new"), "New Folder 2");
+    assert_eq!(
+        p.create_untitled_folder("new folder").expect("nested"),
+        "New Folder/New Folder"
+    );
+    assert!(matches!(
+        p.create_folder("NEW FOLDER"),
+        Err(ProjectError::FolderExists(_))
+    ));
+    let a = p
+        .create_request_named_in("New Folder/New Folder", "A", None, "<a/>")
+        .expect("a");
+    p.record_exchange(
+        a.id,
+        &server("dev"),
+        &exchange(1000, Some("HTTP/1.1 200 OK")),
+        false,
+    )
+    .expect("record");
+
+    // Rename: the requests inside follow, ids and history kept.
+    assert_eq!(
+        p.rename_folder("New Folder", "Orders").expect("rename"),
+        "Orders"
+    );
+    assert_eq!(p.request(a.id).expect("a").folder, "Orders/New Folder");
+    assert_eq!(p.history(a.id).expect("history").len(), 1);
+    assert!(req.join("Orders/New Folder/A.xml").is_file());
+    assert!(matches!(
+        p.rename_folder("Orders", "new folder 2"),
+        Err(ProjectError::FolderExists(_))
+    ));
+    assert!(matches!(
+        p.rename_folder("Orders", "a/b"),
+        Err(ProjectError::InvalidName { .. })
+    ));
+    assert_eq!(
+        p.rename_folder("Orders", "ORDERS").expect("case only"),
+        "ORDERS"
+    );
+
+    // Move: refused into itself and its descendants, and onto a folder of the same name.
+    assert!(matches!(
+        p.move_folder("ORDERS", "ORDERS/New Folder"),
+        Err(ProjectError::MoveIntoItself(_))
+    ));
+    assert!(matches!(
+        p.move_folder("ORDERS", "ORDERS"),
+        Err(ProjectError::MoveIntoItself(_))
+    ));
+    p.create_folder("New Folder 2/New Folder").expect("create");
+    assert!(matches!(
+        p.move_folder("ORDERS/New Folder", "New Folder 2"),
+        Err(ProjectError::FolderExists(_))
+    ));
+    assert_eq!(
+        p.move_folder("ORDERS/New Folder", "").expect("to the top"),
+        "New Folder"
+    );
+    assert_eq!(p.request(a.id).expect("a").folder, "New Folder");
+    assert_eq!(
+        p.move_folder("New Folder", "ORDERS").expect("back"),
+        "ORDERS/New Folder"
+    );
+
+    // A request moves on its own, creating the folder.
+    let moved = p.move_request(a.id, "Elsewhere/Deep").expect("move");
+    assert_eq!(moved.folder, "Elsewhere/Deep");
+    assert!(req.join("Elsewhere/Deep/A.xml").is_file());
+    assert_eq!(p.history(a.id).expect("history").len(), 1);
+    assert_eq!(p.move_request(a.id, "").expect("top").folder, "");
+
+    // Delete takes the requests and their history with it.
+    let b = p
+        .create_request_named_in("ORDERS/New Folder", "B", None, "<b/>")
+        .expect("b");
+    p.record_exchange(
+        b.id,
+        &server("dev"),
+        &exchange(2000, Some("HTTP/1.1 200 OK")),
+        false,
+    )
+    .expect("record");
+    assert_eq!(p.delete_folder("ORDERS").expect("delete"), [b.id]);
+    assert!(!req.join("ORDERS").exists());
+    assert!(!folder.join(HISTORY_DIR).join(b.id.to_string()).exists());
+    assert_eq!(paths(&p), ["A"]);
+    assert!(matches!(
+        p.delete_folder("ORDERS"),
+        Err(ProjectError::UnknownFolder(_))
+    ));
+    assert!(matches!(
+        p.delete_folder(""),
+        Err(ProjectError::UnknownFolder(_))
+    ));
+}
+
 // ---- servers -----------------------------------------------------------------------------
 
 #[test]

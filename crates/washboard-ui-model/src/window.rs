@@ -1,6 +1,7 @@
 //! Per-project window state: the sidebar tree, selection, and the server popup.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::iter::Peekable;
 use std::path::{Path, PathBuf};
 use std::str::Chars;
@@ -98,12 +99,15 @@ impl SchemaState {
     }
 }
 
-/// The sidebar's two sections (PLAN §8).
+/// What the sidebar shows (PLAN §8): the requests in their folders, and the operations the
+/// operation picker offers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sidebar {
-    /// By name in Finder's order: case-insensitive, numbers by value. The database's
-    /// `sort_order` is not used.
+    /// Every request, by name in Finder's order: case-insensitive, numbers by value. The
+    /// database's `sort_order` is not used.
     pub requests: Vec<RequestRow>,
+    /// The REQUESTS tree: the top level, its folders and requests.
+    pub tree: FolderNode,
     /// Service › port › operation. Empty while the schema loads.
     pub services: Vec<ServiceNode>,
 }
@@ -113,8 +117,127 @@ impl Sidebar {
         self.requests.iter().find(|r| r.id == id)
     }
 
+    /// The requests in the tree's order: each folder's folders, then its requests.
+    pub fn request_order(&self) -> Vec<RequestId> {
+        let mut order = Vec::with_capacity(self.requests.len());
+        self.tree.collect_requests(&mut order);
+        order
+    }
+
     pub(crate) fn request_mut(&mut self, id: RequestId) -> Option<&mut RequestRow> {
         self.requests.iter_mut().find(|r| r.id == id)
+    }
+}
+
+/// A folder of the REQUESTS tree. The tree's root is the top level of `requests/`, with an
+/// empty name and path.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FolderNode {
+    pub name: String,
+    /// Relative to `requests/`, `/`-separated.
+    pub path: String,
+    /// By name in Finder's order.
+    pub folders: Vec<FolderNode>,
+    /// By name in Finder's order; rows in [`Sidebar::requests`].
+    pub requests: Vec<RequestId>,
+}
+
+impl FolderNode {
+    /// The folder at `path` in this tree (`""` is the root).
+    pub fn folder(&self, path: &str) -> Option<&FolderNode> {
+        if path == self.path {
+            return Some(self);
+        }
+        self.folders
+            .iter()
+            .find(|f| path == f.path || path.starts_with(&format!("{}/", f.path)))
+            .and_then(|f| f.folder(path))
+    }
+
+    /// Requests in this folder and all folders inside it.
+    pub fn request_count(&self) -> usize {
+        self.requests.len()
+            + self
+                .folders
+                .iter()
+                .map(FolderNode::request_count)
+                .sum::<usize>()
+    }
+
+    fn collect_requests(&self, into: &mut Vec<RequestId>) {
+        for f in &self.folders {
+            f.collect_requests(into);
+        }
+        into.extend(&self.requests);
+    }
+
+    /// The tree of `folders` (every folder path, as [`Project::folders`] lists them) with the
+    /// `requests` in their folders.
+    fn build(folders: &[String], requests: &[RequestRow]) -> FolderNode {
+        let mut root = FolderNode::default();
+        for path in folders {
+            root.insert_folder(path);
+        }
+        for r in requests {
+            // A request's folder exists: both come from the same walk of the disk. Should a
+            // file appear in between, the folder is added.
+            root.insert_folder(&r.folder);
+            if let Some(f) = root.folder_mut(&r.folder) {
+                f.requests.push(r.id);
+            }
+        }
+        root.sort(requests);
+        root
+    }
+
+    fn insert_folder(&mut self, path: &str) {
+        if path.is_empty() {
+            return;
+        }
+        let mut node = self;
+        let mut so_far = String::new();
+        for component in path.split('/') {
+            so_far = if so_far.is_empty() {
+                component.to_owned()
+            } else {
+                format!("{so_far}/{component}")
+            };
+            let i = match node.folders.iter().position(|f| f.path == so_far) {
+                Some(i) => i,
+                None => {
+                    node.folders.push(FolderNode {
+                        name: component.to_owned(),
+                        path: so_far.clone(),
+                        ..FolderNode::default()
+                    });
+                    node.folders.len() - 1
+                }
+            };
+            node = &mut node.folders[i];
+        }
+    }
+
+    fn folder_mut(&mut self, path: &str) -> Option<&mut FolderNode> {
+        if path == self.path {
+            return Some(self);
+        }
+        self.folders
+            .iter_mut()
+            .find(|f| path == f.path || path.starts_with(&format!("{}/", f.path)))
+            .and_then(|f| f.folder_mut(path))
+    }
+
+    fn sort(&mut self, rows: &[RequestRow]) {
+        self.folders.sort_by(|a, b| finder_order(&a.name, &b.name));
+        let name = |id: &RequestId| {
+            rows.iter()
+                .find(|r| r.id == *id)
+                .map_or("", |r| r.name.as_str())
+        };
+        self.requests.sort_by(|a, b| finder_order(name(a), name(b)));
+        for f in &mut self.folders {
+            f.sort(rows);
+        }
     }
 }
 
@@ -122,6 +245,8 @@ impl Sidebar {
 pub struct RequestRow {
     pub id: RequestId,
     pub name: String,
+    /// Its folder's path; `""` at the top level.
+    pub folder: String,
     /// Edited and not yet saved (the • marker).
     pub dirty: bool,
     /// Fails validation (the ⚠ marker).
@@ -194,6 +319,8 @@ pub struct ProjectWindow {
     pub(crate) replace_outcome: Option<ReplaceOutcome>,
     /// `None` while watching is off or could not start.
     pub(crate) watcher: Option<RequestWatcher>,
+    /// Folder paths the user collapsed; kept in `ui_state`.
+    pub(crate) collapsed: BTreeSet<String>,
 }
 
 impl ProjectWindow {
@@ -216,6 +343,23 @@ impl ProjectWindow {
 
     pub fn sidebar(&self) -> &Sidebar {
         &self.sidebar
+    }
+
+    /// The folders the user collapsed in the sidebar, by path. Kept per project.
+    pub fn collapsed_folders(&self) -> &BTreeSet<String> {
+        &self.collapsed
+    }
+
+    /// Whether [`App::move_request`](crate::App::move_request) would move `request` into
+    /// `folder`, for drag and drop: a drop the model refuses is not offered.
+    pub fn can_move_request(&self, request: RequestId, folder: &str) -> bool {
+        self.project.check_move_request(request, folder).is_ok()
+    }
+
+    /// Whether [`App::move_folder`](crate::App::move_folder) would move the folder at `path`
+    /// into `parent`.
+    pub fn can_move_folder(&self, path: &str, parent: &str) -> bool {
+        self.project.check_move_folder(path, parent).is_ok()
     }
 
     pub fn selected_request(&self) -> Option<RequestId> {
@@ -298,9 +442,10 @@ impl ProjectWindow {
             .or_else(|| self.servers.first().map(|s| s.id))
     }
 
-    /// Re-reads the request rows, sorted by name, keeping dirty and invalid markers of
-    /// requests that still exist.
+    /// Re-reads the request rows, sorted by name, and the folder tree, keeping dirty and
+    /// invalid markers of requests that still exist.
     pub(crate) fn reload_requests(&mut self) -> Result<(), washboard_core::project::ProjectError> {
+        let folders = self.project.folders()?;
         let old = std::mem::take(&mut self.sidebar.requests);
         let mut rows: Vec<RequestRow> = self
             .project
@@ -311,12 +456,14 @@ impl ProjectWindow {
                 RequestRow {
                     id: r.id,
                     name: r.name,
+                    folder: r.folder,
                     dirty: prev.is_some_and(|p| p.dirty),
                     invalid: prev.is_some_and(|p| p.invalid),
                 }
             })
             .collect();
         rows.sort_by(|a, b| finder_order(&a.name, &b.name));
+        self.sidebar.tree = FolderNode::build(&folders, &rows);
         self.sidebar.requests = rows;
         if let Some(sel) = self.selected_request()
             && self.sidebar.request(sel).is_none()
@@ -324,6 +471,60 @@ impl ProjectWindow {
             self.restore.last_selected_request = None;
         }
         Ok(())
+    }
+
+    /// Reads the collapsed folders from `ui_state`; a database that fails reads as none.
+    pub(crate) fn load_collapsed(&mut self) {
+        let stored = self.project.ui_state(COLLAPSED_KEY).ok().flatten();
+        self.collapsed = stored
+            .iter()
+            .flat_map(|s| s.split('\n'))
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+
+    /// Writes the collapsed folders to `ui_state`, one path per line: a folder name has no
+    /// control characters.
+    pub(crate) fn save_collapsed(&mut self) -> Result<(), washboard_core::project::ProjectError> {
+        let value = self
+            .collapsed
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        self.project
+            .set_ui_state(COLLAPSED_KEY, (!value.is_empty()).then_some(value.as_str()))
+    }
+
+    /// Shows the folder at `path` expanded, and every folder it is in, so a row created or
+    /// moved there is in view.
+    pub(crate) fn expand(
+        &mut self,
+        path: &str,
+    ) -> Result<(), washboard_core::project::ProjectError> {
+        let before = self.collapsed.len();
+        self.collapsed
+            .retain(|p| !(path == p || path.starts_with(&format!("{p}/"))));
+        if self.collapsed.len() == before {
+            return Ok(());
+        }
+        self.save_collapsed()
+    }
+
+    /// After the folder at `from` became `to`: collapsed folders at or inside it follow.
+    pub(crate) fn folder_moved(&mut self, from: &str, to: &str) {
+        let moved: Vec<String> = self
+            .collapsed
+            .iter()
+            .filter(|p| *p == from || p.starts_with(&format!("{from}/")))
+            .cloned()
+            .collect();
+        for path in moved {
+            self.collapsed.remove(&path);
+            self.collapsed
+                .insert(format!("{to}{}", &path[from.len()..]));
+        }
     }
 
     pub(crate) fn mark_dirty(&mut self, request: RequestId, dirty: bool) {
@@ -337,6 +538,9 @@ impl ProjectWindow {
         Ok(())
     }
 }
+
+/// `ui_state` key of the collapsed folders.
+const COLLAPSED_KEY: &str = "sidebar.collapsed_folders";
 
 /// Finder's order for names: case-insensitive, and runs of digits compared by value, so
 /// "Lookup 2" comes before "lookup 10". Equal names under those rules fall back to plain
