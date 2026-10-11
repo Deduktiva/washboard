@@ -125,10 +125,7 @@ impl Operation {
             Style::Document => m
                 .body_parts
                 .iter()
-                .filter_map(|p| match &p.content {
-                    PartContent::Element(q) => Some(q.clone()),
-                    _ => None,
-                })
+                .filter_map(|p| p.content.element().cloned())
                 .collect(),
         }
     }
@@ -194,6 +191,17 @@ pub enum PartContent {
     Type(QName),
     /// Neither attribute, or the referenced part does not exist.
     Missing,
+}
+
+impl PartContent {
+    /// The global element of an `element=` part. `None` for `type=` parts: their wire name
+    /// is the part name, so they have no element to look up in the schema.
+    pub fn element(&self) -> Option<&QName> {
+        match self {
+            PartContent::Element(q) => Some(q),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

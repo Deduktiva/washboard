@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::model::{OperationRef, QName};
 use crate::schema::{SchemaError, SchemaModel, TemplateOptions};
-use crate::wsdl::{Direction, PartContent, Support, UnsupportedReason, Wsdl};
+use crate::wsdl::{Direction, Support, UnsupportedReason, Wsdl};
 use crate::xml::escape_attr;
 
 /// SOAP 1.1 envelope namespace. SOAP 1.2 is not supported.
@@ -67,10 +67,7 @@ pub fn request_envelope(
     let headers: Vec<QName> = input
         .headers
         .iter()
-        .filter_map(|h| match &h.content {
-            PartContent::Element(q) => Some(q.clone()),
-            _ => None,
-        })
+        .filter_map(|h| h.content.element().cloned())
         .collect();
     let body = operation.body_elements(Direction::Input);
 
