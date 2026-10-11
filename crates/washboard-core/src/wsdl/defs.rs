@@ -4,7 +4,7 @@
 //! soapAction, style). Operations we cannot handle are kept and marked with a [`Support`]
 //! reason so the UI can list them greyed out (`docs/PLAN.md` §1, §5.3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diag::{DiagSource, Diagnostic, TextPos};
 use crate::model::{OperationRef, QName};
@@ -608,11 +608,11 @@ fn dedup<T>(
     what: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<T> {
-    let mut seen: HashMap<QName, ()> = HashMap::new();
+    let mut seen: HashSet<QName> = HashSet::new();
     let mut out = Vec::with_capacity(items.len());
     for it in items {
         let k = key(&it).clone();
-        if seen.insert(k.clone(), ()).is_some() {
+        if !seen.insert(k.clone()) {
             diags.push(Diagnostic::warning(
                 DiagSource::Import,
                 None,

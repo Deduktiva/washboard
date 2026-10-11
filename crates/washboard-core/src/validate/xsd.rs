@@ -625,7 +625,7 @@ struct Collector {
     /// before `xmlSchemaParse` returns) instead of afterwards from a single tree walk.
     eager_ordinals: bool,
     errors: RefCell<Vec<RawError>>,
-    dropped: RefCell<usize>,
+    dropped: Cell<usize>,
 }
 
 impl Collector {
@@ -633,13 +633,13 @@ impl Collector {
         Self {
             eager_ordinals,
             errors: RefCell::new(Vec::new()),
-            dropped: RefCell::new(0),
+            dropped: Cell::new(0),
         }
     }
 
     fn finish(self) -> Vec<RawError> {
         let mut errors = self.errors.into_inner();
-        let dropped = self.dropped.into_inner();
+        let dropped = self.dropped.get();
         if dropped > 0 {
             errors.push(RawError {
                 level: ffi::XML_ERR_WARNING,
@@ -659,13 +659,11 @@ impl Collector {
     /// `err` must be a valid error as passed to a structured error handler, and any node
     /// it references must still be alive.
     unsafe fn push(&self, err: &ffi::xmlError) {
-        let (Ok(mut errors), Ok(mut dropped)) =
-            (self.errors.try_borrow_mut(), self.dropped.try_borrow_mut())
-        else {
+        let Ok(mut errors) = self.errors.try_borrow_mut() else {
             return;
         };
         if errors.len() >= MAX_DIAGNOSTICS {
-            *dropped += 1;
+            self.dropped.set(self.dropped.get() + 1);
             return;
         }
         // SAFETY: libxml2 strings in the error are NUL-terminated or null.

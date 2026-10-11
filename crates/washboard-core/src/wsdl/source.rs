@@ -4,7 +4,7 @@
 //! no file system access), so the same code serves files on disk and files held in memory.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -63,10 +63,10 @@ impl Sources {
     /// the same path the first one wins.
     pub fn new(entry: SourceFile, others: impl IntoIterator<Item = SourceFile>) -> Self {
         let mut files: Vec<SourceFile> = Vec::new();
-        let mut seen = HashMap::new();
+        let mut seen = HashSet::new();
         for mut f in std::iter::once(entry).chain(others) {
             f.path = normalize(&f.path);
-            if seen.insert(f.path.clone(), ()).is_none() {
+            if seen.insert(f.path.clone()) {
                 files.push(f);
             }
         }
