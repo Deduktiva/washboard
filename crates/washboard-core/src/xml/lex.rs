@@ -124,10 +124,7 @@ impl<'a> Lexer<'a> {
     /// Starts lexing at `pos`, which must be a construct boundary for meaningful results.
     /// Positions that are not char boundaries are moved back to one.
     pub fn new(text: &'a str, pos: usize) -> Self {
-        let mut pos = pos.min(text.len());
-        while !text.is_char_boundary(pos) {
-            pos -= 1;
-        }
+        let pos = text.floor_char_boundary(pos);
         Self {
             text,
             b: text.as_bytes(),
