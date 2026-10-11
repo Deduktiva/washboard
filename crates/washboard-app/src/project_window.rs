@@ -16,10 +16,10 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBeep, NSBox, NSBoxType, NSColor, NSImage, NSLayoutAttribute, NSLineBreakMode,
-    NSMenuItem, NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView, NSSplitView,
-    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
-    NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
+    NSAlert, NSBeep, NSBox, NSBoxType, NSColor, NSImage, NSImageSymbolConfiguration,
+    NSLayoutAttribute, NSLineBreakMode, NSMenuItem, NSMenuItemValidation, NSPopUpButton,
+    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
+    NSSplitViewItem, NSStackView, NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
     NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController,
     NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
@@ -46,9 +46,6 @@ use crate::text::replace_summary;
 
 const SERVER_ITEM: &str = "server";
 const SEND_ITEM: &str = "send";
-/// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
-const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] =
-    &[(SEND_ITEM, "Send", "paperplane", "sendRequest:")];
 
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
@@ -423,15 +420,59 @@ impl ProjectWindowController {
         }
     }
 
+    fn toolbar_image(
+        &self,
+        symbol_name: &NSString,
+        label: &NSString,
+        color: Retained<NSColor>,
+    ) -> Option<Retained<NSImage>> {
+        let mut img =
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(symbol_name, Some(&label));
+        if img.is_some() {
+            let palette = NSArray::from_retained_slice(&[color]);
+            let sym_config = NSImageSymbolConfiguration::configurationWithPaletteColors(&palette);
+            img = img?.imageWithSymbolConfiguration(&sym_config);
+        }
+        img
+    }
+
+    fn toolbar_send_item_configure(&self, item: &NSToolbarItem, sending: bool) {
+        if sending {
+            let label = ns_string!("Cancel");
+            item.setLabel(label);
+            item.setToolTip(Some(ns_string!("Cancel the running request")));
+            item.setImage(
+                self.toolbar_image(ns_string!("xmark.circle"), label, NSColor::systemRedColor())
+                    .as_deref(),
+            );
+        } else {
+            let label = ns_string!("Send");
+            item.setLabel(label);
+            item.setToolTip(Some(ns_string!("Send request to server")));
+            item.setImage(
+                self.toolbar_image(ns_string!("paperplane"), label, NSColor::systemGreenColor())
+                    .as_deref(),
+            );
+        }
+    }
+
     fn toolbar_item(&self, identifier: &NSString) -> Option<Retained<NSToolbarItem>> {
         let mtm = self.mtm();
-        if identifier.to_string() != SERVER_ITEM {
-            return toolbar_item(identifier, mtm);
-        }
         let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), identifier);
-        item.setLabel(ns_string!("Server"));
-        item.setView(Some(&self.ivars().servers));
-        Some(item)
+        if identifier.to_string() == SEND_ITEM {
+            item.setBordered(true);
+            self.toolbar_send_item_configure(&item, false);
+            // SAFETY: no target: the action goes up the responder chain, where every receiver takes
+            // the sender as its only argument.
+            unsafe { item.setAction(Some(sel!(sendRequest:))) };
+            Some(item)
+        } else if identifier.to_string() == SERVER_ITEM {
+            item.setLabel(ns_string!("Server"));
+            item.setView(Some(&self.ivars().servers));
+            Some(item)
+        } else {
+            None
+        }
     }
 
     /// The window's edited dot follows the model (`EditedChanged`).
@@ -723,21 +764,7 @@ impl ProjectWindowController {
     pub fn show_send_state(&self) {
         let sending = self.is_sending();
         if let Some(item) = self.send_item() {
-            let (label, symbol) = if sending {
-                ("Cancel", "xmark.circle")
-            } else {
-                ("Send", "paperplane")
-            };
-            let label = NSString::from_str(label);
-            item.setLabel(&label);
-            item.setToolTip(Some(&label));
-            item.setImage(
-                NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                    &NSString::from_str(symbol),
-                    Some(&label),
-                )
-                .as_deref(),
-            );
+            self.toolbar_send_item_configure(&item, sending);
         }
         self.response().show_response();
     }
@@ -921,27 +948,6 @@ fn window(name: &str, mtm: MainThreadMarker) -> Retained<NSWindow> {
     window.setTabbingIdentifier(project_tabbing_id());
     window.setTabbingMode(NSWindowTabbingMode::Automatic);
     window
-}
-
-fn toolbar_item(identifier: &NSString, mtm: MainThreadMarker) -> Option<Retained<NSToolbarItem>> {
-    let item = NSToolbarItem::initWithItemIdentifier(NSToolbarItem::alloc(mtm), identifier);
-    let id = identifier.to_string();
-    let (_, label, symbol, action) = TOOLBAR_ITEMS.iter().find(|(i, ..)| *i == id)?;
-    let label = NSString::from_str(label);
-    item.setLabel(&label);
-    item.setToolTip(Some(&label));
-    item.setImage(
-        NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str(symbol),
-            Some(&label),
-        )
-        .as_deref(),
-    );
-    item.setBordered(true);
-    // SAFETY: no target: the action goes up the responder chain, where every receiver takes
-    // the sender as its only argument.
-    unsafe { item.setAction(Some(Sel::register(&std::ffi::CString::new(*action).ok()?))) };
-    Some(item)
 }
 
 fn server_popup(mtm: MainThreadMarker) -> Retained<NSPopUpButton> {
