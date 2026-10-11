@@ -34,11 +34,7 @@ fn all_fixtures() -> Vec<(PathBuf, String)> {
 
 /// A char boundary in `s`, uniformly-ish. Tests seed `fastrand` so failures reproduce.
 fn boundary(rng: &mut fastrand::Rng, s: &str) -> usize {
-    let mut i = rng.usize(..=s.len());
-    while !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
+    s.floor_char_boundary(rng.usize(..=s.len()))
 }
 
 /// Snippets that change the tokenizer state when typed in the middle of a document.
@@ -217,10 +213,7 @@ fn token_buffer_edits_match_full_tokenization() {
         let mut buf = TokenBuffer::new(&text);
         for step in 0..150 {
             let start = boundary(&mut rng, &text);
-            let mut end = (start + rng.usize(..12)).min(text.len());
-            while !text.is_char_boundary(end) {
-                end += 1;
-            }
+            let mut end = text.ceil_char_boundary(start + rng.usize(..12));
             if rng.usize(..3) == 0 {
                 end = start; // pure insertion
             }
