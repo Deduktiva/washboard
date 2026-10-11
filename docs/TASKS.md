@@ -53,11 +53,11 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 
 ### WP-REQUEST-FOLDERS tests
-Behaviour: `docs/specs/request-folders.md`. Tests (Linux): reconciliation of nested files, a move
-in Finder keeping history, the duplicate-name case; placement with one and with several
-supported ports (both fixtures and a synthetic two-port WSDL), the folder reused across case, a
-selected folder winning; folder rename, move and delete with history; the CLI's paths and
-ambiguity error.
+Behaviour: `docs/specs/disk-layout.md`, `docs/specs/requests.md`. Tests (Linux): reconciliation
+of nested files, a move in Finder keeping history, the duplicate-name case; placement with one
+and with several supported ports (both fixtures and a synthetic two-port WSDL), the folder
+reused across case, a selected folder winning; folder rename, move and delete with history; the
+CLI's paths and ambiguity error.
 
 ### WP-REQUEST-FOLDERS-APP tests
 Behaviour: `docs/specs/sidebar.md`. Tests (`tests/appkit.rs`): no OPERATIONS rows; New Request

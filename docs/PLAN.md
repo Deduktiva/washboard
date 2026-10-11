@@ -57,12 +57,11 @@ is the reference for the details they leave out.
 | Spec | Covers |
 |---|---|
 | [architecture](specs/architecture.md) | crates, key dependencies, threading, the UI model, packaging |
-| [disk layout](specs/disk-layout.md) | the project folder, `washboard.sqlite`, locking |
+| [disk layout](specs/disk-layout.md) | the project folder, request files and folders, `washboard.sqlite`, locking |
 | [macOS app state](specs/macos-app-state.md) | open projects and restore, app settings |
 | [new project](specs/new-project.md) | New Project, the import check, Replace WSDL |
-| [requests](specs/requests.md) | request commands and naming |
+| [requests](specs/requests.md) | request and folder commands, placement, the CLI's request commands |
 | [sidebar](specs/sidebar.md) | the project window's source list |
-| [request folders](specs/request-folders.md) | folders on disk, placement, folder commands |
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
 | [send](specs/send.md) | sending a request |
