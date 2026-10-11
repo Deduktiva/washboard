@@ -7,7 +7,7 @@ use std::path::Path;
 use washboard_core::diag::{Diagnostic, Severity};
 use washboard_core::http::TlsInfo;
 use washboard_core::model::OperationRef;
-use washboard_core::wsdl::{Protocol, Reference, Resolution, Unresolved};
+use washboard_core::wsdl::{Reference, Resolution, Unresolved};
 use washboard_ui_model::{
     CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ImportTarget, Issue,
     ReplaceOutcome, WellFormedness,
@@ -256,16 +256,6 @@ pub(crate) fn well_formedness_text(state: WellFormedness) -> String {
     }
 }
 
-/// A port's chip in the sidebar: its SOAP version, and whether Washboard can use it. Other
-/// bindings (HTTP GET/POST) get none; their operations are greyed out with the reason.
-pub(crate) fn port_chip(protocol: Option<&Protocol>) -> Option<&'static str> {
-    match protocol? {
-        Protocol::Soap11 => Some("1.1"),
-        Protocol::Soap12 => Some("1.2 · unsupported"),
-        Protocol::Other { .. } => None,
-    }
-}
-
 /// The HTTP log's TLS line for an exchange: the protocol and whether the certificate was
 /// checked. `None` for an exchange that failed before anything about TLS was known.
 /// native-tls does not report the negotiated version, so the protocol is just "TLS".
@@ -286,14 +276,14 @@ mod tests {
     use washboard_core::diag::{DiagSource, Severity, TextPos};
     use washboard_core::http::TlsInfo;
     use washboard_core::model::{OperationRef, QName, RequestId};
-    use washboard_core::wsdl::{MatchedBy, Protocol, RefKind, Reference, Resolution, Unresolved};
+    use washboard_core::wsdl::{MatchedBy, RefKind, Reference, Resolution, Unresolved};
     use washboard_ui_model::{
         CompletionKind, Hover, ImportSheet, ImportTarget, Issue, ReplaceOutcome, WellFormedness,
     };
 
     use super::{
         LineMarker, completion_kinds, hover_text, import_files, import_status, line_markers,
-        operation_chip, port_chip, reference_row, replace_summary, text_tool_tip, tls_line,
+        operation_chip, reference_row, replace_summary, text_tool_tip, tls_line,
         well_formedness_text,
     };
 
@@ -317,20 +307,6 @@ mod tests {
             well_formedness_text(WellFormedness::Error { line: None }),
             "XML error"
         );
-    }
-
-    #[test]
-    fn ports_are_marked_with_their_soap_version() {
-        assert_eq!(port_chip(Some(&Protocol::Soap11)), Some("1.1"));
-        assert_eq!(
-            port_chip(Some(&Protocol::Soap12)),
-            Some("1.2 · unsupported")
-        );
-        let http = Protocol::Other {
-            namespace: "http://schemas.xmlsoap.org/wsdl/http/".into(),
-        };
-        assert_eq!(port_chip(Some(&http)), None);
-        assert_eq!(port_chip(None), None);
     }
 
     #[test]

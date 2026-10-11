@@ -451,12 +451,17 @@ impl AppDelegate {
             }
             Event::SelectionChanged { project } => {
                 if let Some(controller) = self.project(project) {
-                    controller.sidebar().show_selection(None);
+                    controller.sidebar().show_selection();
                 }
             }
             Event::BeginRename { project, request } => {
                 if let Some(controller) = self.project(project) {
                     controller.sidebar().begin_rename(request);
+                }
+            }
+            Event::BeginRenameFolder { project, path } => {
+                if let Some(controller) = self.project(project) {
+                    controller.sidebar().begin_rename_folder(&path);
                 }
             }
             Event::ServersChanged { project } => {
