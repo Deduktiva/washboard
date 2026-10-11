@@ -60,13 +60,11 @@ is the reference for the details they leave out.
 | [disk layout](specs/disk-layout.md) | the project folder, request files and folders, `washboard.sqlite`, locking |
 | [macOS app state](specs/macos-app-state.md) | open projects and restore, app settings |
 | [new project](specs/new-project.md) | New Project, the import check, Replace WSDL |
-| [requests](specs/requests.md) | request and folder commands, placement, the CLI's request commands |
+| [requests](specs/requests.md) | request and folder commands, placement, sending, the HTTP log, the CLI |
 | [sidebar](specs/sidebar.md) | the project window's source list |
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
-| [send](specs/send.md) | sending a request |
 | [response pane](specs/response-pane.md) | response, history drawer, older exchanges |
-| [HTTP log](specs/http-log.md) | the app's HTTP log |
 | [settings](specs/settings.md) | the Settings window, servers |
 | [WSDL](specs/wsdl.md) | WSDL details, `rpc/literal` |
 | [schema bundle](specs/schema-bundle.md) | turning the WSDL's schemas into what libxml2 compiles |

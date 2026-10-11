@@ -1,7 +1,8 @@
 # Requests
 
 A request is one `.xml` file holding the full envelope, in `requests/` or a folder below it
-([disk layout](disk-layout.md)). Where requests and folders are listed: [sidebar](sidebar.md).
+([disk layout](disk-layout.md)). Where requests and folders are listed: [sidebar](sidebar.md);
+what a send returns: [response pane](response-pane.md).
 
 ## Commands
 - **New** (⌘N): pick an operation (searchable list grouped by service › port; unsupported
@@ -13,6 +14,25 @@ A request is one `.xml` file holding the full envelope, in `requests/` or a fold
   original), **Delete** (⌘⌫, confirms; history deleted with it).
 - Each request remembers `last_server_id`; the toolbar server popup shows it. A new request
   uses the most recently used server of the project.
+
+## Send
+- Toolbar: server popup, Send (⌘↩). Sends to `server.url` with `Content-Type: text/xml;
+  charset=utf-8` and the `SOAPAction` header from the binding operation ([WSDL](wsdl.md)).
+- The request is validated first; **Send is blocked** while it has errors
+  ([validation](validation.md)). It is sent as written: Send never formats it.
+- Basic auth: `Authorization` header built up front (preemptive, no 401 round-trip).
+- TLS: platform verification; if the server has "ignore TLS errors", certificate and hostname
+  checks are disabled for that request only. The log records whether verification was skipped.
+- No redirects and no proxies ([network](network.md)).
+- The exchange goes into the request's history ([response pane](response-pane.md)) and the
+  app's HTTP log (below).
+
+## HTTP log (Window ▸ HTTP Log, ⌥⌘L)
+One panel for the app, across projects. Shows the last exchange in full: request line, headers,
+body; status line, headers, body; timing; TLS info. Keeps the last 50 exchanges in memory in a
+list above (small extension of "last request and response"; trivially dropped if unwanted). Not
+persisted. Bodies over 5 MB are truncated in the view. Authorization values are masked by
+default (click to reveal).
 
 ## Placement
 The model's `new_request` takes the target folder. The app passes the folder selected in the
