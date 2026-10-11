@@ -141,9 +141,8 @@ impl App {
         match check {
             Check::WellFormed => self.spawn(
                 move || {
-                    let issue = well_formedness_error(&text)
-                        .map(|e| Issue::new(&text, &LineIndex::new(&text), e.diagnostic));
-                    issue.into_iter().collect()
+                    let error = well_formedness_error(&text).map(|e| e.diagnostic);
+                    Issue::all(&text, error.into_iter().collect())
                 },
                 move |app, issues| app.check_done(key, request, version, check, issues),
             ),
