@@ -102,8 +102,7 @@ define_class!(
         // SAFETY: the signature matches `applicationDidFinishLaunching:`.
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notification: &NSNotification) {
-            self.update(App::launch);
-            self.sync();
+            self.apply(App::launch);
             NSApplication::sharedApplication(self.mtm()).activate();
         }
 
@@ -117,8 +116,7 @@ define_class!(
         // SAFETY: the signature matches `applicationShouldTerminate:`.
         #[unsafe(method(applicationShouldTerminate:))]
         fn should_terminate(&self, _sender: &NSApplication) -> NSApplicationTerminateReply {
-            let quit = self.update(App::quit);
-            self.sync();
+            let quit = self.apply(App::quit);
             match quit {
                 // An editor could not be saved; the model has said why.
                 Some(Ok(false)) => NSApplicationTerminateReply::TerminateCancel,
@@ -135,8 +133,7 @@ define_class!(
         #[unsafe(method(applicationDidResignActive:))]
         fn did_resign_active(&self, _notification: &NSNotification) {
             // Switching apps saves every edit (PLAN §4 "Save / autosave").
-            self.update(App::app_deactivated);
-            self.sync();
+            self.apply(App::app_deactivated);
         }
 
         // SAFETY: the signature matches `applicationShouldHandleReopen:hasVisibleWindows:`.
@@ -166,8 +163,7 @@ define_class!(
 
         #[unsafe(method(openProject:))]
         fn open_project(&self, _sender: Option<&AnyObject>) {
-            self.update(App::choose_and_open_project);
-            self.sync();
+            self.apply(App::choose_and_open_project);
         }
 
         #[unsafe(method(openRecentProject:))]
@@ -182,8 +178,7 @@ define_class!(
 
         #[unsafe(method(clearRecentProjects:))]
         fn clear_recent_projects(&self, _sender: Option<&AnyObject>) {
-            self.update(App::clear_recent_projects);
-            self.sync();
+            self.apply(App::clear_recent_projects);
         }
 
         #[unsafe(method(saveAll:))]
@@ -271,8 +266,7 @@ impl AppDelegate {
                 controller.format_request(false);
             }
         }
-        self.update(App::save_all);
-        self.sync();
+        self.apply(App::save_all);
     }
 
     /// Runs `f` on the model and alerts with `title` if it fails, then applies the events.
@@ -281,18 +275,26 @@ impl AppDelegate {
         title: &str,
         f: impl FnOnce(&mut App) -> Result<R, ModelError>,
     ) -> Option<R> {
-        let result = self.update(|app| {
+        self.apply(|app| {
             let result = f(app);
             if let Err(e) = &result {
                 app.alert_error(title, e);
             }
             result.ok()
-        });
-        self.sync();
-        result.flatten()
+        })
+        .flatten()
     }
 
-    /// Runs `f` on the model. The caller applies the events with [`sync`](Self::sync).
+    /// Runs `f` on the model, then applies the events it queued. The model is no longer
+    /// borrowed when they are applied: controllers read it while they update.
+    pub fn apply<R>(&self, f: impl FnOnce(&mut App) -> R) -> Option<R> {
+        let result = self.update(f);
+        self.sync();
+        result
+    }
+
+    /// Runs `f` on the model. The caller applies the events with [`sync`](Self::sync), or uses
+    /// [`apply`](Self::apply) when nothing has to happen in between.
     pub fn update<R>(&self, f: impl FnOnce(&mut App) -> R) -> Option<R> {
         let mut model = self.ivars().model.borrow_mut();
         model.as_mut().map(f)
@@ -312,15 +314,14 @@ impl AppDelegate {
                 return;
             }
             for event in events {
-                self.apply(event);
+                self.apply_event(event);
             }
         }
     }
 
     /// Worker results are waiting: apply them. Called from the main queue after a wake.
     pub fn pump(&self) {
-        self.update(App::pump);
-        self.sync();
+        self.apply(App::pump);
     }
 
     /// A timer block ran; it counts only if the timer was not restarted or cancelled since.
@@ -334,15 +335,13 @@ impl AppDelegate {
             current
         };
         if current {
-            self.update(|app| app.timer_fired(id));
-            self.sync();
+            self.apply(|app| app.timer_fired(id));
         }
     }
 
     /// The front end's answer to a dialog the model asked for.
     pub fn dialog_answered(&self, id: DialogId, answer: DialogAnswer) {
-        self.update(|app| app.dialog_answered(id, answer));
-        self.sync();
+        self.apply(|app| app.dialog_answered(id, answer));
     }
 
     /// Opens the project in `folder`, or brings its window forward.
@@ -428,7 +427,7 @@ impl AppDelegate {
             .get_or_init(|| WelcomeController::new(self.mtm()))
     }
 
-    fn apply(&self, event: Event) {
+    fn apply_event(&self, event: Event) {
         match event {
             Event::ProjectOpened { project } => self.project_opened(project),
             Event::ProjectClosed { project } => self.project_closed(project),
@@ -629,6 +628,11 @@ pub(crate) trait ModelAccess: MainThreadOnly {
     /// [`read`](Self::read) on project `key`'s window; `None` once the project is closed.
     fn read_project<R>(&self, key: ProjectKey, f: impl FnOnce(&ProjectWindow) -> R) -> Option<R> {
         self.read(|app| app.project(key).map(f)).flatten()
+    }
+
+    /// [`AppDelegate::apply`]: runs `f` on the model, then applies the events it queued.
+    fn apply<R>(&self, f: impl FnOnce(&mut App) -> R) -> Option<R> {
+        with_delegate(self.mtm(), |d| d.apply(f)).flatten()
     }
 
     /// [`AppDelegate::command`]: alerts with `title` if `f` fails.

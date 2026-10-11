@@ -20,7 +20,7 @@ use objc2_foundation::{
 use washboard_core::xml;
 use washboard_ui_model::LogEntry;
 
-use crate::app::with_delegate;
+use crate::app::ModelAccess;
 use crate::colors;
 use crate::editor::{read_only_text, set_text, text_of};
 use crate::layout;
@@ -130,11 +130,9 @@ impl HttpLog {
     /// Lists the model's log, oldest first (`LogAppended`), keeping the selected exchange
     /// selected while it is still in the log.
     pub fn reload(&self) {
-        let entries = with_delegate(self.mtm(), |d| {
-            d.read(|app| app.http_log().iter().cloned().collect::<Vec<_>>())
-        })
-        .flatten()
-        .unwrap_or_default();
+        let entries = self
+            .read(|app| app.http_log().iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
         let selected = self.ivars().selected.get().and_then(|row| {
             self.ivars()
                 .rows
@@ -290,3 +288,5 @@ fn panel(mtm: MainThreadMarker) -> Retained<NSPanel> {
     layout::keep_frame(&panel, ns_string!("HTTP Log"));
     panel
 }
+
+impl ModelAccess for HttpLog {}

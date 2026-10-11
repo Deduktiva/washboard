@@ -403,10 +403,7 @@ impl ImportSheetController {
 
     pub fn cancel(&self) {
         let target = self.target();
-        with_delegate(self.mtm(), |d| {
-            d.update(|app| app.cancel_import(target));
-            d.sync();
-        });
+        self.apply(|app| app.cancel_import(target));
         // Also when the model had no sheet left to cancel.
         layout::dismiss(self.window());
     }

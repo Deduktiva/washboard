@@ -20,7 +20,7 @@ use objc2_foundation::{
     NSURL, ns_string,
 };
 
-use crate::app::with_delegate;
+use crate::app::ModelAccess;
 use crate::layout;
 use crate::menu::{self, Entry, NONE, item};
 
@@ -198,10 +198,7 @@ impl WelcomeController {
 
     /// Takes the project in `row` off the list; the folder stays where it is.
     pub fn remove_recent(&self, row: usize) {
-        with_delegate(self.mtm(), |d| {
-            d.update(|app| app.remove_recent_project(row));
-            d.sync();
-        });
+        self.apply(|app| app.remove_recent_project(row));
     }
 
     /// The context menu for `row`: Open, Show in Finder, Remove from List; none off the rows.
@@ -229,11 +226,8 @@ impl WelcomeController {
 
     /// The folder of the recent project in `row`, from the model.
     fn folder(&self, row: usize) -> Option<PathBuf> {
-        with_delegate(self.mtm(), |d| {
-            d.read(|app| app.recent_projects().get(row).cloned())
-        })
-        .flatten()
-        .flatten()
+        self.read(|app| app.recent_projects().get(row).cloned())
+            .flatten()
     }
 
     /// The model's recent projects, most recent first. The first is selected, so Return opens
@@ -428,3 +422,5 @@ fn row_view(project: &RecentProject, mtm: MainThreadMarker) -> Retained<NSTableC
     stack.setSpacing(0.0);
     layout::cell(&stack, Some(&name), mtm)
 }
+
+impl ModelAccess for WelcomeController {}
