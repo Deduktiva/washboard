@@ -5,15 +5,13 @@ use std::io::IsTerminal;
 use std::ops::Range;
 use std::path::Path;
 use std::process::ExitCode;
-use std::sync::Arc;
 
 use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
 use anyhow::bail;
 use washboard_core::diag::{self, Diagnostic, LineIndex, Severity};
 use washboard_core::model::RequestMeta;
-use washboard_core::schema::SchemaModel;
-use washboard_core::validate::{self, RequestSchema, Validation};
-use washboard_core::wsdl::Wsdl;
+use washboard_core::project::ProjectSchema;
+use washboard_core::validate::{self, Validation};
 
 use crate::support;
 
@@ -21,20 +19,26 @@ use crate::support;
 /// diagnostic, warnings included, to stderr. Whether the request may be sent is
 /// [`Validation::has_errors`]; the `Err` case means the project itself is broken.
 ///
-/// The schema (and the model that explains abstract-type errors) is built per call: the CLI is
-/// one command per process, where the app builds both once in the background when the project
-/// opens.
-pub fn check(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> anyhow::Result<Validation> {
-    let schema = match RequestSchema::compile(&wsdl.bundle) {
-        Ok(s) => s.with_model(Arc::new(SchemaModel::build(&wsdl.bundle))),
-        Err(diagnostics) => {
-            for d in &diagnostics {
-                eprintln!("{d}");
-            }
-            bail!("the project's schemas do not compile");
+/// The request schema (and the model that explains abstract-type errors) is compiled on the
+/// first call; the CLI is one command per process, where the app compiles it once in the
+/// background when the project opens.
+pub fn check(
+    schema: &ProjectSchema,
+    request: &RequestMeta,
+    text: &str,
+) -> anyhow::Result<Validation> {
+    let Some(request_schema) = schema.request_schema() else {
+        for d in schema.compile_errors() {
+            eprintln!("{d}");
         }
+        bail!("the project's schemas do not compile");
     };
-    let result = validate::validate_request(wsdl, &schema, text, request.operation.as_ref());
+    let result = validate::validate_request(
+        &schema.wsdl,
+        &request_schema,
+        text,
+        request.operation.as_ref(),
+    );
     let renderer = if std::io::stderr().is_terminal() {
         Renderer::styled()
     } else {
@@ -88,8 +92,8 @@ pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
-    let wsdl = support::load_project_wsdl(&project)?;
-    let result = check(&wsdl, &request, &text)?;
+    let schema = support::load_project_schema(&project)?;
+    let result = check(&schema, &request, &text)?;
     match diag::error_count(&result.diagnostics) {
         0 => {
             println!("{name}: valid");

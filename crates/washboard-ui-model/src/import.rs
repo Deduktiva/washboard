@@ -10,7 +10,7 @@ use washboard_core::project::{OpenProject, Project, ReplaceReport, check_import,
 
 use crate::app::{App, ModelError, ProjectKey};
 use crate::event::Event;
-use crate::window::ProjectSchema;
+use crate::window::{ProjectSchema, load_schema};
 
 /// Which sheet: there is at most one New Project sheet and one Replace WSDL sheet per project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -192,7 +192,7 @@ impl App {
         self.events.push(Event::ServersChanged { project: key });
         self.spawn(
             move || {
-                let schema = ProjectSchema::load(&entry, wsdl_dir)?;
+                let schema = load_schema(&entry, wsdl_dir)?;
                 let report = ReplaceReport::new(
                     &old_operations,
                     &schema.wsdl,

@@ -20,7 +20,9 @@ use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
 use crate::import::Imports;
 use crate::timers::TimerKind;
 use crate::watch::Watching;
-use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
+use crate::window::{
+    ProjectSchema, ProjectWindow, SchemaState, Sidebar, load_schema, operation_tree,
+};
 
 #[derive(Debug, Error)]
 pub enum ModelError {
@@ -395,7 +397,7 @@ impl App {
 
         match entry {
             Ok(entry) => self.spawn(
-                move || ProjectSchema::load(&entry, wsdl_dir),
+                move || load_schema(&entry, wsdl_dir),
                 move |app, loaded| app.schema_loaded(key, loaded),
             ),
             Err(e) => self.schema_loaded(key, Err(e.to_string())),
@@ -410,7 +412,7 @@ impl App {
         };
         match loaded {
             Ok(schema) => {
-                window.sidebar.services = operation_tree(&schema.wsdl, &schema.model);
+                window.sidebar.services = operation_tree(&schema.wsdl, schema.model());
                 window.schema = SchemaState::Ready(std::sync::Arc::new(schema));
             }
             Err(message) => window.schema = SchemaState::Failed(message),

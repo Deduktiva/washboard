@@ -25,6 +25,7 @@ mod import;
 pub mod names;
 mod replace_report;
 mod requests;
+mod schema;
 mod servers;
 mod timefmt;
 
@@ -53,6 +54,7 @@ pub use import::{CheckedImport, check_import};
 pub use names::{NameError, validate_folder_path, validate_request_name};
 pub use replace_report::{ReplaceReport, RequestText, request_texts};
 pub use requests::operation_folder;
+pub use schema::ProjectSchema;
 
 use fsutil::{IoContext, join_rel, remove_dir_if_exists};
 

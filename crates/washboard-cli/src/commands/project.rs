@@ -49,7 +49,9 @@ pub fn new(
 pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Result<ExitCode> {
     let checked = support::check_import(entry, extra)?;
     let mut project = support::open_write(dir)?;
-    let before = support::load_project_wsdl(&project)?.supported_operations();
+    let before = support::load_project_schema(&project)?
+        .wsdl
+        .supported_operations();
     project.replace_wsdl(&checked.set)?;
     println!("replaced the WSDL; the previous set is in wsdl/.previous/");
     // `check_import` has made sure the set compiles; `None` only if the request wrapper
@@ -86,7 +88,7 @@ pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Resu
 /// app would see when compiling the project now.
 pub fn show(dir: &Path) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
-    let w = support::load_project_wsdl(&project)?;
+    let w = support::load_project_schema(&project)?.wsdl;
     let errors = diag::error_count(&w.check.diagnostics);
     let warnings = w.check.diagnostics.len() - errors;
     let (ops, supported) = (w.report.operations, w.report.operations_supported);

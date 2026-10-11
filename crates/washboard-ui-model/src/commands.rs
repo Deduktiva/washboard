@@ -55,7 +55,7 @@ impl App {
         };
         let window = self.window(key)?;
         let schema = window.schema.ready()?.clone();
-        let text = soap::request_envelope(&schema.wsdl, &schema.model, operation, &opts)?;
+        let text = soap::request_envelope(&schema.wsdl, schema.model(), operation, &opts)?;
         let folder =
             folder.map_or_else(|| operation_folder(&schema.wsdl, operation), str::to_owned);
         let meta = window

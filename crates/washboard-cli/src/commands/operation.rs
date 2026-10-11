@@ -25,7 +25,7 @@ struct OperationRow {
 
 pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
-    let w = support::load_project_wsdl(&project)?;
+    let w = support::load_project_schema(&project)?.wsdl;
     let mut rows = Vec::new();
     for b in &w.definitions.bindings {
         for o in &b.operations {
@@ -120,10 +120,10 @@ impl Generated {
 
 /// Resolves the operation and builds its request envelope.
 pub fn generate(project: &Project, spec: &str) -> anyhow::Result<Generated> {
-    let w = support::load_project_wsdl(project)?;
-    let operation = support::resolve_operation(&w, spec)?;
-    let text = support::envelope(&w, &operation)?;
-    let folder = operation_folder(&w, &operation);
+    let schema = support::load_project_schema(project)?;
+    let operation = support::resolve_operation(&schema.wsdl, spec)?;
+    let text = support::envelope(&schema, &operation)?;
+    let folder = operation_folder(&schema.wsdl, &operation);
     Ok(Generated {
         operation,
         text,

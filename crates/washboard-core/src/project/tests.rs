@@ -1397,3 +1397,15 @@ fn import_check_finds_the_set_and_refuses_unresolved_references() {
     assert!(!checked.is_usable());
     assert!(checked.compile.is_empty());
 }
+
+#[test]
+fn project_schema_loads_the_copied_set() {
+    let (_tmp, _folder, p) = new_project();
+    let schema = ProjectSchema::load(&p.entry_wsdl().expect("entry"), p.wsdl_dir())
+        .expect("load")
+        .prepared();
+    assert!(schema.compile_errors().is_empty());
+    assert!(schema.request_schema().is_some());
+    let ops = schema.wsdl.supported_operations();
+    assert!(ops.iter().any(|o| o.operation == "GetCustomer"), "{ops:?}");
+}

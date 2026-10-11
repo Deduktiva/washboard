@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
-use washboard_core::project::{self, CheckedImport, Project, ProjectError};
-use washboard_core::schema::SchemaModel;
-use washboard_core::wsdl::{self, Binding, Operation, Protocol, Sources, Style, Wsdl};
+use washboard_core::project::{self, CheckedImport, Project, ProjectError, ProjectSchema};
+use washboard_core::wsdl::{Binding, Operation, Protocol, Style, Wsdl};
 
 /// Opens without the lock, for commands that only read: they work while the app (or a writing
 /// command) has the project open.
@@ -78,11 +77,13 @@ pub fn find_server(project: &Project, name: &str) -> anyhow::Result<Server> {
     }
 }
 
-/// Reads and analyzes the project's current WSDL set (`wsdl/`, without `.previous`).
-pub fn load_project_wsdl(project: &Project) -> anyhow::Result<Wsdl> {
-    let entry = project.entry_wsdl()?;
-    let sources = Sources::from_disk(&entry, &[project.wsdl_dir()])?;
-    Ok(wsdl::load(&sources))
+/// Reads and analyzes the project's current WSDL set (`wsdl/`, without `.previous`); the schema
+/// model and the request schema are built when a command first needs them.
+pub fn load_project_schema(project: &Project) -> anyhow::Result<ProjectSchema> {
+    Ok(ProjectSchema::load(
+        &project.entry_wsdl()?,
+        project.wsdl_dir(),
+    )?)
 }
 
 /// Runs the import check and the schema compile, as the New Project sheet does; prints every
@@ -189,12 +190,11 @@ pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
     }
 }
 
-/// Builds the schema model and the request envelope for an operation.
-pub fn envelope(w: &Wsdl, op: &OperationRef) -> anyhow::Result<String> {
-    let model = SchemaModel::build(&w.bundle);
+/// The request envelope for an operation.
+pub fn envelope(schema: &ProjectSchema, op: &OperationRef) -> anyhow::Result<String> {
     Ok(washboard_core::soap::request_envelope(
-        w,
-        &model,
+        &schema.wsdl,
+        schema.model(),
         op,
         &Default::default(),
     )?)
