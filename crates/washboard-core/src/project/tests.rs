@@ -1377,3 +1377,23 @@ fn app_state_tolerates_unknown_fields_and_rejects_garbage() {
         Err(AppStateError::Invalid { .. })
     ));
 }
+
+#[test]
+fn import_check_finds_the_set_and_refuses_unresolved_references() {
+    let base = fixtures().join("customer");
+    let checked = check_import(&base.join("CustomerService.wsdl"), &[]).expect("check");
+    assert!(checked.is_usable(), "{:?}", checked.wsdl.check.diagnostics);
+    let mut dests: Vec<&str> = checked.set.files.iter().map(|f| f.dest.as_str()).collect();
+    dests.sort_unstable();
+    let mut expected = CUSTOMER_FILES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(dests, expected);
+
+    // Alone, the entry WSDL's import of the binding cannot resolve; nothing is compiled.
+    let tmp = TempDir::new().expect("tempdir");
+    let alone = tmp.path().join("CustomerService.wsdl");
+    fs::copy(base.join("CustomerService.wsdl"), &alone).expect("copy");
+    let checked = check_import(&alone, &[]).expect("check");
+    assert!(!checked.is_usable());
+    assert!(checked.compile.is_empty());
+}

@@ -3,11 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
-use washboard_core::diag;
 use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
-use washboard_core::project::{Project, ProjectError, WsdlSet};
+use washboard_core::project::{self, CheckedImport, Project, ProjectError};
 use washboard_core::schema::SchemaModel;
-use washboard_core::validate::xsd::CompiledSchema;
 use washboard_core::wsdl::{self, Binding, Operation, Protocol, Sources, Style, Wsdl};
 
 /// Opens without the lock, for commands that only read: they work while the app (or a writing
@@ -87,49 +85,33 @@ pub fn load_project_wsdl(project: &Project) -> anyhow::Result<Wsdl> {
     Ok(wsdl::load(&sources))
 }
 
-/// A WSDL set as supplied on the command line, checked like the New Project sheet does.
-pub struct CheckedImport {
-    pub wsdl: Wsdl,
-    pub set: WsdlSet,
-}
-
-/// Runs the import check and the schema compile; prints every finding to stderr. Fails when
-/// anything is unresolved or the schema set does not compile (`docs/specs/new-project.md`).
+/// Runs the import check and the schema compile, as the New Project sheet does; prints every
+/// finding to stderr. Fails when anything is unresolved or the schema set does not compile
+/// (`docs/specs/new-project.md`).
 pub fn check_import(entry: &Path, extra: &[PathBuf]) -> anyhow::Result<CheckedImport> {
-    let wsdl::Loaded {
-        sources,
-        wsdl: w,
-        found,
-    } = wsdl::load_from_disk(entry, extra)?;
-    for path in &found {
+    let checked = project::check_import(entry, extra)?;
+    for path in &checked.found {
         eprintln!(
             "found {} next to the file that references it",
             path.display()
         );
     }
-    for d in &w.check.diagnostics {
+    for d in checked
+        .wsdl
+        .check
+        .diagnostics
+        .iter()
+        .chain(&checked.compile)
+    {
         eprintln!("{d}");
     }
-    if w.check.has_errors() {
+    if checked.wsdl.check.has_errors() {
         bail!("the import check found errors; nothing was changed");
     }
-    match CompiledSchema::compile(&w.bundle) {
-        Ok(schema) => {
-            for d in schema.warnings() {
-                eprintln!("{d}");
-            }
-        }
-        Err(diags) => {
-            for d in &diags {
-                eprintln!("{d}");
-            }
-            if diag::has_errors(&diags) {
-                bail!("the schema set does not compile; nothing was changed");
-            }
-        }
+    if !checked.is_usable() {
+        bail!("the schema set does not compile; nothing was changed");
     }
-    let set = WsdlSet::from_import(&sources, &w);
-    Ok(CheckedImport { wsdl: w, set })
+    Ok(checked)
 }
 
 pub fn protocol_label(p: &Protocol) -> &'static str {

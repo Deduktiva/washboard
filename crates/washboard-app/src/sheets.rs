@@ -420,9 +420,11 @@ impl ImportSheetController {
                 // The import check knows the addresses; the new project's schema loads later.
                 let addresses = self
                     .read(|app| {
-                        app.import_sheet(ImportTarget::NewProject).is_some_and(|sheet| {
-                            matches!(&sheet.check, CheckState::Done(c) if !c.addresses.is_empty())
-                        })
+                        app.import_sheet(ImportTarget::NewProject)
+                            .is_some_and(|sheet| match &sheet.check {
+                                CheckState::Done(c) => !c.wsdl.soap11_addresses().is_empty(),
+                                _ => false,
+                            })
                     })
                     .unwrap_or(false);
                 let Some(key) = self.command("Could not create the project", App::create_project)
@@ -535,7 +537,13 @@ impl Shown {
     fn new(sheet: &ImportSheet, target: ImportTarget) -> Self {
         let (references, messages) = match &sheet.check {
             CheckState::Done(checked) => (
-                checked.check.references.iter().map(reference_row).collect(),
+                checked
+                    .wsdl
+                    .check
+                    .references
+                    .iter()
+                    .map(reference_row)
+                    .collect(),
                 import_messages(checked),
             ),
             _ => (Vec::new(), Vec::new()),
