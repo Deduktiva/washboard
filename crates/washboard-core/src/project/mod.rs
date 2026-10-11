@@ -21,7 +21,7 @@ mod app_state;
 mod db;
 mod fsutil;
 mod history;
-mod names;
+pub mod names;
 mod replace_report;
 mod requests;
 mod servers;

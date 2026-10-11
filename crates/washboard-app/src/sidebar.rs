@@ -28,6 +28,7 @@ use objc2_foundation::{
     ns_string,
 };
 use washboard_core::model::{OperationRef, RequestId};
+use washboard_core::project::names;
 use washboard_ui_model::{FolderNode, ProjectKey, SchemaState, Sidebar};
 
 use crate::app::{ModelAccess, with_delegate};
@@ -968,7 +969,7 @@ impl SidebarController {
                 id, folder: from, ..
             } => from != folder && window.can_move_request(*id, folder),
             NodeData::Folder { path } => {
-                let parent = path.rsplit_once('/').map_or("", |(p, _)| p);
+                let parent = names::split(path).0;
                 parent != folder && window.can_move_folder(path, folder)
             }
             NodeData::Group => false,

@@ -4,6 +4,9 @@
 //! subdirectory of `requests/`, nested to any depth, and its path is `/`-separated whatever the
 //! platform. Clashes are detected case-insensitively because the default macOS file system is
 //! case-insensitive: `GetCustomer 1` and `getcustomer 1` would be the same file there.
+//!
+//! The path helpers are public so the front ends work on folder paths the way the project
+//! stores them, instead of each splitting on `/` by hand.
 
 use std::collections::HashSet;
 
@@ -65,7 +68,7 @@ pub fn validate_folder_path(path: &str) -> Result<(), NameError> {
 }
 
 /// `folder/name`, or `name` at the top level.
-pub(crate) fn join(folder: &str, name: &str) -> String {
+pub fn join(folder: &str, name: &str) -> String {
     if folder.is_empty() {
         name.to_owned()
     } else {
@@ -75,17 +78,40 @@ pub(crate) fn join(folder: &str, name: &str) -> String {
 
 /// The folder part and the last component of a `/`-separated path; the folder is `""` at
 /// the top level.
-pub(crate) fn split(path: &str) -> (&str, &str) {
+pub fn split(path: &str) -> (&str, &str) {
     path.rsplit_once('/').unwrap_or(("", path))
 }
 
 /// Whether `path` is `folder` or inside it. Every path is inside the top level, `""`.
-pub(crate) fn is_within(path: &str, folder: &str) -> bool {
+pub fn is_within(path: &str, folder: &str) -> bool {
     folder.is_empty()
         || path == folder
         || path
             .strip_prefix(folder)
             .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// Where `path` is once the folder `from` has become `to`, or `None` if `path` is not `from`
+/// or inside it.
+pub fn rebase(path: &str, from: &str, to: &str) -> Option<String> {
+    if !is_within(path, from) {
+        return None;
+    }
+    let rest = if from.is_empty() {
+        path
+    } else {
+        path[from.len()..].strip_prefix('/').unwrap_or_default()
+    };
+    Some(if rest.is_empty() {
+        to.to_owned()
+    } else {
+        join(to, rest)
+    })
+}
+
+/// The file name of the request called `name`.
+pub(crate) fn file_name(name: &str) -> String {
+    format!("{name}{REQUEST_EXT}")
 }
 
 /// Key for clash detection.
@@ -170,6 +196,15 @@ mod tests {
         assert!(is_within("F", ""));
         assert!(!is_within("FG", "F"));
         assert!(!is_within("F", "F/G"));
+    }
+
+    #[test]
+    fn rebasing() {
+        assert_eq!(rebase("F/G/A", "F", "H").as_deref(), Some("H/G/A"));
+        assert_eq!(rebase("F", "F", "X/F").as_deref(), Some("X/F"));
+        assert_eq!(rebase("F/A", "F", "").as_deref(), Some("A"));
+        assert_eq!(rebase("A", "", "F").as_deref(), Some("F/A"));
+        assert_eq!(rebase("FG", "F", "H"), None);
     }
 
     #[test]
