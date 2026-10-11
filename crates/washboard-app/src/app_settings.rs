@@ -1,4 +1,4 @@
-//! The app's own settings (WP-FORMAT-XML): the indent width and format on save, kept in the
+//! The app's own settings: the indent width and format on save, kept in the
 //! user defaults where macOS keeps app settings. The Settings window (`settings_window`) shows
 //! and changes them.
 

@@ -114,7 +114,7 @@ fn is_true(v: Option<&str>) -> bool {
     matches!(v.map(str::trim), Some("true" | "1"))
 }
 
-/// Resolves a `schemaLocation` to a bundle document: as written (WP-WSDL rewrites locations to
+/// Resolves a `schemaLocation` to a bundle document: as written (`wsdl` rewrites locations to
 /// bundle URIs), else relative to the referencing document's URI.
 fn locate(by_uri: &HashMap<&str, usize>, from: &str, loc: &str) -> Option<usize> {
     let loc = loc.trim();

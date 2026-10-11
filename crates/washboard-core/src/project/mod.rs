@@ -1,6 +1,6 @@
 //! Project folders: layout, `washboard.sqlite`, request files, history, reconciliation.
 //!
-//! Owned by WP-PROJECT (`docs/TASKS.md`). Layout and schema: `docs/PLAN.md` §3.
+//! Layout and schema: `docs/PLAN.md` §3.
 //!
 //! A [`Project`] is an open project folder. Opening takes an exclusive lock on the folder, so
 //! one `Project` value is the only writer; it is meant to live on the main thread (one per
@@ -120,7 +120,7 @@ pub type Result<T, E = ProjectError> = std::result::Result<T, E>;
 pub struct WsdlFile {
     pub source: PathBuf,
     /// Destination relative to `wsdl/`, `/`-separated (e.g. `xsd/common/types.xsd`).
-    /// Computed by the import check (WP-WSDL) so relative `schemaLocation`s keep working.
+    /// Computed by the import check so relative `schemaLocation`s keep working.
     pub dest: String,
 }
 

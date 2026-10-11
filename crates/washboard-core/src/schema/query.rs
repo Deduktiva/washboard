@@ -2,9 +2,9 @@
 //!
 //! Every query takes the element path from the root block element (a `Body` or `Header`
 //! child, which must be a global element) down to the element the cursor is in, as resolved
-//! QNames. Resolving prefixes is the caller's job (the editor's cursor context, WP-XML), so
-//! the model never sees document text. An unresolvable path yields empty results, never an
-//! error: the user may be typing something the schema does not allow.
+//! QNames. Resolving prefixes is the caller's job (the editor's cursor context), so the model
+//! never sees document text. An unresolvable path yields empty results, never an error: the user
+//! may be typing something the schema does not allow.
 
 use std::collections::HashMap;
 

@@ -209,8 +209,8 @@ pub struct SchemaDoc {
 
 /// The complete, closed set of schema documents of a project.
 ///
-/// Produced by `wsdl` (WP-WSDL); consumed by `validate`/libxml2 (WP-LIBXML2) and by the Rust
-/// schema model (WP-SCHEMA). Nothing outside the bundle may be loaded.
+/// Produced by `wsdl`; consumed by `validate`/libxml2 and by the Rust schema model
+/// (`schema`). Nothing outside the bundle may be loaded.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SchemaBundle {
     pub docs: Vec<SchemaDoc>,

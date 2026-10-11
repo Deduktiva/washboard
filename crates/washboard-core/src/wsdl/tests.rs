@@ -1,6 +1,6 @@
-//! Tests for WP-WSDL: the fixtures (`fixtures/customer`, `fixtures/legacy-rpc`) plus small
+//! Tests for `wsdl`: the fixtures (`fixtures/customer`, `fixtures/legacy-rpc`) plus small
 //! in-memory WSDL sets for edge cases. Bundle contents are checked structurally; compiling
-//! the bundle with libxml2 is WP-LIBXML2's job.
+//! the bundle with libxml2 is `validate`'s job.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

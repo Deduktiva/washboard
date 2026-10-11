@@ -1,6 +1,6 @@
 //! Pure-Rust XSD model used for completion, hover and template generation (not validation).
 //!
-//! Owned by WP-SCHEMA (`docs/TASKS.md`). Details: `docs/PLAN.md` §5, §5.1, §5.2.
+//! Details: `docs/PLAN.md` §5, §5.1, §5.2.
 //!
 //! libxml2 is authoritative for validation; this model only has to be good enough to suggest
 //! things. Where it is incomplete (exotic XSD corners) the worst case is a missing or extra

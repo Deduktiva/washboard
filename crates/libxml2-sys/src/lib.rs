@@ -1,8 +1,8 @@
 //! FFI bindings to libxml2: parser, XML Schema compile/validate, structured errors,
 //! resource loader.
 //!
-//! Owned by WP-LIBXML2 (`docs/TASKS.md`). The default build compiles a pinned libxml2
-//! release from source and links it statically, with HTTP/FTP support disabled.
+//! The default build compiles a pinned libxml2 release from source and links it statically,
+//! with HTTP/FTP support disabled.
 //!
 //! LLM-written for exactly what `washboard_core::validate` uses; no bindgen. Everything here
 //! is checked against the 2.15 headers and needs at least 2.14 (resource loaders). Structs

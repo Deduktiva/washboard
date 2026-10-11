@@ -1,4 +1,4 @@
-//! XSD compilation and validation with libxml2 (WP-LIBXML2).
+//! XSD compilation and validation with libxml2.
 //!
 //! [`CompiledSchema::compile`] turns a [`SchemaBundle`] into a libxml2 schema;
 //! [`CompiledSchema::validate`] and [`CompiledSchema::validate_text`] check one document; the
@@ -1203,7 +1203,7 @@ mod tests {
         }
     }
 
-    /// A fixture XSD as WP-WSDL would put it into the bundle: decoded, URI relative to the
+    /// A fixture XSD as `wsdl` would put it into the bundle: decoded, URI relative to the
     /// project's `wsdl/` folder, `schemaLocation`s rewritten to bundle URIs.
     fn file_doc(uri: &str, target_ns: &str, rewrites: &[(&str, &str)]) -> SchemaDoc {
         let mut text = read_fixture(&format!("customer/{uri}"));

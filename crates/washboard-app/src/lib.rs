@@ -1,5 +1,4 @@
-//! Washboard macOS app (AppKit via objc2): WP-APP-SHELL and WP-APP-INTEGRATION in
-//! `docs/TASKS.md`.
+//! Washboard macOS app (AppKit via objc2).
 //!
 //! A library rather than code in `main.rs` so that `tests/appkit.rs` can build the real
 //! delegates, windows and views headless on the macOS CI runner. Behaviour belongs in
