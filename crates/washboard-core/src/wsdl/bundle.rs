@@ -51,12 +51,6 @@ pub struct SplitNamespace {
     pub combined_as: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Node {
-    File(usize),
-    Inline(usize),
-}
-
 pub(crate) struct BundleOut {
     pub bundle: SchemaBundle,
     pub splits: Vec<SplitNamespace>,
@@ -76,57 +70,50 @@ pub(crate) fn build(
     diags: &mut Vec<Diagnostic>,
 ) -> BundleOut {
     // ---- nodes, URIs, namespaces
-    let mut nodes: Vec<Node> = Vec::new();
-    for (i, _) in w.inline.iter().enumerate() {
-        nodes.push(Node::Inline(i));
-    }
-    for &f in &w.xsd_order {
-        nodes.push(Node::File(f));
-    }
-    let uri = |n: Node| match n {
-        Node::File(f) => file_uri(&names[f]),
-        Node::Inline(i) => format!("washboard:/inline/{i}.xsd"),
+    let nodes: Vec<Owner> = (0..w.inline.len())
+        .map(Owner::Inline)
+        .chain(w.xsd_order.iter().map(|&f| Owner::File(f)))
+        .collect();
+    let uri = |n: Owner| match n {
+        Owner::File(f) => file_uri(&names[f]),
+        Owner::Inline(i) => format!("washboard:/inline/{i}.xsd"),
     };
-    let tns = |n: Node| -> &str {
+    let tns = |n: Owner| -> &str {
         match n {
-            Node::File(f) => &w.files[f].tns,
-            Node::Inline(i) => &w.inline[i].tns,
+            Owner::File(f) => &w.files[f].tns,
+            Owner::Inline(i) => &w.inline[i].tns,
         }
     };
-    let label = |n: Node| match n {
-        Node::File(f) => names[f].clone(),
-        Node::Inline(i) => format!(
+    let label = |n: Owner| match n {
+        Owner::File(f) => names[f].clone(),
+        Owner::Inline(i) => format!(
             "{} (inline schema {})",
             names[w.inline[i].file],
             w.inline[i].index + 1
         ),
     };
-    let owner_node = |o: Owner| match o {
-        Owner::File(f) => Node::File(f),
-        Owner::Inline(i) => Node::Inline(i),
-    };
 
     // ---- include edges and import targets
-    let mut include_target: HashMap<usize, Node> = HashMap::new();
-    let mut includes: HashMap<Node, Vec<Node>> = HashMap::new();
-    let mut targets: Vec<Node> = nodes
+    let mut include_target: HashMap<usize, Owner> = HashMap::new();
+    let mut includes: HashMap<Owner, Vec<Owner>> = HashMap::new();
+    let mut targets: Vec<Owner> = nodes
         .iter()
         .copied()
-        .filter(|n| matches!(n, Node::Inline(_)))
+        .filter(|n| matches!(n, Owner::Inline(_)))
         .collect();
     for (r, site) in w.sites.iter().enumerate() {
         let Some(t) = site.target else { continue };
         let kind = w.refs[r].kind;
-        let from = owner_node(site.owner);
+        let from = site.owner;
         match (kind, w.files[t].kind) {
             (RefKind::XsdImport | RefKind::WsdlImport, FileKind::Xsd) => {
-                if !targets.contains(&Node::File(t)) {
-                    targets.push(Node::File(t));
+                if !targets.contains(&Owner::File(t)) {
+                    targets.push(Owner::File(t));
                 }
             }
             (RefKind::XsdInclude | RefKind::XsdRedefine | RefKind::XsdOverride, k) => {
                 let to = match k {
-                    FileKind::Xsd => Some(Node::File(t)),
+                    FileKind::Xsd => Some(Owner::File(t)),
                     FileKind::Wsdl => {
                         let own = tns(from);
                         let cands: Vec<usize> = (0..w.inline.len())
@@ -146,7 +133,7 @@ pub(crate) fn build(
                                 ),
                             ));
                         }
-                        cands.first().map(|&i| Node::Inline(i))
+                        cands.first().map(|&i| Owner::Inline(i))
                     }
                     _ => None,
                 };
@@ -158,7 +145,7 @@ pub(crate) fn build(
             _ => {}
         }
     }
-    let reaches = |a: Node, b: Node| -> bool {
+    let reaches = |a: Owner, b: Owner| -> bool {
         let mut seen = HashSet::new();
         let mut stack = vec![a];
         while let Some(n) = stack.pop() {
@@ -176,7 +163,7 @@ pub(crate) fn build(
     // Group by namespace, preserving first-seen order; drop targets that another kept
     // target already includes (they come along with it).
     let mut ns_order: Vec<String> = Vec::new();
-    let mut by_ns: HashMap<String, Vec<Node>> = HashMap::new();
+    let mut by_ns: HashMap<String, Vec<Owner>> = HashMap::new();
     for t in targets {
         let ns = tns(t).to_owned();
         let kept = by_ns.entry(ns.clone()).or_insert_with(|| {
@@ -231,7 +218,7 @@ pub(crate) fn build(
     for &n in &nodes {
         let mut edits = Vec::new();
         for (r, site) in w.sites.iter().enumerate() {
-            if owner_node(site.owner) != n {
+            if site.owner != n {
                 continue;
             }
             let rf = &w.refs[r];
@@ -260,7 +247,7 @@ pub(crate) fn build(
             }
         }
         let (text, origin) = match n {
-            Node::File(f) => {
+            Owner::File(f) => {
                 let Some(src) = w.files[f].text.as_deref() else {
                     continue;
                 };
@@ -281,7 +268,7 @@ pub(crate) fn build(
                     },
                 )
             }
-            Node::Inline(i) => {
+            Owner::Inline(i) => {
                 let s = &w.inline[i];
                 let Some(src) = w.files[s.file].text.as_deref() else {
                     continue;
