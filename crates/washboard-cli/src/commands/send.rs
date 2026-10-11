@@ -99,8 +99,8 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `--server`, else the request's last server, else the project's most recently used one,
-/// else the only server.
+/// `--server`, else the request's last server, else the project's most recently used one
+/// ([`Project::default_server`]), else the only server.
 fn choose_server(
     project: &Project,
     request: &RequestMeta,
@@ -109,7 +109,7 @@ fn choose_server(
     if let Some(n) = name {
         return support::find_server(project, n);
     }
-    if let Some(id) = request.last_server.or(project.last_used_server()?) {
+    if let Some(id) = project.default_server(Some(request))? {
         return Ok(project.server(id)?);
     }
     let mut all = project.servers()?;

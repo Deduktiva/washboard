@@ -663,15 +663,33 @@ impl Project {
         let Ok(u) = uuid::Uuid::parse_str(&s) else {
             return Ok(None);
         };
+        let id = ServerId(u);
+        Ok(self.server_exists(id)?.then_some(id))
+    }
+
+    /// The server a request is sent to when nobody chooses one: its last server, else the
+    /// project's most recently used one; servers deleted since are skipped. With no request,
+    /// the most recently used one. `None` leaves the choice to the front end: the app selects
+    /// its first server, the CLI asks for `--server` when there are several.
+    pub fn default_server(&self, request: Option<&RequestMeta>) -> Result<Option<ServerId>> {
+        if let Some(id) = request.and_then(|r| r.last_server)
+            && self.server_exists(id)?
+        {
+            return Ok(Some(id));
+        }
+        self.last_used_server()
+    }
+
+    fn server_exists(&self, id: ServerId) -> Result<bool> {
         let exists: Option<i64> = self
             .conn
             .query_row(
                 "SELECT 1 FROM server WHERE id = ?1",
-                params![u.to_string()],
+                params![id.to_string()],
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(exists.map(|_| ServerId(u)))
+        Ok(exists.is_some())
     }
 
     /// Sets the sidebar order. Requests not listed keep their relative order after the

@@ -389,14 +389,15 @@ impl ProjectWindow {
     }
 
     /// The server popup's selection: the selected request's last server, else the project's
-    /// most recently used one, else the first.
+    /// most recently used one ([`Project::default_server`]), else the first.
     pub fn selected_server(&self) -> Option<ServerId> {
-        let from_request = self
+        let request = self
             .selected_request()
-            .and_then(|id| self.project.request(id).ok().and_then(|r| r.last_server));
-        let from_project = || self.project.last_used_server().ok().flatten();
-        from_request
-            .or_else(from_project)
+            .and_then(|id| self.project.request(id).ok());
+        self.project
+            .default_server(request.as_ref())
+            .ok()
+            .flatten()
             .filter(|id| self.servers.iter().any(|s| s.id == *id))
             .or_else(|| self.servers.first().map(|s| s.id))
     }

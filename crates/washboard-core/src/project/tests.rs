@@ -1041,6 +1041,38 @@ fn deleting_a_server_clears_last_server_and_secret() {
     ));
 }
 
+#[test]
+fn default_server_is_the_requests_else_the_projects_last() {
+    let (_tmp, _folder, mut p) = new_project();
+    let secrets = MemorySecretStore::default();
+    let dev = server("dev");
+    let prod = server("prod");
+    p.add_server(&dev).expect("add");
+    p.add_server(&prod).expect("add");
+    let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
+    assert_eq!(p.default_server(Some(&a)).expect("default"), None);
+    assert_eq!(p.default_server(None).expect("default"), None);
+
+    p.set_request_last_server(a.id, Some(dev.id)).expect("last");
+    let b = p.create_request(&op("GetCustomer"), "<b/>").expect("b");
+    p.set_request_last_server(b.id, Some(prod.id))
+        .expect("last");
+    let a = p.request(a.id).expect("a");
+    assert_eq!(p.default_server(Some(&a)).expect("default"), Some(dev.id));
+    assert_eq!(p.default_server(None).expect("default"), Some(prod.id));
+
+    // A stale `RequestMeta` naming a deleted server falls back to the project's last.
+    p.set_request_last_server(b.id, Some(dev.id)).expect("last");
+    p.set_request_last_server(a.id, Some(prod.id))
+        .expect("last");
+    let stale = p.request(b.id).expect("b");
+    p.delete_server(dev.id, &secrets).expect("delete");
+    assert_eq!(
+        p.default_server(Some(&stale)).expect("default"),
+        Some(prod.id)
+    );
+}
+
 // ---- history -----------------------------------------------------------------------------
 
 #[test]
