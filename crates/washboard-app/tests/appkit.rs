@@ -52,10 +52,6 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
-#[path = "../../washboard-ui-model/tests/support/server.rs"]
-mod server;
-
-#[cfg(target_os = "macos")]
 mod checks {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -99,7 +95,8 @@ mod checks {
         SchemaState,
     };
 
-    use crate::server::serve_once;
+    use washboard_test_support::fixtures;
+    use washboard_test_support::server::serve_once;
 
     const DEFAULTS_SUITE: &str = "at.deduktiva.washboard.appkit-checks";
 
@@ -129,10 +126,6 @@ mod checks {
         fn confirm(&self, id: DialogId, confirm: Confirm) {
             self.0.borrow_mut().confirms.push((id, confirm));
         }
-    }
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
     }
 
     /// Creates a project named `name` in `<tmp>/<name>` from the legacy-rpc fixture.

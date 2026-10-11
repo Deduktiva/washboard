@@ -25,6 +25,7 @@ uuid = { version = "1.27.0", features = ["v4"] }
 fastrand = "2.5.0"
 rcgen = "0.14.10"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+washboard-test-support.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7.0"

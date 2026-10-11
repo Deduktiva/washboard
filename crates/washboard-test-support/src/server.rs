@@ -1,12 +1,9 @@
 //! A local HTTP server on 127.0.0.1 for the send tests of the UI model, the CLI and the app.
 //!
-//! It lives under `tests/` because only `washboard_core::http` may use sockets in shipped code
-//! (PLAN §6, enforced by `washboard-core/tests/network_boundary.rs`). The UI model's unit tests
-//! include it with `#[path]`; the CLI's and the app's integration tests include it the same way,
-//! so it is compiled for tests only. Core's own HTTP tests keep their server, which also speaks
-//! TLS and answers with scripted raw bytes.
+//! Core's own HTTP tests keep their server, which also speaks TLS and answers with scripted raw
+//! bytes.
 
-#![allow(dead_code, clippy::expect_used)]
+#![allow(clippy::expect_used)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};

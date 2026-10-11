@@ -1,7 +1,7 @@
 //! Model tests against the fake front end. Projects are created in temp dirs from `fixtures/`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tempfile::TempDir;
@@ -10,18 +10,14 @@ use washboard_core::model::{Auth, RequestId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
 use washboard_core::wsdl::Protocol;
 use washboard_core::xml::TokenKind;
+use washboard_test_support::{fixtures, server};
 
 use crate::fake::Fake;
-use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
     HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
     ProjectWindow, Reformat, SchemaState, WellFormedness, WsdlServer,
 };
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
 
 /// Creates a project named `name` in `<tmp>/<name>` and closes it again.
 fn make_project(tmp: &TempDir, name: &str) -> PathBuf {

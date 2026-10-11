@@ -8,15 +8,9 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 use washboard_core::project::Project;
-
-#[path = "../../washboard-ui-model/tests/support/server.rs"]
-mod server;
+use washboard_test_support::{fixtures, server};
 
 const BIN: &str = env!("CARGO_BIN_EXE_washboard");
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
 
 fn copy_dir(from: &Path, to: &Path) {
     fs::create_dir_all(to).expect("mkdir");

@@ -25,9 +25,6 @@ mod window;
 #[cfg(test)]
 mod fake;
 #[cfg(test)]
-#[path = "../tests/support/server.rs"]
-mod server;
-#[cfg(test)]
 mod tests;
 
 pub use app::{App, ModelError, ProjectKey};

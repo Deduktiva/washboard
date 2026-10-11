@@ -6,6 +6,7 @@ default-members = [
     "crates/washboard-ui-model",
     "crates/washboard-cli",
     "crates/libxml2-sys",
+    "crates/washboard-test-support",
 ]
 
 [workspace.package]
@@ -18,6 +19,7 @@ publish = false
 [workspace.dependencies]
 washboard-core = { path = "crates/washboard-core" }
 libxml2-sys = { path = "crates/libxml2-sys" }
+washboard-test-support = { path = "crates/washboard-test-support" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

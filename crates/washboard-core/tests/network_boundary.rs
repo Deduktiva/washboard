@@ -4,7 +4,8 @@
 //! the network-capable crates we do use come from:
 //! - in the dependency graph, every network-capable crate is reached only through
 //!   `washboard-core`'s dependency on `ureq`;
-//! - in the source, socket and HTTP APIs appear only under `washboard-core/src/http/`.
+//! - in the source, socket and HTTP APIs appear only under `washboard-core/src/http/`, and in
+//!   `washboard-test-support`, which no crate may take as a normal dependency.
 //!
 //! The graph is checked for the host platform, so the Linux and macOS CI jobs each cover
 //! their own platform's dependencies (e.g. `security-framework` only on macOS).
@@ -41,6 +42,9 @@ const NETWORK_CRATES: &[&str] = &[
 /// The one allowed path onto the network: this workspace crate's direct dependency on this
 /// crate.
 const ALLOWED_EDGE: (&str, &str) = ("washboard-core", "ureq");
+
+/// Runs local servers for tests; allowed to use sockets because it is only a dev-dependency.
+const TEST_SUPPORT: &str = "washboard-test-support";
 
 /// Identifiers that mean socket or HTTP access in Rust source.
 const NETWORK_APIS: &[&str] = &[
@@ -147,6 +151,24 @@ fn network_crates_below(graph: &HashMap<String, (String, Vec<String>)>, id: &str
 }
 
 #[test]
+fn test_support_is_only_a_dev_dependency() {
+    let graph = normal_graph(&metadata());
+    let users: Vec<&str> = graph
+        .values()
+        .filter(|(_, deps)| deps.iter().any(|d| graph[d].0 == TEST_SUPPORT))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert!(
+        users.is_empty(),
+        "{TEST_SUPPORT} opens sockets and may only be a dev-dependency: {users:?}"
+    );
+    assert!(
+        graph.values().any(|(name, _)| name == TEST_SUPPORT),
+        "{TEST_SUPPORT} is no longer in the workspace; update this test"
+    );
+}
+
+#[test]
 fn network_crates_only_come_through_core_ureq() {
     let meta = metadata();
     let graph = normal_graph(&meta);
@@ -208,6 +230,9 @@ fn network_apis_only_in_core_http() {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(root.join("crates")).expect("read crates/") {
         let krate = entry.expect("dir entry").path();
+        if krate.ends_with(TEST_SUPPORT) {
+            continue;
+        }
         // Integration tests (`tests/`) may run local servers; they never ship.
         rust_sources(&krate.join("src"), &mut files);
         let build = krate.join("build.rs");

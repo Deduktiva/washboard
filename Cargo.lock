@@ -1529,6 +1529,7 @@ dependencies = [
  "objc2-foundation",
  "tempfile",
  "washboard-core",
+ "washboard-test-support",
  "washboard-ui-model",
 ]
 
@@ -1544,6 +1545,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "washboard-core",
+ "washboard-test-support",
 ]
 
 [[package]]
@@ -1567,7 +1569,12 @@ dependencies = [
  "thiserror",
  "ureq",
  "uuid",
+ "washboard-test-support",
 ]
+
+[[package]]
+name = "washboard-test-support"
+version = "0.1.0"
 
 [[package]]
 name = "washboard-ui-model"
@@ -1577,6 +1584,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "washboard-core",
+ "washboard-test-support",
 ]
 
 [[package]]

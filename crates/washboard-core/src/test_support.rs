@@ -1,14 +1,11 @@
-//! Helpers shared by the unit tests. Integration tests (`tests/`) cannot see `cfg(test)`
-//! items and keep their own one-line copy of [`fixtures`].
+//! Helpers shared by the unit tests that need core's own types. Integration tests (`tests/`)
+//! cannot see `cfg(test)` items; what they share lives in `washboard-test-support`.
 
 #![allow(clippy::expect_used)]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-/// The repository's `fixtures/` directory.
-pub fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
+pub use washboard_test_support::fixtures;
 
 /// A fixture file under `fixtures/`, decoded the way every XML input is (`xml::decode`).
 pub fn read_fixture(rel: &str) -> String {
