@@ -692,4 +692,55 @@ mod tests {
         assert!(r.get(ENVELOPE_URI).is_none());
         assert_eq!(r.root, REQUEST_ROOT_URI);
     }
+
+    /// The generated request root byte for byte: with and without our envelope, and for a
+    /// project root with and without a namespace.
+    #[test]
+    fn request_root_is_byte_exact() {
+        let root = |b: &SchemaBundle| {
+            request_bundle(b)
+                .get(REQUEST_ROOT_URI)
+                .expect("request root")
+                .text
+                .clone()
+        };
+        assert_eq!(
+            root(&test_support::customer().bundle),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+  <xs:import namespace="urn:washboard:root" schemaLocation="washboard:/root.xsd"/>
+  <xs:import namespace="http://schemas.xmlsoap.org/soap/envelope/" schemaLocation="washboard:/soap/envelope-1.1.xsd"/>
+</xs:schema>
+"#
+        );
+        let mut b = SchemaBundle {
+            docs: vec![SchemaDoc {
+                uri: "washboard:/wsdl/a.xsd".into(),
+                target_ns: String::new(),
+                origin: SchemaOrigin::File {
+                    path: "a.xsd".into(),
+                },
+                text: String::new(),
+            }],
+            root: "washboard:/wsdl/a.xsd".into(),
+        };
+        assert_eq!(
+            root(&b),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+  <xs:import schemaLocation="washboard:/wsdl/a.xsd"/>
+  <xs:import namespace="http://schemas.xmlsoap.org/soap/envelope/" schemaLocation="washboard:/soap/envelope-1.1.xsd"/>
+</xs:schema>
+"#
+        );
+        b.docs[0].target_ns = SOAP11_ENV_NS.into();
+        b.root = String::new();
+        assert_eq!(
+            root(&b),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+</xs:schema>
+"#
+        );
+    }
 }
