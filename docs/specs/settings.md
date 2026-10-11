@@ -20,7 +20,10 @@ toolbar's popup lists servers only.
 
 A server is edited in a sheet (Edit… on its row, Add Server… under the list) with Save, Cancel
 and Delete Server, which asks first. User and Password show only with Basic auth, the password
-field says whether one is stored, and switching auth off removes it.
+field says whether one is stored, and switching auth off removes it. A new server is added only on
+Save. Save refuses a blank name, a name another server has, and a URL sending would refuse (core
+checks this for every front end); a new server left unnamed is called New Server, numbered when
+taken. Servers stored before these rules still load, but must be fixed before they save again.
 
 New Project opens the window on the new project's Servers pane when its WSDL has an address.
 
