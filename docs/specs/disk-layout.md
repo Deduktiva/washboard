@@ -45,6 +45,14 @@ Tables for the project, its servers, request metadata, history and UI state; the
 the migrations in `crates/washboard-core/src/project/db.rs`, keyed off `PRAGMA user_version`.
 What the schema decides:
 - The project id is a UUID and the Keychain key prefix; passwords live only in the Keychain.
+  It is in the database, not derived from the path, so passwords survive moving or renaming
+  the folder. Nothing else uses it: recent projects and "already open" go by path.
+- **Known issue, deliberately not addressed: copying a project folder** (Finder, `cp`, a
+  second checkout on the same Mac) copies the project id and the server ids, so both projects
+  share the same Keychain items. Changing a password in one changes it in the other, and
+  deleting a server or switching it to no auth deletes the password the other still uses.
+  Servers added after the copy get their own ids. The fix considered and not done: remember id →
+  folder in the app state and give a copy a new id on open, copying its passwords over.
 - A request row names its file by a path relative to `requests/`, always `/`-separated whatever
   the platform; its operation is a hint that may go stale when the WSDL changes.
 - History rows point at their `history/` files and keep the request's start line and headers
