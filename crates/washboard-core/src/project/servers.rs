@@ -1,14 +1,37 @@
 //! Servers of a project. Passwords never touch the database; they go through a
 //! [`SecretStore`] keyed by project and server id.
+//!
+//! Every server written is checked ([`Project::check_server`]): a name that is not blank and
+//! not used by another server, and a URL [`http::send`](crate::http::send) accepts. Servers
+//! are read without the check, so a project saved by an older version that holds a blank name
+//! or a bad URL still opens; such a server can be fixed or deleted, but not saved unchanged.
 
 use std::collections::HashSet;
 use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 
-use super::{LAST_SERVER_KEY, Project, ProjectError, Result, parse_uuid};
+use super::{LAST_SERVER_KEY, Project, ProjectError, Result, names, parse_uuid};
+use crate::http;
 use crate::model::{Auth, Server, ServerId};
 use crate::secrets::{SecretKey, SecretStore};
+
+/// Why a server cannot be saved. The messages are meant for the user.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ServerError {
+    #[error("server name may not be empty")]
+    EmptyName,
+    /// Names address servers on the command line and in the toolbar's popup. Compared after
+    /// trimming and case-insensitively, so "Prod" and "prod" cannot both exist; a server may
+    /// change the case of its own name.
+    #[error("a server named {0:?} already exists")]
+    NameTaken(String),
+    #[error("server URL may not be empty")]
+    EmptyUrl,
+    /// The reason, as sending would report it.
+    #[error("{0}")]
+    InvalidUrl(String),
+}
 
 const COLUMNS: &str = "id, name, url, ignore_tls_errors, auth_kind, username, timeout_secs";
 
@@ -99,9 +122,36 @@ impl Project {
         to_server(row)
     }
 
+    /// Whether `server` may be saved as it is: see [`ServerError`]. Its own id is not a name
+    /// clash, so this serves both adding and updating. [`add_server`](Self::add_server) and
+    /// [`update_server`](Self::update_server) check it themselves; front ends call it to
+    /// refuse a server before asking for anything else, such as a password.
+    ///
+    /// Names are compared trimmed but stored as given; front ends trim them.
+    pub fn check_server(&self, server: &Server) -> Result<()> {
+        let name = server.name.trim();
+        if name.is_empty() {
+            return Err(ServerError::EmptyName.into());
+        }
+        if self
+            .servers()?
+            .iter()
+            .any(|s| s.id != server.id && names::fold(s.name.trim()) == names::fold(name))
+        {
+            return Err(ServerError::NameTaken(name.to_owned()).into());
+        }
+        if server.url.trim().is_empty() {
+            return Err(ServerError::EmptyUrl.into());
+        }
+        http::check_url(&server.url).map_err(ServerError::InvalidUrl)?;
+        Ok(())
+    }
+
     /// Adds a server at the end of the list. The caller picks the id (`ServerId::new()`).
-    /// The timeout is stored in whole seconds.
+    /// The timeout is stored in whole seconds. Refused unless
+    /// [`check_server`](Self::check_server) accepts it.
     pub fn add_server(&mut self, server: &Server) -> Result<()> {
+        self.check_server(server)?;
         let (kind, username) = auth_columns(&server.auth);
         self.conn.execute(
             "INSERT INTO server (id, name, url, ignore_tls_errors, auth_kind, username,
@@ -122,8 +172,9 @@ impl Project {
     }
 
     /// Updates all fields of an existing server. Switching to [`Auth::None`] deletes the
-    /// stored password.
+    /// stored password. Refused unless [`check_server`](Self::check_server) accepts it.
     pub fn update_server(&mut self, server: &Server, secrets: &dyn SecretStore) -> Result<()> {
+        self.check_server(server)?;
         let (kind, username) = auth_columns(&server.auth);
         let n = self.conn.execute(
             "UPDATE server SET name = ?2, url = ?3, ignore_tls_errors = ?4, auth_kind = ?5,

@@ -2061,12 +2061,10 @@ mod checks {
         // A server on this machine, with Basic auth so the log has an `Authorization` header.
         let key = project.key();
         let (url, server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::ZERO);
-        let id = ctx
-            .delegate
+        let id = ServerId::new();
+        ctx.delegate
             .command("add a server", |app| {
-                let id = app.add_server(key)?;
-                app.update_server(key, &local_server(id, &url), Some("secret"))?;
-                Ok(id)
+                app.add_server(key, &local_server(id, &url), Some("secret"))
             })
             .expect("server added");
         let popup = project.server_popup();
@@ -3199,7 +3197,14 @@ mod checks {
         assert_eq!(server_names(ctx, key).len(), names.len());
         servers
             .name_field()
-            .setStringValue(&NSString::from_str("Local"));
+            .setStringValue(&NSString::from_str("Test Server"));
+        // No URL: refused with an alert, and the sheet stays open on the unsaved server.
+        servers.save();
+        let alerts = ctx.alerts();
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        assert!(alerts[0].message.contains("URL"), "{alerts:?}");
+        assert!(servers.is_editing() && servers.editing().is_none());
+        assert_eq!(server_names(ctx, key).len(), names.len(), "nothing added");
         servers
             .url_field()
             .setStringValue(&NSString::from_str("http://localhost:8080/ws"));
@@ -3209,7 +3214,7 @@ mod checks {
         });
         let added = server_names(ctx, key);
         assert_eq!(added.len(), names.len() + 1);
-        assert_eq!(added.last().map(String::as_str), Some("Local"));
+        assert_eq!(added.last().map(String::as_str), Some("Test Server"));
         servers.edit(names.len());
         assert!(!servers.delete_button().isHidden());
         servers.delete();
@@ -3219,7 +3224,7 @@ mod checks {
             .confirms
             .pop()
             .expect("Delete Server asks first");
-        assert_eq!(confirm.title, "Delete “Local”?");
+        assert_eq!(confirm.title, "Delete “Test Server”?");
         assert_eq!(server_names(ctx, key).len(), names.len() + 1, "not yet");
         ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
         wait_until("the sheet to close", || {

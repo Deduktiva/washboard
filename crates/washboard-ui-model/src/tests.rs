@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use washboard_core::diag::DiagSource;
-use washboard_core::model::{Auth, RequestId};
+use washboard_core::model::{Auth, RequestId, Server, ServerId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
+use washboard_core::project::{ProjectError, ServerError};
 use washboard_core::wsdl::Protocol;
 use washboard_core::xml::TokenKind;
 use washboard_test_support::{fixtures, server};
@@ -696,8 +697,8 @@ fn the_server_popup_follows_the_request() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let a = app.add_server(key).expect("add");
-    let b = app.add_server(key).expect("add");
+    let a = add_server(&mut app, key, "A", "https://a.invalid/");
+    let b = add_server(&mut app, key, "B", "https://b.invalid/");
     let window = project(&app, key);
     assert_eq!(window.servers().len(), 2);
     assert_eq!(
@@ -728,7 +729,7 @@ fn the_server_popup_follows_the_request() {
 fn server_passwords_go_to_the_secret_store() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let id = app.add_server(key).expect("add");
+    let id = add_server(&mut app, key, "New", "https://staging.invalid/");
     let mut server = project(&app, key).servers()[0].clone();
     server.name = "Staging".into();
     server.auth = Auth::Basic {
@@ -762,7 +763,7 @@ fn server_passwords_go_to_the_secret_store() {
 fn a_server_is_deleted_after_confirmation() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let id = app.add_server(key).expect("add");
+    let id = add_server(&mut app, key, "New Server", "https://x.invalid/");
 
     app.ask_delete_server(key, id).expect("ask");
     let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
@@ -771,6 +772,68 @@ fn a_server_is_deleted_after_confirmation() {
     app.ask_delete_server(key, id).expect("ask");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert!(project(&app, key).servers().is_empty());
+}
+
+#[test]
+fn added_and_saved_servers_follow_the_projects_rules() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    // Not printing the result on failure: CodeQL counts it as logging the server's password.
+    let refused = |r: Result<(), ModelError>| match r {
+        Err(ModelError::Project(ProjectError::InvalidServer(e))) => e,
+        Ok(()) => panic!("accepted"),
+        Err(_) => panic!("refused for another reason"),
+    };
+
+    // Add Server…'s Save with no URL adds nothing; the alert says why.
+    let e = refused(app.add_server(key, &new_server("Local", ""), None));
+    assert_eq!(e, ServerError::EmptyUrl);
+    let e = refused(app.add_server(key, &new_server("Local", "https://"), None));
+    assert!(matches!(e, ServerError::InvalidUrl(_)), "{e:?}");
+    assert!(project(&app, key).servers().is_empty());
+
+    // A blank name is “New Server”, numbered once that is taken.
+    add_server(&mut app, key, " ", "https://a.invalid/");
+    add_server(&mut app, key, "", "https://b.invalid/");
+    let names = |app: &App| -> Vec<String> {
+        project(app, key)
+            .servers()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&app), ["New Server", "New Server 2"]);
+    let e = refused(app.add_server(key, &new_server("New Server", "https://c.invalid/"), None));
+    assert_eq!(e, ServerError::NameTaken("New Server".into()));
+
+    // Saving the sheet with a taken name, no name or no URL changes nothing.
+    let saved = project(&app, key).servers()[1].clone();
+    for (name, url) in [
+        ("New Server", saved.url.as_str()),
+        ("", saved.url.as_str()),
+        ("X", ""),
+    ] {
+        let edited = Server {
+            name: name.into(),
+            url: url.into(),
+            ..saved.clone()
+        };
+        refused(app.update_server(key, &edited, None));
+    }
+    assert_eq!(project(&app, key).servers()[1], saved);
+
+    // Names clash ignoring case, but a server may change the case of its own name.
+    let e = refused(app.add_server(key, &new_server("new server", "https://d.invalid/"), None));
+    assert_eq!(e, ServerError::NameTaken("new server".into()));
+    let recased = Server {
+        name: "NEW SERVER 2".into(),
+        ..saved
+    };
+    app.update_server(key, &recased, None).expect("recase");
+    assert_eq!(names(&app), ["New Server", "NEW SERVER 2"]);
+    // So the next default name skips both, whatever their case.
+    add_server(&mut app, key, "", "https://e.invalid/");
+    assert_eq!(names(&app)[2], "New Server 3");
 }
 
 #[test]
@@ -783,9 +846,28 @@ fn commands_on_a_closed_project_fail_softly() {
         Err(ModelError::UnknownProject)
     ));
     assert!(matches!(
-        app.add_server(key),
+        app.add_server(key, &new_server("X", "https://x.invalid/"), None),
         Err(ModelError::UnknownProject)
     ));
+}
+
+/// A server with no authentication, not added yet.
+fn new_server(name: &str, url: &str) -> Server {
+    Server {
+        id: ServerId::new(),
+        name: name.into(),
+        url: url.into(),
+        ignore_tls_errors: false,
+        auth: Auth::None,
+        timeout: Duration::from_secs(60),
+    }
+}
+
+/// Adds `new_server(name, url)`, as the server sheet's Save does.
+fn add_server(app: &mut App, key: ProjectKey, name: &str, url: &str) -> ServerId {
+    let server = new_server(name, url);
+    app.add_server(key, &server, None).expect("add");
+    server.id
 }
 
 fn ms(n: u64) -> Duration {
@@ -1281,15 +1363,14 @@ fn set_server_url(app: &mut App, key: ProjectKey, url: String) {
 /// A project with one request and a server pointing at `url`, selected.
 fn ready_to_send(setup: &Setup, url: &str) -> (Fake, App, ProjectKey, RequestId) {
     let (fake, mut app, key, first, _) = with_requests(setup, "Legacy");
-    let id = app.add_server(key).expect("add");
-    let mut server = project(&app, key).servers()[0].clone();
-    server.url = url.to_owned();
-    server.auth = Auth::Basic {
-        username: "alice".into(),
+    let server = Server {
+        auth: Auth::Basic {
+            username: "alice".into(),
+        },
+        ..new_server("Local", url)
     };
-    app.update_server(key, &server, Some("s3cret"))
-        .expect("update");
-    app.choose_server(key, id).expect("choose");
+    app.add_server(key, &server, Some("s3cret")).expect("add");
+    app.choose_server(key, server.id).expect("choose");
     settle(&fake, &mut app);
     (fake, app, key, first)
 }
@@ -1750,12 +1831,7 @@ fn create_copies_and_opens_with_the_wsdl_servers() {
     );
 
     // Adding it as a server leaves the WSDL's row as it is.
-    let id = app.add_server(key).expect("add");
-    let mut server = project(&app, key).servers()[0].clone();
-    assert_eq!(server.id, id);
-    server.name = customer_port().port;
-    server.url = customer_port().url;
-    app.update_server(key, &server, None).expect("save");
+    add_server(&mut app, key, &customer_port().port, &customer_port().url);
     let window = project(&app, key);
     assert_eq!(window.servers().len(), 1);
     assert_eq!(window.wsdl_servers(), [customer_port()]);

@@ -535,6 +535,29 @@ fn servers() {
         2,
         "already exists",
     );
+    // The project's rules, checked before anything is written.
+    for (args, message) in [
+        (
+            &["server", "add", " ", "https://x.invalid/"][..],
+            "name may not be empty",
+        ),
+        (&["server", "add", "X", ""], "URL may not be empty"),
+        (&["server", "add", "X", "https://"], "not a valid URL"),
+        (
+            &["server", "add", "X", "ftp://x.invalid/"],
+            "http:// or https://",
+        ),
+        (
+            &["server", "edit", "Test", "--name", " Prod "],
+            "\"Prod\" already exists",
+        ),
+        (
+            &["server", "edit", "Test", "--url", "x.invalid"],
+            "http:// or https://",
+        ),
+    ] {
+        fails(&wb(&e, args), 2, message);
+    }
     ok(wb(
         &e,
         &[

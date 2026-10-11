@@ -55,6 +55,7 @@ pub use names::{NameError, validate_folder_path, validate_request_name};
 pub use replace_report::{ReplaceReport, RequestText, request_texts};
 pub use requests::operation_folder;
 pub use schema::ProjectSchema;
+pub use servers::ServerError;
 
 use fsutil::{IoContext, join_rel, remove_dir_if_exists};
 
@@ -114,6 +115,9 @@ pub enum ProjectError {
     UnknownRequest(RequestId),
     #[error("no server with id {0}")]
     UnknownServer(ServerId),
+    /// Refused by [`Project::add_server`] or [`Project::update_server`].
+    #[error(transparent)]
+    InvalidServer(#[from] ServerError),
     #[error("no history entry with id {0}")]
     UnknownHistory(crate::model::HistoryId),
     #[error("cannot read {}: {source}", path.display())]

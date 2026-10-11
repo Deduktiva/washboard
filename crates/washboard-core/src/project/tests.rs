@@ -966,6 +966,155 @@ fn server_crud_and_order() {
     assert_eq!(p.servers().expect("list").len(), 2);
 }
 
+/// The `ServerError` that `check_server` (and so add and update) reports for `server`.
+fn server_error(p: &Project, server: &Server) -> ServerError {
+    match p.check_server(server) {
+        Err(ProjectError::InvalidServer(e)) => e,
+        other => panic!("{}: {other:?}", server.url),
+    }
+}
+
+#[test]
+fn servers_need_a_free_name_and_a_url_send_accepts() {
+    let (_tmp, _folder, mut p) = new_project();
+    let secrets = MemorySecretStore::default();
+    let mut dev = server("dev");
+    p.add_server(&dev).expect("add");
+
+    let blank = Server {
+        name: " \t".into(),
+        ..server("x")
+    };
+    assert_eq!(server_error(&p, &blank), ServerError::EmptyName);
+    assert!(matches!(
+        p.add_server(&blank),
+        Err(ProjectError::InvalidServer(ServerError::EmptyName))
+    ));
+
+    // Taken: compared trimmed and case-insensitively; the server's own name is not a clash.
+    let twin = Server {
+        name: " dev ".into(),
+        ..server("x")
+    };
+    assert_eq!(
+        server_error(&p, &twin),
+        ServerError::NameTaken("dev".into())
+    );
+    assert_eq!(
+        p.add_server(&twin).expect_err("taken").to_string(),
+        "a server named \"dev\" already exists"
+    );
+    assert_eq!(
+        server_error(
+            &p,
+            &Server {
+                name: "DEV".into(),
+                ..server("x")
+            }
+        ),
+        ServerError::NameTaken("DEV".into())
+    );
+    p.check_server(&dev).expect("its own name");
+    // Renaming a server to another case of its own name is no clash and keeps the new case.
+    let recased = Server {
+        name: "Dev".into(),
+        ..dev.clone()
+    };
+    p.update_server(&recased, &secrets).expect("recase");
+    assert_eq!(p.server(dev.id).expect("server").name, "Dev");
+    dev = recased;
+
+    for (url, expected) in [
+        ("", ServerError::EmptyUrl),
+        ("  ", ServerError::EmptyUrl),
+        ("https://", ServerError::InvalidUrl(String::new())),
+        ("example.com/soap", ServerError::InvalidUrl(String::new())),
+        ("ftp://example.com/", ServerError::InvalidUrl(String::new())),
+        ("/soap", ServerError::InvalidUrl(String::new())),
+        (
+            "http://user:pw@example.com/",
+            ServerError::InvalidUrl(String::new()),
+        ),
+        (
+            " https://example.com/",
+            ServerError::InvalidUrl(String::new()),
+        ),
+    ] {
+        let bad = Server {
+            url: url.into(),
+            ..server("x")
+        };
+        match (server_error(&p, &bad), expected) {
+            (ServerError::InvalidUrl(msg), ServerError::InvalidUrl(_)) => {
+                assert_eq!(Err(msg), crate::http::check_url(url), "{url:?}");
+            }
+            (got, expected) => assert_eq!(got, expected, "{url:?}"),
+        }
+    }
+    for url in [
+        "http://localhost/",
+        "https://example.com",
+        "http://127.0.0.1:8080/ws?x=1",
+        "HTTPS://Example.com/soap",
+    ] {
+        p.check_server(&Server {
+            url: url.into(),
+            ..server("x")
+        })
+        .unwrap_or_else(|e| panic!("{url}: {e}"));
+    }
+
+    // Updates are checked too, and a refused one changes nothing.
+    let before = dev.clone();
+    dev.url = "https://".into();
+    dev.timeout = Duration::from_secs(1);
+    assert!(matches!(
+        p.update_server(&dev, &secrets),
+        Err(ProjectError::InvalidServer(ServerError::InvalidUrl(_)))
+    ));
+    assert_eq!(p.servers().expect("list"), [before]);
+}
+
+/// Projects written before the check may hold servers it refuses. They still load; saving one
+/// needs it fixed first, deleting it does not.
+#[test]
+fn invalid_stored_servers_are_read_but_not_saved_unchanged() {
+    let (_tmp, _folder, mut p) = new_project();
+    let secrets = MemorySecretStore::default();
+    let mut a = server("dup");
+    let b = server("dup");
+    for s in [&a, &b] {
+        p.conn
+            .execute(
+                "INSERT INTO server (id, name, url, ignore_tls_errors, auth_kind, username,
+                                     timeout_secs, sort_order)
+                 VALUES (?1, ?2, 'https://', 0, 'none', NULL, 60, 0)",
+                params![s.id.to_string(), s.name],
+            )
+            .expect("insert");
+    }
+    let stored = p.servers().expect("list");
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[0].url, "https://");
+
+    a.url = "https://".into();
+    a.auth = Auth::None;
+    a.timeout = Duration::from_secs(60);
+    assert!(matches!(
+        p.update_server(&a, &secrets),
+        Err(ProjectError::InvalidServer(ServerError::NameTaken(_)))
+    ));
+    a.name = "fixed".into();
+    assert!(matches!(
+        p.update_server(&a, &secrets),
+        Err(ProjectError::InvalidServer(ServerError::InvalidUrl(_)))
+    ));
+    a.url = "https://fixed.example/".into();
+    p.update_server(&a, &secrets).expect("fixed");
+    p.delete_server(b.id, &secrets).expect("delete");
+    assert_eq!(p.servers().expect("list"), [a]);
+}
+
 #[test]
 fn passwords_go_through_the_secret_store() {
     let (_tmp, _folder, mut p) = new_project();
