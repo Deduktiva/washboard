@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use washboard_core::model::{Auth, OperationRef, RequestId, Server, ServerId};
-use washboard_core::project::operation_folder;
+use washboard_core::project::{names, operation_folder};
 use washboard_core::schema::TemplateOptions;
 use washboard_core::soap;
 
@@ -239,7 +239,7 @@ impl App {
         if count == 0 {
             return self.delete_folder_now(key, path);
         }
-        let name = path.rsplit('/').next().unwrap_or(path);
+        let name = names::split(path).1;
         let requests = if count == 1 {
             "its request".to_owned()
         } else {
@@ -267,7 +267,7 @@ impl App {
             .sidebar
             .requests
             .iter()
-            .filter(|r| r.folder == path || r.folder.starts_with(&format!("{path}/")))
+            .filter(|r| names::is_within(&r.folder, path))
             .map(|r| r.id)
             .collect();
         self.delete_requests(key, &gone, |project| {
@@ -275,10 +275,7 @@ impl App {
             Ok(())
         })?;
         let window = self.window(key)?;
-        let inside = format!("{path}/");
-        window
-            .collapsed
-            .retain(|p| p != path && !p.starts_with(&inside));
+        window.collapsed.retain(|p| !names::is_within(p, path));
         window.save_collapsed()?;
         Ok(())
     }

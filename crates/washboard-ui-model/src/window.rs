@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use washboard_core::diag::Diagnostic;
 use washboard_core::http;
 use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, ServerId};
-use washboard_core::project::{OpenProject, Project};
+use washboard_core::project::{OpenProject, Project, names};
 use washboard_core::schema::SchemaModel;
 use washboard_core::validate::request::RequestSchema;
 use washboard_core::wsdl::{self, Direction, Protocol, Sources, Style, Wsdl};
@@ -150,7 +150,7 @@ impl FolderNode {
         }
         self.folders
             .iter()
-            .find(|f| path == f.path || path.starts_with(&format!("{}/", f.path)))
+            .find(|f| names::is_within(path, &f.path))
             .and_then(|f| f.folder(path))
     }
 
@@ -197,11 +197,7 @@ impl FolderNode {
         let mut node = self;
         let mut so_far = String::new();
         for component in path.split('/') {
-            so_far = if so_far.is_empty() {
-                component.to_owned()
-            } else {
-                format!("{so_far}/{component}")
-            };
+            so_far = names::join(&so_far, component);
             let i = match node.folders.iter().position(|f| f.path == so_far) {
                 Some(i) => i,
                 None => {
@@ -223,7 +219,7 @@ impl FolderNode {
         }
         self.folders
             .iter_mut()
-            .find(|f| path == f.path || path.starts_with(&format!("{}/", f.path)))
+            .find(|f| names::is_within(path, &f.path))
             .and_then(|f| f.folder_mut(path))
     }
 
@@ -504,8 +500,7 @@ impl ProjectWindow {
         path: &str,
     ) -> Result<(), washboard_core::project::ProjectError> {
         let before = self.collapsed.len();
-        self.collapsed
-            .retain(|p| !(path == p || path.starts_with(&format!("{p}/"))));
+        self.collapsed.retain(|p| !names::is_within(path, p));
         if self.collapsed.len() == before {
             return Ok(());
         }
@@ -514,16 +509,14 @@ impl ProjectWindow {
 
     /// After the folder at `from` became `to`: collapsed folders at or inside it follow.
     pub(crate) fn folder_moved(&mut self, from: &str, to: &str) {
-        let moved: Vec<String> = self
+        let moved: Vec<(String, String)> = self
             .collapsed
             .iter()
-            .filter(|p| *p == from || p.starts_with(&format!("{from}/")))
-            .cloned()
+            .filter_map(|p| Some((p.clone(), names::rebase(p, from, to)?)))
             .collect();
-        for path in moved {
-            self.collapsed.remove(&path);
-            self.collapsed
-                .insert(format!("{to}{}", &path[from.len()..]));
+        for (old, new) in moved {
+            self.collapsed.remove(&old);
+            self.collapsed.insert(new);
         }
     }
 
