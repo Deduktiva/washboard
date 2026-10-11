@@ -255,22 +255,13 @@ impl Project {
     /// Opens an existing project, locks it, migrates the database, and reconciles request
     /// files with rows (see [`Project::reconciliation`]).
     pub fn open(folder: &Path) -> Result<Project> {
-        let db_path = folder.join(DB_FILE);
         // Checked before locking so opening a random folder leaves no lock file behind.
-        if !db_path.is_file() {
-            return Err(ProjectError::NotAProject(folder.to_owned()));
-        }
+        let db_path = existing_db(folder)?;
         let lock = fsutil::lock_folder(folder, LOCK_FILE)?;
         let mut conn = db::connect(&db_path, false)?;
-        if db::user_version(&conn)? == 0 {
-            return Err(ProjectError::NotAProject(folder.to_owned()));
-        }
+        stored_version(&conn, folder)?;
         db::migrate(&mut conn)?;
-        let id: String = conn
-            .query_row("SELECT id FROM project LIMIT 1", [], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| ProjectError::Corrupt("no project row".into()))?;
-        let id = ProjectId(parse_uuid(&id, "project")?);
+        let id = project_id(&conn)?;
         // Empty folders are not tracked by git; recreate them.
         for dir in [WSDL_DIR, REQUESTS_DIR, HISTORY_DIR] {
             let p = folder.join(dir);
@@ -296,15 +287,8 @@ impl Project {
     /// ([`Project::reconciliation`] is empty). A database older than [`SCHEMA_VERSION`] is
     /// refused with [`ProjectError::NeedsUpgrade`] rather than migrated.
     pub fn open_read_only(folder: &Path) -> Result<Project> {
-        let db_path = folder.join(DB_FILE);
-        if !db_path.is_file() {
-            return Err(ProjectError::NotAProject(folder.to_owned()));
-        }
-        let conn = db::connect_read_only(&db_path)?;
-        let found = db::user_version(&conn)?;
-        if found == 0 {
-            return Err(ProjectError::NotAProject(folder.to_owned()));
-        }
+        let conn = db::connect_read_only(&existing_db(folder)?)?;
+        let found = stored_version(&conn, folder)?;
         if found > SCHEMA_VERSION {
             return Err(ProjectError::UnsupportedVersion {
                 found,
@@ -317,11 +301,7 @@ impl Project {
                 supported: SCHEMA_VERSION,
             });
         }
-        let id: String = conn
-            .query_row("SELECT id FROM project LIMIT 1", [], |r| r.get(0))
-            .optional()?
-            .ok_or_else(|| ProjectError::Corrupt("no project row".into()))?;
-        let id = ProjectId(parse_uuid(&id, "project")?);
+        let id = project_id(&conn)?;
         Ok(Project {
             root: folder.to_owned(),
             conn,
@@ -607,6 +587,31 @@ fn copy_wsdl_set(set: &WsdlSet, into: &Path) -> Result<()> {
 /// (`YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`). For the command-line tool, which has no date library.
 pub fn format_timestamp(t: SystemTime) -> String {
     timefmt::format(t)
+}
+
+/// The project database in `folder`, or [`ProjectError::NotAProject`] when there is none.
+fn existing_db(folder: &Path) -> Result<PathBuf> {
+    let db_path = folder.join(DB_FILE);
+    if !db_path.is_file() {
+        return Err(ProjectError::NotAProject(folder.to_owned()));
+    }
+    Ok(db_path)
+}
+
+/// The database's schema version. Version 0 means some other SQLite file, not a project.
+fn stored_version(conn: &Connection, folder: &Path) -> Result<i32> {
+    match db::user_version(conn)? {
+        0 => Err(ProjectError::NotAProject(folder.to_owned())),
+        v => Ok(v),
+    }
+}
+
+fn project_id(conn: &Connection) -> Result<ProjectId> {
+    let id: String = conn
+        .query_row("SELECT id FROM project LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| ProjectError::Corrupt("no project row".into()))?;
+    Ok(ProjectId(parse_uuid(&id, "project")?))
 }
 
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid> {

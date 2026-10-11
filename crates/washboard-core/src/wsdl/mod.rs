@@ -235,10 +235,7 @@ fn dispatch_index(defs: &Definitions) -> HashMap<QName, Vec<Dispatch>> {
                 .map(|m| {
                     m.headers
                         .iter()
-                        .filter_map(|h| match &h.content {
-                            PartContent::Element(q) => Some(q.clone()),
-                            _ => None,
-                        })
+                        .filter_map(|h| h.content.element().cloned())
                         .collect()
                 })
                 .unwrap_or_default();
