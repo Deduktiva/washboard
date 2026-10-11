@@ -2419,10 +2419,26 @@ mod checks {
 
     /// Pumps the main run loop until `done` holds; sheets attach and detach asynchronously.
     fn wait_until(what: &str, done: impl Fn() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        wait_until_showing(what, done, String::new);
+    }
+
+    /// [`wait_until`], with `state` in the timeout message. The message also gives the longest
+    /// run-loop pass: one close to the whole wait means the main thread (or the machine) was
+    /// stalled, rather than a result that never arrived.
+    fn wait_until_showing(what: &str, done: impl Fn() -> bool, state: impl Fn() -> String) {
+        let started = Instant::now();
+        let mut longest = Duration::ZERO;
         while !done() {
-            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            let waited = started.elapsed();
+            assert!(
+                waited < Duration::from_secs(10),
+                "timed out waiting for {what} after {waited:.1?}, longest run-loop pass \
+                 {longest:.1?}{}",
+                state()
+            );
+            let pass = Instant::now();
             NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+            longest = longest.max(pass.elapsed());
         }
     }
 
@@ -2717,11 +2733,20 @@ mod checks {
         }
     }
 
-    /// Waits for the import check the last file change started.
+    /// Waits for the import check the last file change started. The file change shows
+    /// "Checking…" before it returns, so the status alone says when the check is done; a check
+    /// that ended without references (the files could not be read) fails here, not by timeout.
     fn wait_checked(sheet: &ImportSheetController) {
-        wait_until("the import check", || {
-            !sheet.status().starts_with("Checking") && !sheet.references().rows().is_empty()
-        });
+        wait_until_showing(
+            "the import check",
+            || !sheet.status().starts_with("Checking"),
+            || format!("; status {:?}", sheet.status()),
+        );
+        assert!(
+            !sheet.references().rows().is_empty(),
+            "no references after the check; status {:?}",
+            sheet.status()
+        );
     }
 
     /// `fixtures/customer`'s WSDLs and schemas, entry first.
