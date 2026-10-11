@@ -74,11 +74,19 @@ impl CheckedImport {
 impl ImportSheet {
     /// Whether Create / Replace is enabled.
     pub fn can_finish(&self, target: ImportTarget) -> bool {
+        self.finished(target).is_some()
+    }
+
+    /// The check result when Create / Replace is enabled.
+    fn finished(&self, target: ImportTarget) -> Option<&CheckedImport> {
         let named = match target {
             ImportTarget::NewProject => !self.name.trim().is_empty() && self.parent.is_some(),
             ImportTarget::ReplaceWsdl(_) => true,
         };
-        named && matches!(&self.check, CheckState::Done(c) if c.is_usable())
+        match &self.check {
+            CheckState::Done(c) if named && c.is_usable() => Some(c),
+            _ => None,
+        }
     }
 }
 
@@ -138,6 +146,16 @@ impl App {
         Ok(())
     }
 
+    /// The sheet and its check result, when Create / Replace may go ahead.
+    fn finished_import(
+        &self,
+        target: ImportTarget,
+    ) -> Result<(&ImportSheet, &CheckedImport), ModelError> {
+        let sheet = self.imports.get(&target).ok_or(ModelError::NoImport)?;
+        let checked = sheet.finished(target).ok_or(ModelError::ImportNotReady)?;
+        Ok((sheet, checked))
+    }
+
     fn import_checked(
         &mut self,
         target: ImportTarget,
@@ -163,13 +181,7 @@ impl App {
     /// [`ProjectWindow::wsdl_servers`]: crate::ProjectWindow::wsdl_servers
     pub fn create_project(&mut self) -> Result<ProjectKey, ModelError> {
         let target = ImportTarget::NewProject;
-        let sheet = self.imports.get(&target).ok_or(ModelError::NoImport)?;
-        if !sheet.can_finish(target) {
-            return Err(ModelError::ImportNotReady);
-        }
-        let CheckState::Done(checked) = &sheet.check else {
-            return Err(ModelError::ImportNotReady);
-        };
+        let (sheet, checked) = self.finished_import(target)?;
         let parent = sheet.parent.as_ref().ok_or(ModelError::ImportNotReady)?;
         let name = sheet.name.trim();
         let folder = parent.join(name);
@@ -187,20 +199,15 @@ impl App {
     /// outcome. Requests are never rewritten.
     pub fn replace_wsdl(&mut self, key: ProjectKey) -> Result<(), ModelError> {
         let target = ImportTarget::ReplaceWsdl(key);
-        let sheet = self.imports.get(&target).ok_or(ModelError::NoImport)?;
-        if !sheet.can_finish(target) {
-            return Err(ModelError::ImportNotReady);
-        }
-        let CheckState::Done(checked) = &sheet.check else {
-            return Err(ModelError::ImportNotReady);
-        };
+        let (_, checked) = self.finished_import(target)?;
         let set = checked.set.clone();
         self.flush(key)?;
         let window = self.window(key)?;
-        let old_operations = match &window.schema {
-            crate::window::SchemaState::Ready(s) => s.wsdl.supported_operations(),
-            _ => Vec::new(),
-        };
+        let old_operations = window
+            .schema
+            .ready()
+            .map(|s| s.wsdl.supported_operations())
+            .unwrap_or_default();
         window.project.replace_wsdl(&set)?;
         let entry = window.project.entry_wsdl()?;
         let wsdl_dir = window.project.wsdl_dir();
