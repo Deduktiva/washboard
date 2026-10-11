@@ -88,9 +88,14 @@ fn request_file(e: &Env, name: &str) -> PathBuf {
 
 /// Runs a command on the env's project (`-C`).
 fn wb(e: &Env, args: &[&str]) -> Output {
-    let mut all = vec!["-C", e.project.to_str().expect("utf-8 path")];
+    let mut all = vec!["-C", path(&e.project)];
     all.extend_from_slice(args);
     run(&all)
+}
+
+/// A command's output line, such as the name of the request it saved.
+fn line(e: &Env, args: &[&str]) -> String {
+    ok(wb(e, args)).trim().to_owned()
 }
 
 fn stdout(o: &Output) -> String {
@@ -123,22 +128,27 @@ fn fails(o: &Output, code: i32, needle: &str) {
     );
 }
 
+fn path(p: &Path) -> &str {
+    p.to_str().expect("utf-8 path")
+}
+
+/// `project new` on the env's project from the copied fixture's `wsdl`, with `args` after.
+fn project_new(e: &Env, wsdl: &str, args: &[&str]) -> Output {
+    let wsdl = e.src.join(wsdl);
+    let mut all = vec!["project", "new", path(&e.project), "--wsdl", path(&wsdl)];
+    all.extend_from_slice(args);
+    run(&all)
+}
+
 fn customer() -> Env {
     let e = env("customer");
-    let wsdl = e.src.join("CustomerService.wsdl");
-    let xsd = e.src.join("xsd");
     let binding = e.src.join("CustomerBinding.wsdl");
-    let out = ok(run(&[
-        "project",
-        "new",
-        e.project.to_str().expect("utf-8"),
-        "--wsdl",
-        wsdl.to_str().expect("utf-8"),
-        "--xsd-dir",
-        binding.to_str().expect("utf-8"),
-        "--xsd-dir",
-        xsd.to_str().expect("utf-8"),
-    ]));
+    let xsd = e.src.join("xsd");
+    let out = ok(project_new(
+        &e,
+        "CustomerService.wsdl",
+        &["--xsd-dir", path(&binding), "--xsd-dir", path(&xsd)],
+    ));
     assert!(out.contains("created project \"My Project\""), "{out}");
     assert!(
         out.contains("https://customer.example.invalid/ws/customer"),
@@ -149,16 +159,7 @@ fn customer() -> Env {
 
 fn legacy() -> Env {
     let e = env("legacy-rpc");
-    let wsdl = e.src.join("Legacy.wsdl");
-    ok(run(&[
-        "project",
-        "new",
-        e.project.to_str().expect("utf-8"),
-        "--wsdl",
-        wsdl.to_str().expect("utf-8"),
-        "--name",
-        "Legacy",
-    ]));
+    ok(project_new(&e, "Legacy.wsdl", &["--name", "Legacy"]));
     e
 }
 
@@ -194,16 +195,9 @@ fn new_project_copies_files_and_lists_unsupported_operations() {
 fn new_project_refuses_unresolved_imports() {
     let e = env("customer");
     fs::remove_file(e.src.join("xsd/ext/audit.xsd")).expect("remove");
-    let wsdl = e.src.join("CustomerService.wsdl");
-    let o = run(&[
-        "project",
-        "new",
-        e.project.to_str().expect("utf-8"),
-        "--wsdl",
-        wsdl.to_str().expect("utf-8"),
-    ]);
+    let o = project_new(&e, "CustomerService.wsdl", &[]);
     fails(&o, 2, "import check found errors");
-    let stderr = String::from_utf8_lossy(&o.stderr);
+    let stderr = stderr(&o);
     assert!(
         stderr.contains("\"ext/audit.xsd\" was not supplied"),
         "{stderr}"
@@ -214,16 +208,9 @@ fn new_project_refuses_unresolved_imports() {
 #[test]
 fn new_project_finds_imports_next_to_the_wsdl() {
     let e = env("customer");
-    let wsdl = e.src.join("CustomerService.wsdl");
-    let o = run(&[
-        "project",
-        "new",
-        e.project.to_str().expect("utf-8"),
-        "--wsdl",
-        wsdl.to_str().expect("utf-8"),
-    ]);
+    let o = project_new(&e, "CustomerService.wsdl", &[]);
     assert_eq!(o.status.code(), Some(0), "{o:?}");
-    let stderr = String::from_utf8_lossy(&o.stderr);
+    let stderr = stderr(&o);
     assert!(
         stderr.contains("found ") && stderr.contains("audit.xsd"),
         "{stderr}"
@@ -251,7 +238,7 @@ fn legacy_rpc_lists_encoded_as_unsupported_and_templates_the_wrapper() {
         &["operation", "template", "LegacyEncodedBinding#Lookup"],
     );
     fails(&o, 2, "not supported");
-    assert_eq!(ok(wb(&e, &["request", "new", "Lookup"])).trim(), "Lookup 1");
+    assert_eq!(line(&e, &["request", "new", "Lookup"]), "Lookup 1");
 }
 
 #[test]
@@ -269,29 +256,34 @@ fn templates_and_request_management() {
         0
     );
 
-    let save = |args: &[&str]| ok(wb(&e, args)).trim().to_owned();
     assert_eq!(
-        save(&["operation", "template", "GetCustomer", "--save"]),
+        line(&e, &["operation", "template", "GetCustomer", "--save"]),
         "GetCustomer 1"
     );
     assert_eq!(
-        save(&[
-            "operation",
-            "template",
-            "CustomerBinding#GetCustomer",
-            "--save"
-        ]),
+        line(
+            &e,
+            &[
+                "operation",
+                "template",
+                "CustomerBinding#GetCustomer",
+                "--save"
+            ]
+        ),
         "GetCustomer 2"
     );
     assert_eq!(
-        save(&[
-            "operation",
-            "template",
-            "CreateOrder",
-            "--save",
-            "--name",
-            "Order"
-        ]),
+        line(
+            &e,
+            &[
+                "operation",
+                "template",
+                "CreateOrder",
+                "--save",
+                "--name",
+                "Order"
+            ]
+        ),
         "Order"
     );
     // Saved into the operation's folder: one supported port (the other is SOAP 1.2).
@@ -307,7 +299,7 @@ fn templates_and_request_management() {
 
     ok(wb(&e, &["request", "rename", "GetCustomer 2", "Second"]));
     assert!(e.project.join("requests/GetCustomer/Second.xml").is_file());
-    assert_eq!(save(&["request", "duplicate", "Second"]), "Second copy");
+    assert_eq!(line(&e, &["request", "duplicate", "Second"]), "Second copy");
     assert!(
         e.project
             .join("requests/GetCustomer/Second copy.xml")
@@ -323,13 +315,10 @@ fn templates_and_request_management() {
 
     let from = e.src.join("requests/valid-create-order.xml");
     assert_eq!(
-        save(&[
-            "request",
-            "new",
-            "CreateOrder",
-            "--from",
-            from.to_str().expect("utf-8")
-        ]),
+        line(
+            &e,
+            &["request", "new", "CreateOrder", "--from", path(&from)]
+        ),
         "CreateOrder 1"
     );
 
@@ -452,27 +441,32 @@ fn format_reindents_checks_and_leaves_malformed_requests_alone() {
 #[test]
 fn replace_wsdl_reports_operations_and_requests_that_no_longer_validate() {
     let e = customer();
-    let save = |args: &[&str]| ok(wb(&e, args)).trim().to_owned();
     assert_eq!(
-        save(&[
-            "operation",
-            "template",
-            "GetCustomer",
-            "--save",
-            "--name",
-            "Good"
-        ]),
+        line(
+            &e,
+            &[
+                "operation",
+                "template",
+                "GetCustomer",
+                "--save",
+                "--name",
+                "Good"
+            ]
+        ),
         "Good"
     );
     assert_eq!(
-        save(&[
-            "operation",
-            "template",
-            "GetCustomer",
-            "--save",
-            "--name",
-            "Bad"
-        ]),
+        line(
+            &e,
+            &[
+                "operation",
+                "template",
+                "GetCustomer",
+                "--save",
+                "--name",
+                "Bad"
+            ]
+        ),
         "Bad"
     );
     fill_from_fixture(&e, "Good", "valid-get-customer.xml");
@@ -484,9 +478,9 @@ fn replace_wsdl_reports_operations_and_requests_that_no_longer_validate() {
                 "project",
                 "replace-wsdl",
                 "--wsdl",
-                wsdl.to_str().expect("utf-8"),
+                path(wsdl),
                 "--xsd-dir",
-                e.src.to_str().expect("utf-8"),
+                path(&e.src),
             ],
         ))
     };
@@ -621,7 +615,7 @@ fn send_records_history_and_last_server() {
     fill_from_fixture(&e, req, "valid-get-customer.xml");
 
     let o = wb(&e, &["request", "send", req, "--server", "Local"]);
-    assert_eq!(ok(o.clone_output()), OK_RESPONSE);
+    assert_eq!(ok(o.clone()), OK_RESPONSE);
     assert!(stderr(&o).contains("HTTP/1.1 200 OK"), "{}", stderr(&o));
     let s = seen.recv().expect("request seen");
     assert!(s.head.starts_with("POST /soap HTTP/1.1"), "{}", s.head);
@@ -642,7 +636,7 @@ fn send_records_history_and_last_server() {
 
     // A SOAP fault is a normal response unless --fail-on-fault.
     let o = wb(&e, &["request", "send", req]);
-    assert_eq!(ok(o.clone_output()), FAULT_RESPONSE);
+    assert_eq!(ok(o.clone()), FAULT_RESPONSE);
     assert!(
         stderr(&o).contains("SOAP fault: soapenv:Server: customer locked"),
         "{}",
@@ -693,16 +687,10 @@ fn basic_auth_password_comes_from_the_environment() {
         2,
         "WASHBOARD_PASSWORD",
     );
-    let o = cmd(&[
-        "-C",
-        e.project.to_str().expect("utf-8"),
-        "request",
-        "send",
-        "CreateOrder 1",
-    ])
-    .env("WASHBOARD_PASSWORD", "secret")
-    .output()
-    .expect("run");
+    let o = cmd(&["-C", path(&e.project), "request", "send", "CreateOrder 1"])
+        .env("WASHBOARD_PASSWORD", "secret")
+        .output()
+        .expect("run");
     ok(o);
     let s = seen.recv().expect("seen");
     // base64("alice:secret")
@@ -740,7 +728,7 @@ fn skip_validation_sends_broken_requests_anyway() {
         "--skip-validation sends anyway",
     );
     let o = wb(&e, &["request", "send", req, "--skip-validation"]);
-    assert_eq!(ok(o.clone_output()), FAULT_RESPONSE);
+    assert_eq!(ok(o.clone()), FAULT_RESPONSE);
     assert!(stderr(&o).contains("not well-formed"), "{}", stderr(&o));
     assert!(
         stderr(&o).contains("sending despite 1 error"),
@@ -803,20 +791,15 @@ fn project_defaults_to_the_current_directory() {
 fn inspect_reports_counts_without_names() {
     let e = env("customer");
     let wsdl = e.src.join("CustomerService.wsdl");
-    let src = e.src.to_str().expect("utf-8");
-    let text = ok(run(&[
-        "inspect",
-        wsdl.to_str().expect("utf-8"),
-        "--xsd-dir",
-        src,
-    ]));
+    let src = path(&e.src);
+    let text = ok(run(&["inspect", path(&wsdl), "--xsd-dir", src]));
     assert!(text.contains("files supplied"), "{text}");
     for secret in ["urn:example", "Customer", "party.xsd"] {
         assert!(!text.contains(secret), "{secret} leaked: {text}");
     }
     let json: Value = serde_json::from_str(&ok(run(&[
         "inspect",
-        wsdl.to_str().expect("utf-8"),
+        path(&wsdl),
         "--xsd-dir",
         src,
         "--json",
@@ -835,19 +818,4 @@ fn usage_errors_exit_2() {
     assert_eq!(o.status.code(), Some(2));
     let o = run(&["frobnicate"]);
     assert_eq!(o.status.code(), Some(2));
-}
-
-/// `Output` is not `Clone`; tests need both the exit status check and stderr.
-trait CloneOutput {
-    fn clone_output(&self) -> Output;
-}
-
-impl CloneOutput for Output {
-    fn clone_output(&self) -> Output {
-        Output {
-            status: self.status,
-            stdout: self.stdout.clone(),
-            stderr: self.stderr.clone(),
-        }
-    }
 }
