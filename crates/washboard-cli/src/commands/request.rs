@@ -1,4 +1,4 @@
-//! `request list|new|show|rename|duplicate|delete|format` (`validate`, `send` and `history` live in
+//! `request list|new|show|rename|duplicate|mv|delete|format` (`validate`, `send` and `history` live in
 //! their own modules).
 
 use std::collections::HashMap;
@@ -18,6 +18,10 @@ use crate::support;
 struct RequestRow {
     id: String,
     name: String,
+    /// Relative to `requests/`, `/`-separated; `""` at the top level.
+    folder: String,
+    /// `folder/name`, as the text output prints it and `<name>` arguments accept it.
+    path: String,
     /// `{ns}Binding#Operation` the request was created for; a hint that may be stale.
     operation: Option<String>,
     last_server: Option<String>,
@@ -37,7 +41,9 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
         .into_iter()
         .map(|r| RequestRow {
             id: r.id.to_string(),
+            path: support::request_path(&r),
             name: r.name,
+            folder: r.folder,
             operation: r.operation.as_ref().map(OperationRef::to_string),
             last_server: r.last_server.and_then(|s| servers.get(&s).cloned()),
         })
@@ -60,13 +66,14 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
             .as_deref()
             .map(|s| format!("  server {s}"))
             .unwrap_or_default();
-        println!("{:<24} {op}{server}", r.name);
+        println!("{:<24} {op}{server}", r.path);
     }
     Ok(ExitCode::SUCCESS)
 }
 
 /// The content comes from the operation's template, or from `--from` (decoded like any XML
-/// input, so a UTF-16 file works). The name defaults to `<Operation> <n>`.
+/// input, so a UTF-16 file works). The name defaults to `<Operation> <n>`. The request goes
+/// into its operation's folder, as New Request in the app does.
 pub fn new(
     dir: &Path,
     spec: &str,
@@ -74,7 +81,7 @@ pub fn new(
     from: Option<&Path>,
 ) -> anyhow::Result<ExitCode> {
     let mut project = support::open_write(dir)?;
-    let (op, template) = operation::generate(&project, spec)?;
+    let generated = operation::generate(&project, spec)?;
     let text = match from {
         Some(path) => {
             let bytes = if path == Path::new("-") {
@@ -90,12 +97,9 @@ pub fn new(
                 .with_context(|| format!("cannot decode {}", path.display()))?
                 .text
         }
-        None => template,
+        None => generated.text.clone(),
     };
-    let meta = match name {
-        Some(n) => project.create_request_named(n, Some(&op), &text)?,
-        None => project.create_request(&op, &text)?,
-    };
+    let meta = generated.save(&mut project, name, &text)?;
     println!("{}", meta.name);
     Ok(ExitCode::SUCCESS)
 }
@@ -112,6 +116,14 @@ pub fn duplicate(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
     let r = support::find_request(&project, name)?;
     let copy = project.duplicate_request(r.id)?;
     println!("{}", copy.name);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Moves a request into `folder`, creating it; `/` (or an empty argument) is the top level.
+pub fn mv(dir: &Path, name: &str, folder: &str) -> anyhow::Result<ExitCode> {
+    let mut project = support::open_write(dir)?;
+    let r = support::find_request(&project, name)?;
+    project.move_request(r.id, folder.trim_matches('/'))?;
     Ok(ExitCode::SUCCESS)
 }
 

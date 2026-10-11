@@ -4,8 +4,8 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use serde::Serialize;
-use washboard_core::model::OperationRef;
-use washboard_core::project::Project;
+use washboard_core::model::{OperationRef, RequestMeta};
+use washboard_core::project::{Project, operation_folder};
 use washboard_core::wsdl::Protocol;
 
 use crate::support::{self, protocol_label, style_label};
@@ -83,23 +83,50 @@ pub fn template(
 ) -> anyhow::Result<ExitCode> {
     if save {
         let mut project = support::open_write(dir)?;
-        let (op, text) = generate(&project, spec)?;
-        let meta = match name {
-            Some(n) => project.create_request_named(n, Some(&op), &text)?,
-            None => project.create_request(&op, &text)?,
-        };
+        let generated = generate(&project, spec)?;
+        let meta = generated.save(&mut project, name, &generated.text)?;
         println!("{}", meta.name);
     } else {
         let project = support::open_read(dir)?;
-        print!("{}", generate(&project, spec)?.1);
+        print!("{}", generate(&project, spec)?.text);
     }
     Ok(ExitCode::SUCCESS)
 }
 
+/// An operation's request envelope, and where New Request would file it.
+pub struct Generated {
+    pub operation: OperationRef,
+    pub text: String,
+    /// The operation's folder ([`operation_folder`]).
+    pub folder: String,
+}
+
+impl Generated {
+    /// Creates the request with `text` in the operation's folder, as the app's New Request
+    /// does, named `name` or `<Operation> <n>`.
+    pub fn save(
+        &self,
+        project: &mut Project,
+        name: Option<&str>,
+        text: &str,
+    ) -> anyhow::Result<RequestMeta> {
+        let (folder, op) = (&self.folder, &self.operation);
+        Ok(match name {
+            Some(n) => project.create_request_named_in(folder, n, Some(op), text)?,
+            None => project.create_request_in(folder, op, text)?,
+        })
+    }
+}
+
 /// Resolves the operation and builds its request envelope.
-pub fn generate(project: &Project, spec: &str) -> anyhow::Result<(OperationRef, String)> {
+pub fn generate(project: &Project, spec: &str) -> anyhow::Result<Generated> {
     let w = support::load_project_wsdl(project)?;
-    let op = support::resolve_operation(&w, spec)?;
-    let text = support::envelope(&w, &op)?;
-    Ok((op, text))
+    let operation = support::resolve_operation(&w, spec)?;
+    let text = support::envelope(&w, &operation)?;
+    let folder = operation_folder(&w, &operation);
+    Ok(Generated {
+        operation,
+        text,
+        folder,
+    })
 }

@@ -27,12 +27,44 @@ pub fn open_write(dir: &Path) -> anyhow::Result<Project> {
     }
 }
 
+/// A request's path relative to `requests/`: `GetCustomer/GetCustomer 1`, or just the name
+/// at the top level. What `request list` prints and every `<name>` argument accepts.
+pub fn request_path(r: &RequestMeta) -> String {
+    if r.folder.is_empty() {
+        r.name.clone()
+    } else {
+        format!("{}/{}", r.folder, r.name)
+    }
+}
+
+/// Finds a request by name, or by path when the argument has a `/`. Names are unique, but two
+/// files of the same name can arrive in different folders from Finder or git; a bare name
+/// then fails and lists their paths.
 pub fn find_request(project: &Project, name: &str) -> anyhow::Result<RequestMeta> {
-    project
+    let by_path = name.contains('/');
+    let mut matches: Vec<RequestMeta> = project
         .requests()?
         .into_iter()
-        .find(|r| r.name == name)
-        .ok_or_else(|| anyhow!("no request named {name:?}"))
+        .filter(|r| {
+            if by_path {
+                request_path(r) == name.trim_start_matches('/')
+            } else {
+                r.name == name
+            }
+        })
+        .collect();
+    match matches.len() {
+        0 => bail!("no request named {name:?}"),
+        1 => Ok(matches.remove(0)),
+        _ => bail!(
+            "several requests are named {name:?}; give the path: {}",
+            matches
+                .iter()
+                .map(request_path)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 pub fn find_server(project: &Project, name: &str) -> anyhow::Result<Server> {
