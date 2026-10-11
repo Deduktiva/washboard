@@ -1,5 +1,6 @@
-//! `server add|list|edit|remove`. Servers are addressed by name, so names must be unique
-//! for the command-line tool (the app does not require it; duplicates are reported).
+//! `server add|list|edit|remove`. Servers are addressed by name. The project refuses blank
+//! and duplicate names and URLs sending would refuse; a project written before it did may
+//! still hold duplicates, which `find_server` reports.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -54,10 +55,9 @@ pub fn add(
 ) -> anyhow::Result<ExitCode> {
     check_password_flags(opts)?;
     let mut project = support::open_write(dir)?;
-    check_name_free(&project, name, None)?;
     let server = Server {
         id: ServerId::new(),
-        name: checked_name(name)?,
+        name: name.trim().to_owned(),
         url: url.to_owned(),
         ignore_tls_errors,
         auth: match &opts.username {
@@ -68,6 +68,8 @@ pub fn add(
         },
         timeout: opts.timeout.map_or(DEFAULT_TIMEOUT, Duration::from_secs),
     };
+    // Before the password prompt, so a refused server does not ask for one.
+    project.check_server(&server)?;
     let password = obtain_password(&server, opts)?;
     project.add_server(&server)?;
     store_password(&project, &server, password.as_deref())?;
@@ -102,8 +104,7 @@ pub fn edit(dir: &Path, name: &str, e: &Edit) -> anyhow::Result<ExitCode> {
     let mut project = support::open_write(dir)?;
     let mut server = support::find_server(&project, name)?;
     if let Some(n) = &e.new_name {
-        check_name_free(&project, n, Some(server.id))?;
-        server.name = checked_name(n)?;
+        server.name = n.trim().to_owned();
     }
     if let Some(u) = &e.url {
         server.url = u.clone();
@@ -121,6 +122,7 @@ pub fn edit(dir: &Path, name: &str, e: &Edit) -> anyhow::Result<ExitCode> {
             username: u.clone(),
         };
     }
+    project.check_server(&server)?;
     let password = if e.opts.password_stdin || e.opts.username.is_some() {
         obtain_password(&server, &e.opts)?
     } else {
@@ -177,26 +179,6 @@ fn store_password(
 ) -> anyhow::Result<()> {
     if let Some(p) = password {
         project.set_server_password(server.id, Some(p), passwords::store().as_ref())?;
-    }
-    Ok(())
-}
-
-fn checked_name(name: &str) -> anyhow::Result<String> {
-    let n = name.trim();
-    if n.is_empty() {
-        bail!("server name may not be empty");
-    }
-    Ok(n.to_owned())
-}
-
-fn check_name_free(project: &Project, name: &str, except: Option<ServerId>) -> anyhow::Result<()> {
-    let name = name.trim();
-    if project
-        .servers()?
-        .iter()
-        .any(|s| s.name == name && Some(s.id) != except)
-    {
-        bail!("a server named {name:?} already exists");
     }
     Ok(())
 }
