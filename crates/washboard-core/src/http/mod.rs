@@ -1,7 +1,7 @@
 //! The only module allowed to open network connections.
 //!
 //! It accepts a [`crate::model::Server`] and nothing else as a destination: no redirects, no
-//! proxies (environment or system), no other hosts. See `docs/PLAN.md` §6.
+//! proxies (environment or system), no other hosts. See `docs/specs/network.md`.
 //!
 //! [`send`] is blocking; callers run it on a short-lived worker thread. Each call builds its own
 //! `ureq` agent (native-tls: Security.framework on macOS, OpenSSL elsewhere) so the TLS policy

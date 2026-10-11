@@ -20,8 +20,8 @@ use super::{Derivation, MAX_CHAIN, SchemaModel, TypeKey};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathStep {
     pub name: QName,
-    /// The resolved `xsi:type` written on this element, if any. It replaces the declared
-    /// type for everything below (PLAN §5.2).
+    /// The resolved `xsi:type` written on this element, if any. It replaces the declared type for
+    /// everything below (`docs/specs/schema-model.md`).
     pub xsi_type: Option<QName>,
 }
 

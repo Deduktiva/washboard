@@ -1,6 +1,6 @@
-//! `inspect`: the structural report (PLAN §5.1). Counts and flags only, so the output can be
-//! shared from machines holding confidential WSDLs; import diagnostics are not printed because
-//! they contain file names and namespaces.
+//! `inspect`: the structural report (`docs/specs/performance.md`). Counts and flags only, so the
+//! output can be shared from machines holding confidential WSDLs; import diagnostics are not
+//! printed because they contain file names and namespaces.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

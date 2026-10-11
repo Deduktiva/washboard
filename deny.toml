@@ -1,4 +1,4 @@
-# cargo-deny configuration: `cargo deny check bans` (docs/PLAN.md §6).
+# cargo-deny configuration: `cargo deny check bans` (docs/specs/network.md).
 #
 # The only network stack is ureq + native-tls inside `washboard_core::http`. Everything below
 # keeps other HTTP clients/servers, async runtimes that would come with them, and telemetry or
@@ -35,7 +35,7 @@ deny = [
     { crate = "websocket", reason = "no other network protocols" },
     { crate = "tungstenite", reason = "no other network protocols" },
     { crate = "socks", reason = "no proxy support (ureq socks-proxy feature)" },
-    # PLAN §2: no tokio, no async runtimes.
+    # docs/specs/architecture.md: no tokio, no async runtimes.
     { crate = "tokio", reason = "threads + channels only; no async runtime" },
     { crate = "async-std", reason = "threads + channels only; no async runtime" },
     { crate = "smol", reason = "threads + channels only; no async runtime" },

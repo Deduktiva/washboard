@@ -1,6 +1,6 @@
-//! Live checking of the editor's text (PLAN §4 "Validation"): well-formedness 150 ms after the
-//! last edit, full validation 1 s after it, both on workers. Every result names the editor
-//! version it was computed from and is dropped if the text has changed since.
+//! Live checking of the editor's text (`docs/specs/editor.md`, "Checking"): well-formedness 150 ms
+//! after the last edit, full validation 1 s after it, both on workers. Every result names the
+//! editor version it was computed from and is dropped if the text has changed since.
 
 use std::ops::Range;
 use std::sync::Arc;

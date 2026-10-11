@@ -1,7 +1,7 @@
 # Test fixtures
 
 Shared ground truth for all work packages. Small on purpose; each file exists to exercise
-specific features from `docs/PLAN.md`. Do not "clean up" these files: BOMs, odd prefixes and
+specific features from `docs/specs/`. Do not "clean up" these files: BOMs, odd prefixes and
 deliberate errors are the point. `.gitattributes` keeps them byte-exact.
 
 ## `customer/` — document/literal, multi-file
@@ -18,8 +18,8 @@ deliberate errors are the point. `.gitattributes` keeps them byte-exact.
 ## `legacy-rpc/` — rpc/literal
 
 `Legacy.wsdl`: rpc/literal binding whose `soap:body namespace` equals the inline schema's
-`targetNamespace` (the §5.4 gotcha), `type=` parts, plus an rpc/encoded binding that must load
-as unsupported.
+`targetNamespace` (the rpc/literal gotcha in `docs/specs/wsdl.md`), `type=` parts, plus an
+rpc/encoded binding that must load as unsupported.
 
 ## Requests and expectations
 
@@ -39,7 +39,7 @@ where a start tag *ends* (see "Positions" in `crates/washboard-core/src/validate
 
 `check_fixtures.py` validates every request with lxml/libxml2: inline schema extraction with
 namespace carry-over, rpc wrapper generation with `xs:include`, dispatch by body QName. Unlike
-the product (PLAN §4), it validates each header and body block on its own instead of the whole
-envelope in one pass; the verdicts are the same, and `crates/washboard-core/tests/pipeline.rs`
-checks the product against the same expectations. Run `uv run --script fixtures/check_fixtures.py [-v]` after changing a
-fixture. It is a reference for behaviour, not product code.
+the product (`docs/specs/validation.md`), it validates each header and body block on its own
+instead of the whole envelope in one pass; the verdicts are the same, and
+`crates/washboard-core/tests/pipeline.rs` checks the product against the same expectations. Run
+`uv run --script fixtures/check_fixtures.py [-v]` after changing a fixture. It is a reference for behaviour, not product code.

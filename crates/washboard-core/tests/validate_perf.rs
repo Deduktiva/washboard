@@ -1,5 +1,5 @@
-//! libxml2 timings on the synthetic ~2 MB schema set (PLAN §5.1): schema compile and
-//! per-request validation through the whole pipeline (`validate_request`).
+//! libxml2 timings on the synthetic ~2 MB schema set (`docs/specs/performance.md`): schema compile
+//! and per-request validation through the whole pipeline (`validate_request`).
 //!
 //! These numbers decide whether live validation is on (target < 100 ms per request) and
 //! whether open-to-ready fits in 2 s. Timings are always printed
@@ -205,7 +205,7 @@ fn compile_and_validate_requests() {
     if release {
         assert!(compile < Duration::from_secs(2), "compile took {compile:?}");
         // Live validation's budget, for requests up to the size the editor is built for
-        // (PLAN §2: typing stays responsive in a 1 MB file).
+        // (`docs/specs/performance.md`: typing stays responsive in a 1 MB file).
         for (label, len, t) in timings {
             if len <= 1_000_000 {
                 assert!(

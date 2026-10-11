@@ -24,7 +24,7 @@ pub enum Event {
     SidebarChanged { project: ProjectKey },
     /// A different request (or none) is selected.
     SelectionChanged { project: ProjectKey },
-    /// A new request's row should enter inline rename (PLAN §4 "Requests").
+    /// A new request's row should enter inline rename (`docs/specs/requests.md`).
     BeginRename {
         project: ProjectKey,
         request: RequestId,

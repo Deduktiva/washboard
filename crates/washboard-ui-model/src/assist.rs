@@ -1,6 +1,6 @@
-//! Completion and hover in the editor (PLAN §4 "Editor"), from the project's shared
-//! `SchemaModel`. Both run on the main thread: they scan the text once up to the cursor and
-//! ask the model a few questions, which is cheap next to a keystroke's redraw.
+//! Completion and hover in the editor (`docs/specs/editor.md`), from the project's shared
+//! `SchemaModel`. Both run on the main thread: they scan the text once up to the cursor and ask the
+//! model a few questions, which is cheap next to a keystroke's redraw.
 
 use std::ops::Range;
 

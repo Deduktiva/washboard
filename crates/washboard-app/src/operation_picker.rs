@@ -1,6 +1,6 @@
-//! Project ▸ New Request… (PLAN §4 "Requests"): a sheet with a search field over the WSDL's
-//! operations, as `washboard_ui_model::pick_operations` filters and groups them. The keys stay
-//! in the search field: ↑/↓ move the highlight, Return creates, Esc cancels, as in Xcode's Open
+//! Project ▸ New Request… (`docs/specs/requests.md`): a sheet with a search field over the WSDL's
+//! operations, as `washboard_ui_model::pick_operations` filters and groups them. The keys stay in
+//! the search field: ↑/↓ move the highlight, Return creates, Esc cancels, as in Xcode's Open
 //! Quickly.
 
 use std::cell::{Cell, OnceCell, RefCell};

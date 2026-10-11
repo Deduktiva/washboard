@@ -1,4 +1,5 @@
-//! Only `washboard_core::http` may talk to the network (PLAN §6, CLAUDE.md "Network").
+//! Only `washboard_core::http` may talk to the network (`docs/specs/network.md`, CLAUDE.md
+//! "Network").
 //!
 //! `deny.toml` bans known HTTP stacks and telemetry crates by name; these tests check *where*
 //! the network-capable crates we do use come from:
@@ -202,7 +203,7 @@ fn network_crates_only_come_through_core_ureq() {
     assert!(
         violations.is_empty(),
         "network-capable crates outside washboard-core's ureq dependency \
-         (only washboard_core::http may use the network, PLAN §6):\n{}",
+         (only washboard_core::http may use the network, docs/specs/network.md):\n{}",
         violations.join("\n")
     );
     // If ureq is renamed or replaced, this test has to be revisited rather than pass vacuously.
@@ -258,7 +259,7 @@ fn network_apis_only_in_core_http() {
     }
     assert!(
         violations.is_empty(),
-        "socket/HTTP APIs outside crates/washboard-core/src/http (PLAN §6):\n{}",
+        "socket/HTTP APIs outside crates/washboard-core/src/http (docs/specs/network.md):\n{}",
         violations.join("\n")
     );
 }

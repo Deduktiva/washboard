@@ -9,7 +9,7 @@ use crate::front_end::TimerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum TimerKind {
-    /// Saves the editor (PLAN §4 "Save / autosave").
+    /// Saves the editor (`docs/specs/editor.md`).
     Autosave,
     /// Well-formedness check after the last edit.
     WellFormed,

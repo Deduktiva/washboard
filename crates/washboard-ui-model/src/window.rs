@@ -99,8 +99,8 @@ impl SchemaState {
     }
 }
 
-/// What the sidebar shows (PLAN §8): the requests in their folders, and the operations the
-/// operation picker offers.
+/// What the sidebar shows (`docs/specs/sidebar.md`): the requests in their folders, and the
+/// operations the operation picker offers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Sidebar {
     /// Every request, by name in Finder's order: case-insensitive, numbers by value. The
@@ -281,8 +281,8 @@ impl OperationNode {
     }
 }
 
-/// A SOAP 1.1 port's `soap:address`, listed with the servers but never one itself: it is only
-/// sent to once the user has added it as a server (PLAN §4 "Create project", step 4).
+/// A SOAP 1.1 port's `soap:address`, listed with the servers but never one itself: it is only sent
+/// to once the user has added it as a server (`docs/specs/settings.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WsdlServer {
     pub port: String,

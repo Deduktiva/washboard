@@ -1,9 +1,9 @@
 //! UTC timestamps as text.
 //!
-//! Database columns use a fixed-width RFC 3339 form, `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`: always
-//! nine fraction digits, always `Z`. Fixed width makes the text sort like the instant, so SQL
-//! `ORDER BY sent_at` is correct, and nanoseconds make `SystemTime` round-trip exactly. File
-//! names use the compact `YYYYMMDDTHHMMSSZ` form from PLAN §3. Calendar math is `jiff`'s.
+//! Database columns use a fixed-width RFC 3339 form, `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ`: always nine
+//! fraction digits, always `Z`. Fixed width makes the text sort like the instant, so SQL `ORDER BY
+//! sent_at` is correct, and nanoseconds make `SystemTime` round-trip exactly. File names use the
+//! compact `YYYYMMDDTHHMMSSZ` form from `docs/specs/disk-layout.md`. Calendar math is `jiff`'s.
 
 use std::time::SystemTime;
 

@@ -1,4 +1,4 @@
-//! Synthetic schema sets shared by the performance tests (PLAN §5.1 "Fixture corpus").
+//! Synthetic schema sets shared by the performance tests (`docs/specs/performance.md`).
 
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -20,7 +20,7 @@ pub struct Shape {
     pub types: usize,
 }
 
-/// The ~2 MB set the PLAN §5.1 targets refer to.
+/// The ~2 MB set the `docs/specs/performance.md` targets refer to.
 pub const LARGE: Shape = Shape {
     namespaces: 8,
     files: 5,

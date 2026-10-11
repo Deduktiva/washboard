@@ -33,7 +33,8 @@ pub fn new(
         project.root().display(),
         checked.set.files.len()
     );
-    // PLAN §4: the address is only a suggestion; nothing connects until the user adds it.
+    // `docs/specs/new-project.md`: the address is only a suggestion; nothing connects until the
+    // user adds it.
     for (port, url) in checked.wsdl.soap11_addresses() {
         println!(
             "address of port {port}: {url}\n  add it with: washboard -C {} server add {port} {url}",
@@ -43,7 +44,7 @@ pub fn new(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Prints what changed (PLAN §4 "Replace WSDL"): operations added and removed, and requests
+/// Prints what changed (`docs/specs/new-project.md`): operations added and removed, and requests
 /// that no longer validate against the new WSDL. Requests are never rewritten.
 pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Result<ExitCode> {
     let checked = support::check_import(entry, extra)?;

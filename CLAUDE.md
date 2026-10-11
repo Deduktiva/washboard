@@ -3,9 +3,10 @@
 Native macOS SOAP client in Rust. AppKit UI via `objc2`; everything else in a UI-free core
 library that builds and tests on Linux.
 
-- Plan and decisions: `docs/PLAN.md` (read §1–§6 before larger changes)
+- Plan and decisions: `docs/PLAN.md`; behaviour per topic: `docs/specs/` (read the specs you
+  touch, and `architecture.md` and `network.md`, before larger changes)
 - Work packages and path ownership: `docs/TASKS.md`
-- GUI draft: `docs/gui-draft.html`
+- GUI draft: `docs/gui-draft.html`, ASCII versions in `docs/gui-drafts.md`
 - Test inputs: `fixtures/` (see `fixtures/README.md`)
 
 ## Layout
@@ -81,7 +82,7 @@ must likewise skip its build when cross-checking for macOS from another host (se
 
 ## Working as a parallel agent
 
-- You get one work package from `docs/TASKS.md`. Read its section, `docs/PLAN.md` sections it
+- You get one work package from `docs/TASKS.md`. Read its section, the specs it
   cites, and the shared contract files before writing code.
 - Commit on your own branch with clear messages; do not push unless told to. The orchestrator
   merges.

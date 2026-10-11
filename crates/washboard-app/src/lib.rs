@@ -1,8 +1,8 @@
 //! Washboard macOS app (AppKit via objc2).
 //!
-//! A library rather than code in `main.rs` so that `tests/appkit.rs` can build the real
-//! delegates, windows and views headless on the macOS CI runner. Behaviour belongs in
-//! `washboard-ui-model` (PLAN §2.1); this crate draws state and forwards input.
+//! A library rather than code in `main.rs` so that `tests/appkit.rs` can build the real delegates,
+//! windows and views headless on the macOS CI runner. Behaviour belongs in `washboard-ui-model`
+//! (`docs/specs/architecture.md`); this crate draws state and forwards input.
 //!
 //! Cloud agents run on Linux: type-check with
 //! `cargo clippy -p washboard-app --target aarch64-apple-darwin`; CI builds and tests it on

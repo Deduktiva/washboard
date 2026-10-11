@@ -1,6 +1,6 @@
-//! The import sheet of PLAN §8 (New Project and Replace WSDL), bound to the model's
-//! `ImportSheet`. The model runs the import check and stores everything; the sheet shows its
-//! state and forwards input. Project settings are in the Settings window (`settings_window`).
+//! The import sheet (New Project and Replace WSDL, `docs/specs/new-project.md`), bound to the
+//! model's `ImportSheet`. The model runs the import check and stores everything; the sheet shows
+//! its state and forwards input. Project settings are in the Settings window (`settings_window`).
 
 use std::cell::OnceCell;
 use std::path::{Path, PathBuf};

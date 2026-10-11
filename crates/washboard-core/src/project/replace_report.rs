@@ -1,6 +1,6 @@
-//! What replacing a project's WSDL changed (PLAN §4 "Replace WSDL"): operations added and
-//! removed, and the requests that no longer validate. Requests are never rewritten; the report
-//! only names them.
+//! What replacing a project's WSDL changed (`docs/specs/new-project.md`): operations added and
+//! removed, and the requests that no longer validate. Requests are never rewritten; the report only
+//! names them.
 //!
 //! One computation for the app and the CLI. The app swaps the files on the main thread and
 //! builds the report on a worker once the new schema has compiled, so the inputs are plain

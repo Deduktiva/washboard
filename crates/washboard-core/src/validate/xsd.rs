@@ -37,13 +37,13 @@
 //! If that fails (undecodable text, entity-expanded content), the start tag ending on the
 //! reported line is used, and failing that the raw libxml2 line.
 //!
-//! Validation diagnostics also carry a [`DiagDetail`] (libxml2's error code, the element's
-//! index, the attribute) and, when the start tag was found, a span: the attribute from its
-//! name to the closing quote for attribute errors, the element's text (whitespace trimmed) for
-//! errors about a simple-type value, and the start tag for everything else. Both come from
-//! the error's code and node (PLAN §5.2). The one exception is which attribute an error is
-//! about: libxml2 drops the attribute node before we see it, so its name is read from the
-//! message prefix and checked against the element (`reported_attribute`).
+//! Validation diagnostics also carry a [`DiagDetail`] (libxml2's error code, the element's index,
+//! the attribute) and, when the start tag was found, a span: the attribute from its name to the
+//! closing quote for attribute errors, the element's text (whitespace trimmed) for errors about a
+//! simple-type value, and the start tag for everything else. Both come from the error's code and
+//! node (`docs/specs/validation.md`). The one exception is which attribute an error is about:
+//! libxml2 drops the attribute node before we see it, so its name is read from the message prefix
+//! and checked against the element (`reported_attribute`).
 //!
 //! # Threads
 //!

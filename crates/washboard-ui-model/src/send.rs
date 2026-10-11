@@ -1,5 +1,5 @@
-//! Send, the response pane, the request's history and the app's HTTP log (PLAN §4 "Send",
-//! "HTTP log").
+//! Send, the response pane, the request's history and the app's HTTP log
+//! (`docs/specs/requests.md`, `docs/specs/response-pane.md`).
 
 use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
@@ -18,9 +18,9 @@ use crate::window::ProjectWindow;
 /// The HTTP log keeps this many exchanges, across all projects.
 pub const LOG_CAPACITY: usize = 50;
 
-/// An older exchange of the selected request, shown whole in place of the latest one (PLAN §4
-/// "Response pane and history"): its response in the response pane, its request as sent
-/// beside it, read-only. While one is shown, Send is refused.
+/// An older exchange of the selected request, shown whole in place of the latest one
+/// (`docs/specs/response-pane.md`): its response in the response pane, its request as sent beside
+/// it, read-only. While one is shown, Send is refused.
 #[derive(Debug, Clone)]
 pub struct OlderExchange {
     pub entry: HistoryId,

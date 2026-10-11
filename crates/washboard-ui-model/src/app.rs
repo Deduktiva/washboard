@@ -151,10 +151,10 @@ impl App {
         }
     }
 
-    /// Reopens the projects that were open at quit (PLAN §4 "Multiple projects / restore").
-    /// Projects that can't be opened are reported in one alert and dropped from the saved
-    /// list right away, so they are reported once, not on every launch. An unreadable
-    /// `state.json` starts empty, also with an alert.
+    /// Reopens the projects that were open at quit (`docs/specs/macos-app-state.md`). Projects that
+    /// can't be opened are reported in one alert and dropped from the saved list right away, so
+    /// they are reported once, not on every launch. An unreadable `state.json` starts empty, also
+    /// with an alert.
     pub fn launch(&mut self) {
         let state = match AppState::load(&self.state_dir) {
             Ok(state) => state,

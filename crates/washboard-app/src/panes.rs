@@ -1,5 +1,5 @@
-//! The request bar above the editor, the issues bar under it, and the response pane beside
-//! them with its History drawer (PLAN §4 "Response pane and history", §8).
+//! The request bar above the editor, the issues bar under it, and the response pane beside them
+//! with its History drawer (`docs/specs/response-pane.md`).
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;

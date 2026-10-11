@@ -1,7 +1,7 @@
-//! The project window's source list: REQUESTS, the requests' folder tree (PLAN §8), with
-//! unsaved (•) and invalid (⚠) markers on requests, inline rename of requests and folders,
-//! drag and drop moves, and a context menu per row. Creating a request is the operation
-//! picker's job; the WSDL's operations are listed there, unsupported ones included.
+//! The project window's source list: REQUESTS, the requests' folder tree (`docs/specs/sidebar.md`),
+//! with unsaved (•) and invalid (⚠) markers on requests, inline rename of requests and folders,
+//! drag and drop moves, and a context menu per row. Creating a request is the operation picker's
+//! job; the WSDL's operations are listed there, unsupported ones included.
 //!
 //! The rows are the model's [`Sidebar`]; this controller only draws them and turns selection,
 //! rename, drops and disclosure into model commands. `NSOutlineView` identifies rows by object

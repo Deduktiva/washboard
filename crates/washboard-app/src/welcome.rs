@@ -1,5 +1,5 @@
-//! The welcome window, shown when no project window is open (PLAN §8, `docs/gui-draft.html`):
-//! icon, name and version on the left, New/Open buttons, recent projects on the right.
+//! The welcome window, shown when no project window is open (`docs/gui-draft.html`): icon, name and
+//! version on the left, New/Open buttons, recent projects on the right.
 
 use std::cell::{OnceCell, RefCell};
 use std::path::{Path, PathBuf};

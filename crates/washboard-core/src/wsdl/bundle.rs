@@ -1,4 +1,4 @@
-//! Builds the [`SchemaBundle`] (`docs/PLAN.md` §5 steps 1–2 and 5, §5.4).
+//! Builds the [`SchemaBundle`] (`docs/specs/schema-bundle.md`, `docs/specs/wsdl.md`).
 //!
 //! libxml2 imports each target namespace only once: a second `xs:import` of a namespace
 //! with a different location is skipped silently. So every namespace gets exactly one
@@ -7,8 +7,8 @@
 //! - one import target (inline schema, or file reached through an import): that document;
 //! - several (namespace split across files, or several inline schemas sharing a namespace):
 //!   a generated wrapper that `xs:include`s all of them;
-//! - rpc/literal wrappers in that namespace: a generated document holding the wrappers that
-//!   also `xs:include`s the real documents (PLAN §5.4 gotcha).
+//! - rpc/literal wrappers in that namespace: a generated document holding the wrappers that also
+//!   `xs:include`s the real documents (the rpc/literal gotcha in `docs/specs/wsdl.md`).
 //!
 //! The root imports every canonical document once.
 //!

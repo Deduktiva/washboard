@@ -33,8 +33,8 @@ impl SourceFile {
 
 /// The entry WSDL plus every file the user supplied for resolving references.
 ///
-/// Nothing outside this set is ever read: references are matched against it or reported
-/// as unresolved (`docs/PLAN.md` §4 "Create project").
+/// Nothing outside this set is ever read: references are matched against it or reported as
+/// unresolved (`docs/specs/new-project.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sources {
     files: Vec<SourceFile>,

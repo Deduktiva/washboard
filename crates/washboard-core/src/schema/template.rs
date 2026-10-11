@@ -1,4 +1,4 @@
-//! Request body templates (PLAN "Template generation", §5.1).
+//! Request body templates (`docs/specs/schema-model.md`, "Templates").
 //!
 //! The output is meant to be edited, not sent as is: placeholders stand in for values, and
 //! comments say where the schema offers choices. After replacing the placeholders that the

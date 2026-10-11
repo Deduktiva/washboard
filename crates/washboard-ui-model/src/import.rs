@@ -1,7 +1,6 @@
-//! The import sheet shared by New Project and Replace WSDL (PLAN §4 "Create project",
-//! "Replace WSDL"): the import check and schema compile run on a worker whenever the chosen
-//! files change; Create (or Replace) is enabled only when nothing is unresolved and the schema
-//! set compiles.
+//! The import sheet shared by New Project and Replace WSDL (`docs/specs/new-project.md`): the
+//! import check and schema compile run on a worker whenever the chosen files change; Create (or
+//! Replace) is enabled only when nothing is unresolved and the schema set compiles.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

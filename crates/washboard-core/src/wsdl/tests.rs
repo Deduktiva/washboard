@@ -464,7 +464,8 @@ fn legacy_rpc_bundle_includes_real_schema() {
     let rpc = b.get("washboard:/rpc/0.xsd").unwrap();
     assert_eq!(rpc.target_ns, LEGACY);
     assert_eq!(rpc.origin, SchemaOrigin::Generated);
-    // §5.4 gotcha: same namespace as the inline schema, so include it instead of importing.
+    // rpc/literal gotcha (`docs/specs/wsdl.md`): same namespace as the inline schema, so include it
+    // instead of importing.
     assert!(
         rpc.text
             .contains(r#"<xs:include schemaLocation="washboard:/inline/0.xsd"/>"#)

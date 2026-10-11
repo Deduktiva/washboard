@@ -545,8 +545,8 @@ mod checks {
         );
     }
 
-    /// A project window comes back at the size and place it had, and so does its sidebar's
-    /// width (PLAN §3: frames autosaved per project).
+    /// A project window comes back at the size and place it had, and so does its sidebar's width
+    /// (`docs/specs/macos-app-state.md`: frames autosaved per project).
     pub fn window_frames(ctx: &Ctx) {
         let project = ctx.open();
         let window = project.project_window();
@@ -1763,8 +1763,8 @@ mod checks {
         selected_row(project).markers()
     }
 
-    /// Lays out a 1 MB request and prints how long it took (PLAN §4 "Editor": typing must stay
-    /// responsive in a 1 MB file). Printed, not asserted: runner speed varies.
+    /// Lays out a 1 MB request and prints how long it took (`docs/specs/performance.md`: typing
+    /// must stay responsive in a 1 MB file). Printed, not asserted: runner speed varies.
     pub fn editor_1mb_layout(_ctx: &Ctx) {
         let mut text = String::from("<cus:list xmlns:cus=\"urn:example:customer\">\n");
         let mut n = 0;

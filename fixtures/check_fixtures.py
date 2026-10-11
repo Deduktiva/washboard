@@ -7,7 +7,7 @@
 
 Checks that every request in fixtures/*/requests/ produces the outcome stated in its
 `<!-- expect: ... -->` first line. It is a deliberately small re-implementation of the
-validation pipeline from docs/PLAN.md §5/§5.4 and serves two purposes:
+validation pipeline from docs/specs/schema-bundle.md and wsdl.md and serves two purposes:
 
   * proves the fixtures themselves are correct before the Rust code exists, and
   * documents the expected behaviour in executable form.
@@ -116,8 +116,9 @@ def operations(wsdls):
 
 
 def rpc_wrapper_schema(ops, inline, tmp):
-    """Generate wrapper elements for rpc operations (§5.4), including the real schema of the
-    same namespace instead of importing it (libxml2 imports a namespace only once)."""
+    """Generate wrapper elements for rpc operations (docs/specs/wsdl.md), including the real
+    schema of the same namespace instead of importing it (libxml2 imports a namespace only
+    once)."""
     by_ns = {}
     for (ns, local), (style, _, parts) in ops.items():
         if style == "rpc":
