@@ -5,14 +5,11 @@
 //! The same ground truth the lxml oracle (`fixtures/check_fixtures.py`) runs on.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use washboard_core::validate::{self, RequestSchema, Validation};
 use washboard_core::{wsdl, xml};
-
-fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-}
+use washboard_test_support::fixtures;
 
 /// Parses `<!-- expect: valid -->` / `<!-- expect: error line N: text -->`.
 fn expectation(text: &str) -> Option<(u32, String)> {

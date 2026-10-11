@@ -10,27 +10,11 @@ use super::*;
 use crate::diag::Severity;
 use crate::model::SchemaOrigin;
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, XSD_NS};
-use crate::test_support::fixtures;
+use crate::test_support::{customer, fixtures, legacy};
 
 const CUS_SVC: &str = "urn:example:customer:service";
 const CUS_MSG: &str = "urn:example:customer:messages";
 const LEGACY: &str = "urn:example:legacy";
-
-fn customer() -> Wsdl {
-    let dir = fixtures().join("customer");
-    let s = Sources::from_disk(
-        &dir.join("CustomerService.wsdl"),
-        std::slice::from_ref(&dir),
-    )
-    .unwrap();
-    load(&s)
-}
-
-fn legacy() -> Wsdl {
-    let dir = fixtures().join("legacy-rpc");
-    let s = Sources::from_disk(&dir.join("Legacy.wsdl"), &[]).unwrap();
-    load(&s)
-}
 
 fn q(ns: &str, local: &str) -> QName {
     QName::new(ns, local)

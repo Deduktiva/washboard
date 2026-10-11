@@ -396,21 +396,12 @@ fn pos_of(text: &str, n: Node<'_, '_>) -> TextPos {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::*;
     use crate::diag::TextSpan;
-    use crate::wsdl::{self, Sources};
+    use crate::test_support;
 
     fn customer() -> (Wsdl, RequestSchema) {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/customer");
-        let extra: Vec<PathBuf> = ["CustomerBinding.wsdl", "xsd"]
-            .iter()
-            .map(|e| root.join(e))
-            .collect();
-        let w = wsdl::load(
-            &Sources::from_disk(&root.join("CustomerService.wsdl"), &extra).expect("sources"),
-        );
+        let w = test_support::customer();
         let s = RequestSchema::compile(&w.bundle).expect("fixture bundle compiles");
         (w, s)
     }
@@ -577,13 +568,26 @@ mod tests {
         let v = run(&text);
         assert!(v.diagnostics.is_empty(), "{:#?}", v.diagnostics);
 
-        let e = errors(&run(
-            &text.replace("mustUnderstand=\"1\"", "mustUnderstand=\"yes\"")
-        ));
+        let v = run(&text.replace("mustUnderstand=\"1\"", "mustUnderstand=\"yes\""));
+        let e = errors(&v);
         assert_eq!(e.len(), 1, "{e:#?}");
         assert!(
             e[0].starts_with("4:5:") && e[0].contains("must be 0 or 1"),
             "{e:#?}"
+        );
+        // The error spans the attribute, not the element.
+        let p = |line, column| TextPos { line, column };
+        let span = v
+            .diagnostics
+            .iter()
+            .find(|d| d.is_error())
+            .and_then(|d| d.span);
+        assert_eq!(
+            span,
+            Some(TextSpan {
+                start: p(4, 25),
+                end: p(4, 53)
+            })
         );
 
         // Any other attribute in the SOAP namespace is still an error.
@@ -659,24 +663,6 @@ mod tests {
                     "Use one of its substitution group members instead: com:Email, com:Phone."
                 )),
             "{e:#?}"
-        );
-    }
-
-    #[test]
-    fn soap_attribute_errors_span_the_attribute() {
-        let text = GET_CUSTOMER.replace(
-            "<msg:RequestContext>",
-            "<msg:RequestContext soapenv:mustUnderstand=\"yes\">",
-        );
-        let v = run(&text);
-        let d = v.diagnostics.iter().find(|d| d.is_error()).expect("error");
-        let p = |line, column| TextPos { line, column };
-        assert_eq!(
-            d.span,
-            Some(TextSpan {
-                start: p(4, 25),
-                end: p(4, 53)
-            })
         );
     }
 

@@ -1,0 +1,11 @@
+[package]
+name = "washboard-test-support"
+description = "Helpers for the workspace's tests; a dev-dependency only, never shipped."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

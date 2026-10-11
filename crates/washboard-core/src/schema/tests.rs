@@ -1,15 +1,8 @@
-//! Tests against `fixtures/customer` and small inline schemas.
-//!
-//! Bundles are assembled by hand here, not by `wsdl`: the XSD files as they are, and the
-//! `CustomerBinding.wsdl` inline schema extracted by hand with the `wsdl:definitions` namespace
-//! declarations carried over and its `schemaLocation` rewritten to the bundle URI, as PLAN §5
-//! step 1 prescribes.
-
-use std::path::PathBuf;
+//! Tests against `fixtures/customer`, loaded by `wsdl::load`, and small inline schemas.
 
 use crate::model::{QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::soap::{XSD_NS, XSI_NS};
-use crate::xml;
+use crate::test_support;
 
 use super::*;
 
@@ -17,80 +10,6 @@ const CUS: &str = "urn:example:customer";
 const COM: &str = "urn:example:common";
 const MSG: &str = "urn:example:customer:messages";
 const AUDIT: &str = "urn:example:audit";
-
-/// The inline schema of `fixtures/customer/CustomerBinding.wsdl`, extracted.
-const CUSTOMER_INLINE: &str = r#"<xs:schema xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
-                  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
-                  xmlns:soap12="http://schemas.xmlsoap.org/wsdl/soap12/"
-                  xmlns:xs="http://www.w3.org/2001/XMLSchema"
-                  xmlns:tns="urn:example:customer:service"
-                  xmlns:msg="urn:example:customer:messages"
-                  xmlns:cus="urn:example:customer" targetNamespace="urn:example:customer:messages" elementFormDefault="qualified">
-      <xs:import namespace="urn:example:customer" schemaLocation="xsd/customer.xsd"/>
-
-      <xs:element name="RequestContext">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element name="correlationId" type="xs:string"/>
-            <xs:element name="locale" type="xs:language" minOccurs="0"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-
-      <xs:element name="GetCustomer">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element name="customerId" type="cus:CustomerId"/>
-            <xs:element name="includeOrders" type="xs:boolean" minOccurs="0"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-      <xs:element name="GetCustomerResponse">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element ref="cus:Customer"/>
-            <xs:element ref="cus:Order" minOccurs="0" maxOccurs="unbounded"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-
-      <xs:element name="CreateOrder">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element ref="cus:Customer"/>
-            <xs:element ref="cus:Order"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-      <xs:element name="CreateOrderResponse">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element name="orderId" type="xs:string"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-
-      <xs:element name="CustomerFault">
-        <xs:complexType>
-          <xs:sequence>
-            <xs:element name="code" type="xs:int"/>
-            <xs:element name="text" type="xs:string"/>
-          </xs:sequence>
-        </xs:complexType>
-      </xs:element>
-    </xs:schema>"#;
-
-const ROOT: &str = r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:root">
-  <xs:import namespace="urn:example:customer:messages" schemaLocation="washboard:/inline/0.xsd"/>
-</xs:schema>"#;
-
-fn fixture(rel: &str) -> String {
-    let path: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", "..", "fixtures", rel]
-        .iter()
-        .collect();
-    let bytes = std::fs::read(&path).expect("fixture readable");
-    xml::decode(&bytes).expect("fixture decodes").text
-}
 
 fn doc(uri: &str, target_ns: &str, origin: SchemaOrigin, text: String) -> SchemaDoc {
     SchemaDoc {
@@ -101,40 +20,8 @@ fn doc(uri: &str, target_ns: &str, origin: SchemaOrigin, text: String) -> Schema
     }
 }
 
-fn file(uri: &str, target_ns: &str) -> SchemaDoc {
-    let origin = SchemaOrigin::File { path: uri.into() };
-    doc(uri, target_ns, origin, fixture(&format!("customer/{uri}")))
-}
-
-fn customer_bundle() -> SchemaBundle {
-    SchemaBundle {
-        docs: vec![
-            doc(
-                "washboard:/root.xsd",
-                "urn:washboard:root",
-                SchemaOrigin::Generated,
-                ROOT.into(),
-            ),
-            doc(
-                "washboard:/inline/0.xsd",
-                MSG,
-                SchemaOrigin::InlineWsdl {
-                    wsdl_path: "CustomerBinding.wsdl".into(),
-                    index: 0,
-                },
-                CUSTOMER_INLINE.into(),
-            ),
-            file("xsd/customer.xsd", CUS),
-            file("xsd/common/party.xsd", COM),
-            file("xsd/common/party-ids.xsd", COM),
-            file("xsd/ext/audit.xsd", AUDIT),
-        ],
-        root: "washboard:/root.xsd".into(),
-    }
-}
-
 fn model() -> SchemaModel {
-    let m = SchemaModel::build(&customer_bundle());
+    let m = SchemaModel::build(&test_support::customer().bundle);
     assert_eq!(m.warnings(), &[], "fixture bundle builds cleanly");
     m
 }
