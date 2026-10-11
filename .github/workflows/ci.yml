@@ -11,7 +11,7 @@ env:
 
 jobs:
   linux:
-    name: Linux (fmt, clippy, tests)
+    name: Linux (fmt, clippy incl. macOS target, tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets
+      # Lints the macOS code here instead of on the slower macOS runner. washboard-core's test
+      # targets are left out: their TLS dev-dependencies compile C for the target, which needs a
+      # macOS SDK. The env var keeps SQLite from compiling its bundled C for the same reason.
+      - name: cargo clippy (aarch64-apple-darwin)
+        env:
+          LIBSQLITE3_SYS_USE_PKG_CONFIG: 1
+        run: |
+          cargo clippy --target aarch64-apple-darwin --workspace --exclude washboard-core --all-targets
+          cargo clippy --target aarch64-apple-darwin -p washboard-core --lib
       - run: cargo test --workspace
 
   deny:
@@ -47,7 +56,7 @@ jobs:
       - run: uv run --script fixtures/check_fixtures.py
 
   macos:
-    name: macOS (clippy, tests, app bundle)
+    name: macOS (tests, app bundle)
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +65,6 @@ jobs:
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
       - uses: taiki-e/install-action@v2
         with:

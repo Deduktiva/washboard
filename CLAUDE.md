@@ -27,16 +27,17 @@ fixtures/               WSDL/XSD/request fixtures + lxml oracle
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --target aarch64-apple-darwin -- -D warnings   # macOS type-check from Linux
+LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --all-targets --target aarch64-apple-darwin -- -D warnings   # macOS lint from Linux
 cargo deny check bans                                                        # after adding a dependency
 uv run --script fixtures/check_fixtures.py                                   # after changing fixtures
 make app                                                                     # Washboard.app, on a Mac
 ```
 
-Run all of the first four before every commit. CI runs fmt, clippy and tests on Linux and
-clippy and tests on macOS, all with `-D warnings`, plus `cargo deny check bans` (the ban list
-in `deny.toml` enforces the network and no-async rules); the cross-target clippy is the local
-stand-in for the macOS job when you have no Mac.
+Run all of the first four before every commit. CI runs fmt, clippy and tests on Linux, clippy for
+the macOS target cross from Linux, and tests on macOS, all with `-D warnings`, plus
+`cargo deny check bans` (the ban list in `deny.toml` enforces the network and no-async rules).
+The cross-target clippy is what CI lints macOS code with, so a clean run of it locally means the
+macOS job only has the tests left to fail.
 Linking the app needs a Mac; from Linux only type-check it. The env var is needed because no
 macOS SDK is available to compile bundled C code (SQLite) for the Apple target; C code you add
 must likewise skip its build when cross-checking for macOS from another host (see `libxml2-sys`). The toolchain and the
