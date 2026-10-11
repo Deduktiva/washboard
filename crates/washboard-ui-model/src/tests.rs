@@ -16,7 +16,7 @@ use crate::server;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
     HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
-    Reformat, SchemaState, WellFormedness, WsdlServer,
+    ProjectWindow, Reformat, SchemaState, WellFormedness, WsdlServer,
 };
 
 fn fixtures() -> PathBuf {
@@ -300,13 +300,18 @@ fn open_loaded(setup: &Setup, name: &str) -> (Fake, App, ProjectKey) {
     (fake, app, key)
 }
 
+/// Project `key`'s window, which the test expects to be open.
+fn project(app: &App, key: ProjectKey) -> &ProjectWindow {
+    app.project(key).expect("open")
+}
+
 fn loaded(app: &App, key: ProjectKey) -> bool {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     !matches!(window.schema(), SchemaState::Loading)
 }
 
 fn names(app: &App, key: ProjectKey) -> Vec<String> {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window
         .sidebar()
         .requests
@@ -315,8 +320,14 @@ fn names(app: &App, key: ProjectKey) -> Vec<String> {
         .collect()
 }
 
+/// A new request for `LegacyPort`'s Lookup, where New Request puts it.
+fn new_lookup(app: &mut App, key: ProjectKey) -> RequestId {
+    let op = lookup(app, key, "LegacyPort").operation;
+    app.new_request(key, &op, None).expect("new request")
+}
+
 fn lookup(app: &App, key: ProjectKey, port: &str) -> OperationNode {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.sidebar().services[0]
         .ports
         .iter()
@@ -330,7 +341,7 @@ fn lookup(app: &App, key: ProjectKey, port: &str) -> OperationNode {
 fn the_operation_tree_shows_unsupported_operations() {
     let setup = Setup::new();
     let (_fake, app, key) = open_loaded(&setup, "Legacy");
-    let services = &app.project(key).expect("open").sidebar().services;
+    let services = &project(&app, key).sidebar().services;
     assert_eq!(services.len(), 1);
     assert_eq!(services[0].name, "LegacyService");
     let ports: Vec<_> = services[0].ports.iter().map(|p| p.name.as_str()).collect();
@@ -354,34 +365,21 @@ fn new_request_waits_for_the_schema() {
     let (fake, mut app) = setup.launch();
     app.open_project(&folder).expect("open");
     let key = app.projects().next().expect("open").0;
-    assert!(matches!(
-        app.project(key).expect("open").schema(),
-        SchemaState::Loading
-    ));
-    assert!(
-        app.project(key)
-            .expect("open")
-            .sidebar()
-            .services
-            .is_empty()
-    );
+    assert!(matches!(project(&app, key).schema(), SchemaState::Loading));
+    assert!(project(&app, key).sidebar().services.is_empty());
     fake.pump_after_wakes(&mut app, 1);
     assert!(
         app.take_events()
             .contains(&Event::SidebarChanged { project: key })
     );
-    assert!(matches!(
-        app.project(key).expect("open").schema(),
-        SchemaState::Ready(_)
-    ));
+    assert!(matches!(project(&app, key).schema(), SchemaState::Ready(_)));
 }
 
 #[test]
 fn new_request_creates_selects_and_starts_rename() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op, None).expect("new request");
+    let id = new_lookup(&mut app, key);
     assert_eq!(
         app.take_events(),
         [
@@ -395,7 +393,7 @@ fn new_request_creates_selects_and_starts_rename() {
             },
         ]
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), Some(id));
     assert_eq!(names(&app, key), ["Lookup 1"]);
     let text = window.project().read_request(id).expect("read");
@@ -418,8 +416,7 @@ fn unsupported_operations_get_no_request() {
 fn rename_and_duplicate() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op, None).expect("new request");
+    let id = new_lookup(&mut app, key);
     app.rename_request(key, id, "Find customer")
         .expect("rename");
     assert!(matches!(
@@ -428,10 +425,7 @@ fn rename_and_duplicate() {
     ));
     let copy = app.duplicate_request(key, id).expect("duplicate");
     assert_eq!(names(&app, key), ["Find customer", "Find customer copy"]);
-    assert_eq!(
-        app.project(key).expect("open").selected_request(),
-        Some(copy)
-    );
+    assert_eq!(project(&app, key).selected_request(), Some(copy));
 }
 
 #[test]
@@ -478,14 +472,14 @@ fn requests_sort_by_name_and_keep_the_selection() {
     app.rename_request(key, ids[9], "a first one")
         .expect("rename");
     assert_eq!(names(&app, key)[..2], ["a first one", "Lookup 1"]);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), Some(ids[9]));
     assert_eq!(window.sidebar().requests[0].id, ids[9]);
 
     // A new one goes to its place too, not to the end.
     app.rename_request(key, ids[1], "Zulu").expect("rename");
     let new = app.new_request(key, &op, None).expect("new");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let rows = &window.sidebar().requests;
     assert_eq!(rows[2].name, "Lookup 2");
     assert_eq!(rows[2].id, new);
@@ -511,7 +505,7 @@ fn delete_asks_first_and_selects_a_neighbour() {
     app.delete_request(key, first).expect("delete");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert_eq!(names(&app, key), ["Lookup 2"]);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), Some(second));
     let events = app.take_events();
     assert!(events.contains(&Event::SidebarChanged { project: key }));
@@ -530,7 +524,7 @@ fn tree(app: &App, key: ProjectKey) -> Vec<String> {
             out.push(format!("{}{name}", "  ".repeat(depth)));
         }
     }
-    let sidebar = app.project(key).expect("open").sidebar();
+    let sidebar = project(app, key).sidebar();
     let mut out = Vec::new();
     walk(&sidebar.tree, sidebar, 0, &mut out);
     out
@@ -544,7 +538,7 @@ fn new_request_goes_into_the_operations_folder() {
     // One supported port (the other is rpc/encoded): one level, created on first use.
     let first = app.new_request(key, &op, None).expect("new");
     assert_eq!(tree(&app, key), ["Lookup/", "  Lookup 1"]);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(window.path().join(REQUESTS_DIR).join("Lookup").is_dir());
     assert_eq!(
         window.sidebar().request(first).expect("row").folder,
@@ -612,7 +606,7 @@ fn folder_commands_rename_move_and_delete() {
         tree(&app, key),
         ["Lookup/", "  Archive/", "    Lookup 1", "  Lookup 2"]
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), Some(a));
     assert_eq!(window.editor().map(|e| e.request()), Some(a));
     assert!(window.can_move_folder("Lookup/Archive", ""));
@@ -646,7 +640,7 @@ fn folder_commands_rename_move_and_delete() {
     let confirm = fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert_eq!(confirm.title, "Delete “Archive” and its 2 requests?");
     assert_eq!(tree(&app, key), ["Lookup/", "  Lookup 2"]);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), Some(b));
     assert!(!window.path().join(REQUESTS_DIR).join("Archive").exists());
 
@@ -660,15 +654,12 @@ fn folder_commands_rename_move_and_delete() {
 fn collapsed_folders_survive_a_relaunch_and_follow_renames() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op, None).expect("new");
+    new_lookup(&mut app, key);
     app.new_folder(key, "Lookup").expect("new folder");
     app.set_folder_collapsed(key, "Lookup/New Folder", true)
         .expect("collapse");
     app.rename_folder(key, "Lookup", "Renamed").expect("rename");
-    let collapsed: Vec<_> = app
-        .project(key)
-        .expect("open")
+    let collapsed: Vec<_> = project(&app, key)
         .collapsed_folders()
         .iter()
         .cloned()
@@ -681,9 +672,7 @@ fn collapsed_folders_survive_a_relaunch_and_follow_renames() {
 
     let (_fake, mut app) = setup.launch();
     let key = app.projects().next().expect("open").0;
-    let collapsed: Vec<_> = app
-        .project(key)
-        .expect("open")
+    let collapsed: Vec<_> = project(&app, key)
         .collapsed_folders()
         .iter()
         .cloned()
@@ -692,7 +681,7 @@ fn collapsed_folders_survive_a_relaunch_and_follow_renames() {
     // A request created in a collapsed folder shows it expanded.
     app.new_folder(key, "Renamed/New Folder")
         .expect("new folder");
-    let collapsed = app.project(key).expect("open").collapsed_folders();
+    let collapsed = project(&app, key).collapsed_folders();
     assert!(collapsed.is_empty(), "{collapsed:?}");
 }
 
@@ -700,11 +689,10 @@ fn collapsed_folders_survive_a_relaunch_and_follow_renames() {
 fn deleting_the_last_request_clears_the_selection() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op, None).expect("new");
+    let id = new_lookup(&mut app, key);
     app.delete_request(key, id).expect("delete");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
-    assert_eq!(app.project(key).expect("open").selected_request(), None);
+    assert_eq!(project(&app, key).selected_request(), None);
 }
 
 #[test]
@@ -714,7 +702,7 @@ fn the_server_popup_follows_the_request() {
     let op = lookup(&app, key, "LegacyPort").operation;
     let a = app.add_server(key).expect("add");
     let b = app.add_server(key).expect("add");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.servers().len(), 2);
     assert_eq!(
         window.selected_server(),
@@ -726,18 +714,18 @@ fn the_server_popup_follows_the_request() {
     app.choose_server(key, b).expect("choose");
     let second = app.new_request(key, &op, None).expect("new");
     assert_eq!(
-        app.project(key).expect("open").selected_server(),
+        project(&app, key).selected_server(),
         Some(b),
         "a new request starts with the last used server"
     );
     app.choose_server(key, a).expect("choose");
     app.select_request(key, Some(first)).expect("select");
-    assert_eq!(app.project(key).expect("open").selected_server(), Some(b));
+    assert_eq!(project(&app, key).selected_server(), Some(b));
     app.select_request(key, Some(second)).expect("select");
-    assert_eq!(app.project(key).expect("open").selected_server(), Some(a));
+    assert_eq!(project(&app, key).selected_server(), Some(a));
 
     app.delete_server(key, a).expect("delete");
-    assert_eq!(app.project(key).expect("open").selected_server(), Some(b));
+    assert_eq!(project(&app, key).selected_server(), Some(b));
 }
 
 #[test]
@@ -745,7 +733,7 @@ fn server_passwords_go_to_the_secret_store() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let id = app.add_server(key).expect("add");
-    let mut server = app.project(key).expect("open").servers()[0].clone();
+    let mut server = project(&app, key).servers()[0].clone();
     server.name = "Staging".into();
     server.auth = Auth::Basic {
         username: "alice".into(),
@@ -756,7 +744,7 @@ fn server_passwords_go_to_the_secret_store() {
         app.take_events().first(),
         Some(&Event::ServersChanged { project: key })
     );
-    assert_eq!(app.project(key).expect("open").servers()[0].name, "Staging");
+    assert_eq!(project(&app, key).servers()[0].name, "Staging");
     assert_eq!(
         app.server_password(key, id).expect("pw").as_deref(),
         Some("s3cret")
@@ -783,10 +771,10 @@ fn a_server_is_deleted_after_confirmation() {
     app.ask_delete_server(key, id).expect("ask");
     let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
     assert_eq!(confirm.title, "Delete “New Server”?");
-    assert_eq!(app.project(key).expect("open").servers().len(), 1);
+    assert_eq!(project(&app, key).servers().len(), 1);
     app.ask_delete_server(key, id).expect("ask");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
-    assert!(app.project(key).expect("open").servers().is_empty());
+    assert!(project(&app, key).servers().is_empty());
 }
 
 #[test]
@@ -820,17 +808,17 @@ fn with_requests(setup: &Setup, name: &str) -> (Fake, App, ProjectKey, RequestId
 }
 
 fn editor_text(app: &App, key: ProjectKey) -> String {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.editor().expect("editor").text().to_owned()
 }
 
 fn on_disk(app: &App, key: ProjectKey, request: RequestId) -> String {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.project().read_request(request).expect("read")
 }
 
 fn request_file(app: &App, key: ProjectKey, request: RequestId) -> PathBuf {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.project().request_path(request).expect("path")
 }
 
@@ -842,10 +830,10 @@ fn selecting_a_request_opens_it_in_the_editor() {
     app.select_request(key, Some(second)).expect("select");
     let events = app.take_events();
     assert!(events.contains(&Event::EditorReplaced { project: key }));
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.editor().expect("editor").request(), second);
     app.select_request(key, None).expect("select");
-    assert!(app.project(key).expect("open").editor().is_none());
+    assert!(project(&app, key).editor().is_none());
     assert!(matches!(
         app.edit(key, 0..0, "x"),
         Err(ModelError::NoRequestSelected)
@@ -856,7 +844,7 @@ fn selecting_a_request_opens_it_in_the_editor() {
 fn an_edit_marks_dirty_and_retokenizes_in_utf16() {
     let setup = Setup::new();
     let (_fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
-    let editor = app.project(key).expect("open").editor().expect("editor");
+    let editor = project(&app, key).editor().expect("editor");
     let (len, loaded_version) = (editor.utf16_len(), editor.version());
     app.edit(key, len..len, "<!--😀-->").expect("edit");
     let events = app.take_events();
@@ -872,7 +860,7 @@ fn an_edit_marks_dirty_and_retokenizes_in_utf16() {
         ]
     );
     // The comment is one token of 9 UTF-16 units (the emoji counts two).
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let editor = window.editor().expect("editor");
     assert_eq!(
         editor.tokens_utf16(len..len + 9),
@@ -930,7 +918,7 @@ fn autosave_runs_a_second_after_the_last_edit() {
             Event::EditedChanged { project: key },
         ]
     );
-    assert!(!app.project(key).expect("open").edited());
+    assert!(!project(&app, key).edited());
     assert_eq!(fake.running_timers(), 0);
 }
 
@@ -942,7 +930,7 @@ fn switching_requests_saves_first() {
     app.select_request(key, Some(second)).expect("select");
     assert!(on_disk(&app, key, first).starts_with("<!--a-->"));
     assert_eq!(fake.running_timers(), 0);
-    assert!(!app.project(key).expect("open").edited());
+    assert!(!project(&app, key).edited());
 }
 
 #[test]
@@ -1011,7 +999,7 @@ fn deleting_an_edited_request_drops_its_edits() {
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert!(fake.alerts().is_empty());
     assert_eq!(fake.running_timers(), 0);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.editor().expect("editor").request(), second);
     assert!(!window.edited());
 }
@@ -1077,19 +1065,19 @@ fn next_check(fake: &Fake, app: &mut App, key: ProjectKey) -> Vec<Issue> {
     let changed = Event::DiagnosticsChanged { project: key };
     fake.pump_until(app, |app| app.events.contains(&changed));
     app.take_events();
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.editor().expect("editor").issues().to_vec()
 }
 
 /// Replaces the editor's whole text.
 fn set_text(app: &mut App, key: ProjectKey, text: &str) {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     let len = window.editor().expect("editor").utf16_len();
     app.edit(key, 0..len, text).expect("edit");
 }
 
 fn invalid_marker(app: &App, key: ProjectKey, request: RequestId) -> bool {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     let row = window.sidebar().requests.iter().find(|r| r.id == request);
     row.expect("row").invalid
 }
@@ -1098,8 +1086,7 @@ fn invalid_marker(app: &App, key: ProjectKey, request: RequestId) -> bool {
 fn an_opened_request_is_validated() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op, None).expect("new");
+    new_lookup(&mut app, key);
     assert_eq!(next_check(&fake, &mut app, key), []);
 }
 
@@ -1128,7 +1115,7 @@ fn well_formedness_is_checked_150_ms_after_the_last_edit() {
 }
 
 fn well_formedness(app: &App, key: ProjectKey) -> WellFormedness {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.editor().expect("editor").well_formedness()
 }
 
@@ -1139,7 +1126,7 @@ fn the_request_summary_follows_checks_and_renames() {
     let op = lookup(&app, key, "LegacyPort").operation;
     app.new_request(key, &op, None).expect("new");
     assert_eq!(well_formedness(&app, key), WellFormedness::Pending);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let summary = window.request_summary().expect("a request is open");
     assert_eq!(summary.name, names(&app, key)[0]);
     assert_eq!(summary.operation.as_ref(), Some(&op));
@@ -1167,13 +1154,9 @@ fn the_request_summary_follows_checks_and_renames() {
     assert!(issues.iter().any(Issue::is_error), "{issues:?}");
     assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
 
-    let id = app
-        .project(key)
-        .expect("open")
-        .selected_request()
-        .expect("selected");
+    let id = project(&app, key).selected_request().expect("selected");
     app.rename_request(key, id, "Renamed").expect("rename");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.request_summary().expect("open").name, "Renamed");
 }
 
@@ -1223,7 +1206,7 @@ fn schema_errors_come_from_the_full_check_after_a_second() {
 }
 
 fn basis(app: &App, key: ProjectKey) -> IssuesBasis {
-    let window = app.project(key).expect("open");
+    let window = project(app, key);
     window.editor().expect("editor").issues_basis()
 }
 
@@ -1241,14 +1224,7 @@ fn results_for_an_older_text_are_dropped() {
             .contains(&Event::DiagnosticsChanged { project: key }),
         "the result for `<a>` must not be shown for `<a></a>`"
     );
-    assert_eq!(
-        app.project(key)
-            .expect("open")
-            .editor()
-            .expect("editor")
-            .issues(),
-        []
-    );
+    assert_eq!(project(&app, key).editor().expect("editor").issues(), []);
 }
 
 #[test]
@@ -1259,7 +1235,7 @@ fn results_for_another_request_are_dropped() {
     app.validate(key).expect("validate");
     app.select_request(key, Some(second)).expect("select");
     fake.pump_until(&mut app, |app| app.jobs_running() == 0);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.editor().expect("editor").issues(), []);
 }
 
@@ -1271,8 +1247,7 @@ fn without_a_schema_only_well_formedness_is_checked() {
         let (fake, mut app) = setup.launch();
         let key = app.open_project(&folder).expect("open");
         fake.pump_until(&mut app, |app| loaded(app, key));
-        let op = lookup(&app, key, "LegacyPort").operation;
-        app.new_request(key, &op, None).expect("new");
+        new_lookup(&mut app, key);
         assert!(app.quit().expect("quit"));
     }
     fs::remove_file(folder.join("wsdl/Legacy.wsdl")).expect("remove");
@@ -1281,7 +1256,7 @@ fn without_a_schema_only_well_formedness_is_checked() {
     let key = app.projects().next().expect("open").0;
     let issues = next_check(&fake, &mut app, key);
     assert!(matches!(
-        app.project(key).expect("open").schema(),
+        project(&app, key).schema(),
         SchemaState::Failed(_)
     ));
     assert_eq!(issues.len(), 1, "{issues:?}");
@@ -1300,11 +1275,18 @@ const FAULT: &str = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.or
 const OK_BODY: &str = "<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\">\
 <soapenv:Body><r/></soapenv:Body></soapenv:Envelope>";
 
+/// Points the project's first server at `url`.
+fn set_server_url(app: &mut App, key: ProjectKey, url: String) {
+    let mut server = project(app, key).servers()[0].clone();
+    server.url = url;
+    app.update_server(key, &server, None).expect("update");
+}
+
 /// A project with one request and a server pointing at `url`, selected.
 fn ready_to_send(setup: &Setup, url: &str) -> (Fake, App, ProjectKey, RequestId) {
     let (fake, mut app, key, first, _) = with_requests(setup, "Legacy");
     let id = app.add_server(key).expect("add");
-    let mut server = app.project(key).expect("open").servers()[0].clone();
+    let mut server = project(&app, key).servers()[0].clone();
     server.url = url.to_owned();
     server.auth = Auth::Basic {
         username: "alice".into(),
@@ -1318,7 +1300,7 @@ fn ready_to_send(setup: &Setup, url: &str) -> (Fake, App, ProjectKey, RequestId)
 
 fn send_and_wait(fake: &Fake, app: &mut App, key: ProjectKey) -> Vec<Event> {
     app.send(key).expect("send");
-    assert!(app.project(key).expect("open").sending());
+    assert!(project(app, key).sending());
     fake.pump_until(app, |app| app.jobs_running() == 0);
     app.take_events()
 }
@@ -1341,7 +1323,7 @@ fn send_shows_the_response_and_records_history() {
     assert!(wire.starts_with("POST /soap HTTP/1.1"), "{wire}");
     assert!(wire.contains("<tns:Lookup>"), "{wire}");
 
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(!window.sending());
     let response = window.response().expect("response");
     assert_eq!(response.status, Some(200));
@@ -1399,11 +1381,11 @@ fn responses_name_their_server_after_renames_and_deletes() {
     let (fake, mut app, key, _) = ready_to_send(&setup, &url);
     send_and_wait(&fake, &mut app, key);
     let label = |app: &App| {
-        let window = app.project(key).expect("open");
+        let window = project(app, key);
         let response = window.response().expect("response");
         window.server_label(response.server, &response.url)
     };
-    let mut server = app.project(key).expect("open").servers()[0].clone();
+    let mut server = project(&app, key).servers()[0].clone();
     assert_eq!(label(&app), server.name);
 
     server.name = "Renamed".into();
@@ -1425,7 +1407,7 @@ fn faults_are_called_out() {
     let (url, _server) = server::serve_once("500 Internal Server Error", FAULT, Duration::ZERO);
     let (fake, mut app, key, _) = ready_to_send(&setup, &url);
     send_and_wait(&fake, &mut app, key);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let response = window.response().expect("response");
     assert_eq!(response.status, Some(500));
     let fault = response.fault.as_ref().expect("fault");
@@ -1439,7 +1421,7 @@ fn a_transport_error_is_shown_and_recorded() {
     let url = server::closed_port_url();
     let (fake, mut app, key, _) = ready_to_send(&setup, &url);
     send_and_wait(&fake, &mut app, key);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let response = window.response().expect("response");
     assert!(response.error.is_some());
     assert_eq!(response.status, None);
@@ -1457,7 +1439,7 @@ fn send_refuses_an_invalid_request() {
         events.contains(&Event::ShowIssues { project: key }),
         "{events:?}"
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(
         window
             .editor()
@@ -1483,14 +1465,14 @@ fn a_cancelled_send_is_ignored() {
     app.send(key).expect("send");
     assert!(matches!(app.send(key), Err(ModelError::AlreadySending)));
     app.cancel_send(key);
-    assert!(!app.project(key).expect("open").sending());
+    assert!(!project(&app, key).sending());
     fake.pump_until(&mut app, |app| app.jobs_running() == 0);
     let events = app.take_events();
     assert!(
         !events.contains(&Event::ResponseChanged { project: key }),
         "{events:?}"
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(window.response().is_none());
     assert!(window.history().is_empty());
     assert!(app.http_log().is_empty());
@@ -1502,12 +1484,10 @@ fn sent_twice(setup: &Setup) -> (Fake, App, ProjectKey, RequestId, String) {
     let (fake, mut app, key, first) = ready_to_send(setup, &url);
     let sent = editor_text(&app, key);
     send_and_wait(&fake, &mut app, key);
-    let mut server = app.project(key).expect("open").servers()[0].clone();
-    server.url = server::closed_port_url();
-    app.update_server(key, &server, None).expect("update");
+    set_server_url(&mut app, key, server::closed_port_url());
     set_text(&mut app, key, &sent.replace("2026-01-01", "2027-01-01"));
     send_and_wait(&fake, &mut app, key);
-    assert_eq!(app.project(key).expect("open").history().len(), 2);
+    assert_eq!(project(&app, key).history().len(), 2);
     (fake, app, key, first, sent)
 }
 
@@ -1515,7 +1495,7 @@ fn sent_twice(setup: &Setup) -> (Fake, App, ProjectKey, RequestId, String) {
 fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
     let setup = Setup::new();
     let (_fake, mut app, key, _, sent) = sent_twice(&setup);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let (newest, older) = (window.history()[0].id, window.history()[1].id);
     assert!(window.older_exchange().is_none(), "the latest is shown");
     let latest = window.response().expect("response");
@@ -1531,7 +1511,7 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
     ] {
         assert!(events.contains(&e), "{e:?} in {events:?}");
     }
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let shown = window.older_exchange().expect("an older exchange");
     assert_eq!(shown.entry, older);
     assert_eq!(shown.request, sent, "the request as sent");
@@ -1547,17 +1527,17 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
     );
 
     assert!(matches!(app.send(key), Err(ModelError::OlderExchangeShown)));
-    assert!(!app.project(key).expect("open").sending());
+    assert!(!project(&app, key).sending());
     assert_eq!(app.jobs_running(), 0, "nothing started");
 
     // Show Latest, and picking the newest row, both return to the latest exchange.
     app.show_latest(key).expect("latest");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(window.older_exchange().is_none());
     assert!(window.response().expect("response").error.is_some());
     app.show_history(key, older).expect("show");
     app.show_history(key, newest).expect("show newest");
-    assert!(app.project(key).expect("open").older_exchange().is_none());
+    assert!(project(&app, key).older_exchange().is_none());
     assert!(matches!(
         app.restore_request(key),
         Err(ModelError::NoOlderExchange)
@@ -1568,10 +1548,8 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
 fn switching_requests_and_a_finished_send_return_to_the_latest() {
     let setup = Setup::new();
     let (fake, mut app, key, first, _) = sent_twice(&setup);
-    let older = app.project(key).expect("open").history()[1].id;
-    let second = app
-        .project(key)
-        .expect("open")
+    let older = project(&app, key).history()[1].id;
+    let second = project(&app, key)
         .sidebar()
         .requests
         .iter()
@@ -1586,15 +1564,13 @@ fn switching_requests_and_a_finished_send_return_to_the_latest() {
         app.take_events()
             .contains(&Event::ShownExchangeChanged { project: key })
     );
-    assert!(app.project(key).expect("open").older_exchange().is_none());
+    assert!(project(&app, key).older_exchange().is_none());
     app.select_request(key, Some(first)).expect("select");
-    assert!(app.project(key).expect("open").older_exchange().is_none());
+    assert!(project(&app, key).older_exchange().is_none());
 
     // A send started from the latest finishes after an older exchange was picked.
     let (url, _server) = server::serve_once("200 OK", OK_BODY, ms(200));
-    let mut server = app.project(key).expect("open").servers()[0].clone();
-    server.url = url;
-    app.update_server(key, &server, None).expect("update");
+    set_server_url(&mut app, key, url);
     app.send(key).expect("send");
     app.show_history(key, older).expect("show");
     fake.pump_until(&mut app, |app| app.jobs_running() == 0);
@@ -1603,7 +1579,7 @@ fn switching_requests_and_a_finished_send_return_to_the_latest() {
         events.contains(&Event::ShownExchangeChanged { project: key }),
         "{events:?}"
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(window.older_exchange().is_none());
     assert_eq!(window.history().len(), 3);
     assert_eq!(
@@ -1616,11 +1592,11 @@ fn switching_requests_and_a_finished_send_return_to_the_latest() {
 fn restore_request_hands_back_the_sent_text() {
     let setup = Setup::new();
     let (_fake, mut app, key, first, sent) = sent_twice(&setup);
-    let older = app.project(key).expect("open").history()[1].id;
+    let older = project(&app, key).history()[1].id;
     app.show_history(key, older).expect("show");
     let text = app.restore_request(key).expect("restore");
     assert_eq!(text, sent);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(window.older_exchange().is_none(), "back to the latest");
     assert!(
         editor_text(&app, key).contains("2027-01-01"),
@@ -1628,11 +1604,10 @@ fn restore_request_hands_back_the_sent_text() {
     );
 
     // Another request has no history; coming back shows the last response again.
-    let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op, None).expect("new");
-    assert!(app.project(key).expect("open").response().is_none());
+    new_lookup(&mut app, key);
+    assert!(project(&app, key).response().is_none());
     app.select_request(key, Some(first)).expect("select");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(
         window.response().expect("response").history,
         Some(window.history()[0].id)
@@ -1643,17 +1618,17 @@ fn restore_request_hands_back_the_sent_text() {
 fn the_history_drawer_is_remembered_per_project() {
     let setup = Setup::new();
     let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
-    let drawer = app.project(key).expect("open").history_drawer();
+    let drawer = project(&app, key).history_drawer();
     assert_eq!(drawer, HistoryDrawer::default(), "closed at first");
     let open = HistoryDrawer {
         open: true,
         height: Some(168.4),
     };
     app.set_history_drawer(key, open).expect("set");
-    let path = app.project(key).expect("open").path().to_owned();
+    let path = project(&app, key).path().to_owned();
     assert!(app.close_project(key));
     let key = app.open_project(&path).expect("reopen");
-    let drawer = app.project(key).expect("open").history_drawer();
+    let drawer = project(&app, key).history_drawer();
     assert_eq!(
         drawer,
         HistoryDrawer {
@@ -1670,7 +1645,7 @@ fn the_history_drawer_is_remembered_per_project() {
     )
     .expect("set");
     assert_eq!(
-        app.project(key).expect("open").history_drawer(),
+        project(&app, key).history_drawer(),
         HistoryDrawer::default()
     );
 }
@@ -1680,11 +1655,19 @@ fn send_needs_a_server() {
     let setup = Setup::new();
     let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
     assert!(matches!(app.send(key), Err(ModelError::NoServer)));
-    assert!(!app.project(key).expect("open").sending());
+    assert!(!project(&app, key).sending());
 }
 
 fn customer() -> PathBuf {
     fixtures().join("customer")
+}
+
+/// Starts `target`'s import sheet on `fixtures/customer` with `extra`, and waits for its check.
+fn import_customer(fake: &Fake, app: &mut App, target: ImportTarget, extra: Vec<PathBuf>) {
+    app.begin_import(target);
+    app.set_import_files(target, customer().join("CustomerService.wsdl"), extra)
+        .expect("files");
+    fake.pump_until(app, |app| checked(app, target));
 }
 
 fn checked(app: &App, target: ImportTarget) -> bool {
@@ -1730,10 +1713,7 @@ fn files_next_to_the_wsdl_are_found_without_adding_them() {
     let setup = Setup::new();
     let (fake, mut app) = setup.launch();
     let target = ImportTarget::NewProject;
-    app.begin_import(target);
-    app.set_import_files(target, customer().join("CustomerService.wsdl"), Vec::new())
-        .expect("files");
-    fake.pump_until(&mut app, |app| checked(app, target));
+    import_customer(&fake, &mut app, target, Vec::new());
     let sheet = app.import_sheet(target).expect("sheet");
     let CheckState::Done(result) = &sheet.check else {
         panic!("{:?}", sheet.check);
@@ -1753,14 +1733,7 @@ fn create_copies_and_opens_with_the_wsdl_servers() {
     let setup = Setup::new();
     let (fake, mut app) = setup.launch();
     let target = ImportTarget::NewProject;
-    app.begin_import(target);
-    app.set_import_files(
-        target,
-        customer().join("CustomerService.wsdl"),
-        vec![customer()],
-    )
-    .expect("files");
-    fake.pump_until(&mut app, |app| checked(app, target));
+    import_customer(&fake, &mut app, target, vec![customer()]);
     let sheet = app.import_sheet(target).expect("sheet");
     assert!(!sheet.can_finish(target), "no name and folder yet");
     app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
@@ -1775,13 +1748,13 @@ fn create_copies_and_opens_with_the_wsdl_servers() {
     assert_eq!(app.recent_projects()[0], folder);
     assert!(!app.welcome_visible());
 
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(
         window.wsdl_servers().is_empty(),
         "none while the schema loads"
     );
     fake.pump_until(&mut app, |app| loaded(app, key));
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(
         window.servers().is_empty(),
         "nothing connects before the user adds a server"
@@ -1794,25 +1767,25 @@ fn create_copies_and_opens_with_the_wsdl_servers() {
 
     // Adding it as a server leaves the WSDL's row as it is.
     let id = app.add_server(key).expect("add");
-    let mut server = app.project(key).expect("open").servers()[0].clone();
+    let mut server = project(&app, key).servers()[0].clone();
     assert_eq!(server.id, id);
     server.name = customer_port().port;
     server.url = customer_port().url;
     app.update_server(key, &server, None).expect("save");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.servers().len(), 1);
     assert_eq!(window.wsdl_servers(), [customer_port()]);
 
     // Reopened, the addresses come from the WSDL again; nothing was stored for them.
     assert!(app.close_project(key));
     let key = app.open_project(&folder).expect("reopen");
-    assert!(app.project(key).expect("open").wsdl_servers().is_empty());
+    assert!(project(&app, key).wsdl_servers().is_empty());
     fake.pump_until(&mut app, |app| loaded(app, key));
     assert!(
         app.take_events()
             .contains(&Event::ServersChanged { project: key })
     );
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.wsdl_servers(), [customer_port()]);
     assert_eq!(window.servers().len(), 1);
 }
@@ -1828,7 +1801,7 @@ fn customer_port() -> WsdlServer {
 fn wsdl_servers_follow_replace_wsdl() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let ports: Vec<String> = window.wsdl_servers().into_iter().map(|s| s.port).collect();
     assert_eq!(
         ports,
@@ -1840,24 +1813,14 @@ fn wsdl_servers_follow_replace_wsdl() {
         "http://legacy.example.invalid/rpc"
     );
     let target = ImportTarget::ReplaceWsdl(key);
-    app.begin_import(target);
-    app.set_import_files(
-        target,
-        customer().join("CustomerService.wsdl"),
-        vec![customer()],
-    )
-    .expect("files");
-    fake.pump_until(&mut app, |app| checked(app, target));
+    import_customer(&fake, &mut app, target, vec![customer()]);
     app.replace_wsdl(key).expect("replace");
     assert!(
-        app.project(key).expect("open").wsdl_servers().is_empty(),
+        project(&app, key).wsdl_servers().is_empty(),
         "none while the new WSDL loads"
     );
     fake.pump_until(&mut app, |app| loaded(app, key));
-    assert_eq!(
-        app.project(key).expect("open").wsdl_servers(),
-        [customer_port()]
-    );
+    assert_eq!(project(&app, key).wsdl_servers(), [customer_port()]);
 }
 
 #[test]
@@ -1865,20 +1828,13 @@ fn replace_wsdl_revalidates_every_request() {
     let setup = Setup::new();
     let (fake, mut app, key, first, second) = with_requests(&setup, "Legacy");
     let target = ImportTarget::ReplaceWsdl(key);
-    app.begin_import(target);
-    app.set_import_files(
-        target,
-        customer().join("CustomerService.wsdl"),
-        vec![customer()],
-    )
-    .expect("files");
-    fake.pump_until(&mut app, |app| checked(app, target));
+    import_customer(&fake, &mut app, target, vec![customer()]);
     app.replace_wsdl(key).expect("replace");
     let replaced = Event::WsdlReplaced { project: key };
     fake.pump_until(&mut app, |app| app.events.contains(&replaced));
     settle(&fake, &mut app);
 
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let outcome = window.replace_outcome().expect("outcome");
     assert!(
         outcome.removed.iter().any(|op| op.operation == "Lookup"),
@@ -1913,19 +1869,12 @@ fn replace_wsdl_revalidates_every_request() {
 fn customer_editor(setup: &Setup) -> (Fake, App, ProjectKey, String) {
     let (fake, mut app) = setup.launch();
     let target = ImportTarget::NewProject;
-    app.begin_import(target);
+    import_customer(&fake, &mut app, target, vec![customer()]);
     app.set_import_destination("Customers", Some(setup.tmp.path().to_owned()))
         .expect("destination");
-    app.set_import_files(
-        target,
-        customer().join("CustomerService.wsdl"),
-        vec![customer()],
-    )
-    .expect("files");
-    fake.pump_until(&mut app, |app| checked(app, target));
     let key = app.create_project().expect("create");
     fake.pump_until(&mut app, |app| loaded(app, key));
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let op = window.sidebar().services[0].ports[0]
         .operations
         .iter()
@@ -2059,7 +2008,7 @@ fn format_xml_reindents_as_an_edit_and_keeps_the_selection() {
     assert_eq!(&expected[reformat.selection.clone()], "y");
     // The smallest edit: the unchanged `<a>` is not part of it.
     assert_eq!(reformat.range.start, 3, "{text:?}");
-    assert!(app.project(key).expect("open").edited(), "dirty");
+    assert!(project(&app, key).edited(), "dirty");
     fake.advance(&mut app, ms(1000));
     assert_eq!(on_disk(&app, key, first), expected, "autosaved");
 
@@ -2130,14 +2079,14 @@ fn new_requests_and_responses_use_the_indent() {
     });
     send_and_wait(&fake, &mut app, key);
     server.join().expect("server");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let body = window.response().expect("response").body.clone();
     assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 4).ok());
     // Coming back to the request shows its history entry at the new width.
     app.set_format_settings(FormatSettings::default());
     app.select_request(key, None).expect("deselect");
     app.select_request(key, Some(first)).expect("select");
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     let body = window.response().expect("response").body.clone();
     assert_eq!(body, washboard_core::xml::pretty_print(OK_BODY, 2).ok());
 
@@ -2145,8 +2094,7 @@ fn new_requests_and_responses_use_the_indent() {
         indent: 4,
         on_save: false,
     });
-    let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op, None).expect("new");
+    new_lookup(&mut app, key);
     let text = editor_text(&app, key);
     assert!(text.contains("\n    <soapenv:Body>"), "{text}");
     assert_eq!(formatted(&app, key, 0..0), None, "{text}");
@@ -2169,7 +2117,7 @@ fn a_request_changed_outside_reloads_without_unsaved_edits() {
             .contains(&Event::EditorReplaced { project: key })
     );
     assert_eq!(confirms(&fake), 0, "nothing asked");
-    assert!(!app.project(key).expect("open").edited());
+    assert!(!project(&app, key).edited());
 }
 
 #[test]
@@ -2213,7 +2161,7 @@ fn unsaved_edits_and_an_outside_change_ask_and_reload() {
     assert_eq!(confirm.action, "Reload");
     assert_eq!(confirm.cancel.as_deref(), Some("Keep Edits"));
     assert_eq!(editor_text(&app, key), theirs);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert!(!window.edited());
     assert!(!window.sidebar().request(first).expect("row").dirty);
     assert!(
@@ -2232,7 +2180,7 @@ fn keep_edits_saves_them_over_the_outside_change() {
     app.rescan(key);
     fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
     assert_eq!(on_disk(&app, key, first), mine);
-    assert!(!app.project(key).expect("open").edited());
+    assert!(!project(&app, key).edited());
     // Saved over that change; the next one asks again.
     app.edit(key, 0..0, "<!--more-->").expect("edit");
     fs::write(request_file(&app, key, first), "<!--again-->").expect("write");
@@ -2253,10 +2201,7 @@ fn autosave_never_overwrites_an_unreported_outside_change() {
         app.select_request(key, Some(second)),
         Err(ModelError::ChangedOnDisk)
     ));
-    assert_eq!(
-        app.project(key).expect("open").selected_request(),
-        Some(first)
-    );
+    assert_eq!(project(&app, key).selected_request(), Some(first));
     assert!(!app.close_project(key), "stays open with the question up");
     assert_eq!(confirms(&fake), 1, "still the one question");
 }
@@ -2265,7 +2210,7 @@ fn autosave_never_overwrites_an_unreported_outside_change() {
 fn request_files_added_or_removed_outside_update_the_sidebar() {
     let setup = Setup::new();
     let (fake, mut app, key, first, second) = with_requests(&setup, "Legacy");
-    let dir = app.project(key).expect("open").path().join(REQUESTS_DIR);
+    let dir = project(&app, key).path().join(REQUESTS_DIR);
     fs::write(dir.join("Extra.xml"), "<extra/>").expect("write");
     app.rescan(key);
     assert!(names(&app, key).contains(&"Extra".to_owned()));
@@ -2279,7 +2224,7 @@ fn request_files_added_or_removed_outside_update_the_sidebar() {
     let file = request_file(&app, key, first);
     fs::remove_file(&file).expect("remove");
     app.rescan(key);
-    let window = app.project(key).expect("open");
+    let window = project(&app, key);
     assert_eq!(window.selected_request(), None);
     assert!(window.editor().is_none());
     assert!(!window.edited());
