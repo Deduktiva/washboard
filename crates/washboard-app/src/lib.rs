@@ -21,8 +21,6 @@ mod form;
 #[cfg(target_os = "macos")]
 mod front_end;
 #[cfg(target_os = "macos")]
-mod http_log;
-#[cfg(target_os = "macos")]
 mod layout;
 #[cfg(target_os = "macos")]
 mod menu;
@@ -56,8 +54,6 @@ pub use app_settings::{INDENT_KEY, ON_SAVE_KEY};
 pub use editor::{EditorController, LineNumberRuler, highlight_palette};
 #[cfg(target_os = "macos")]
 pub use form::{GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, ROW_INSET, TEXT_ID};
-#[cfg(target_os = "macos")]
-pub use http_log::HttpLog;
 #[cfg(target_os = "macos")]
 pub use operation_picker::OperationPicker;
 #[cfg(target_os = "macos")]

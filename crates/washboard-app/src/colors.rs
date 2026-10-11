@@ -14,7 +14,7 @@ pub fn error() -> Retained<NSColor> {
 }
 
 /// Warnings: the issues bar's "schema not checked" and warning count, the editor's ruler
-/// markers for lines with only warnings, the HTTP log's skipped certificate check.
+/// markers for lines with only warnings.
 pub fn warning() -> Retained<NSColor> {
     NSColor::systemOrangeColor()
 }

@@ -38,7 +38,7 @@ pub use front_end::{
 };
 pub use import::{CheckState, CheckedImport, ImportSheet, ImportTarget, ReplaceOutcome};
 pub use picker::{PickerSection, pick_operations};
-pub use send::{HistoryDrawer, LOG_CAPACITY, LogEntry, OlderExchange, ResponseView};
+pub use send::{HistoryDrawer, OlderExchange, ResponseView};
 pub use window::{
     FolderNode, OperationNode, PortNode, ProjectSchema, ProjectWindow, RequestRow, RequestSummary,
     SchemaState, ServiceNode, Sidebar, WsdlServer,

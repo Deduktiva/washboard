@@ -90,7 +90,7 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
   and Win32 text APIs (a GTK front end converts to its char offsets); the model converts to
   byte offsets with `xml::utf16`.
 - The model reports changes as a list of small, typed events (`SidebarChanged`,
-  `TokensChanged(range)`, `DiagnosticsChanged`, `ResponseChanged`, `LogAppended`, …), which
+  `TokensChanged(range)`, `DiagnosticsChanged`, `ResponseChanged`, …), which
   the front end applies to its widgets. No toolkit types cross the boundary.
 - The front end provides three traits: `MainThread` (wake the UI thread, which then calls
   `App::pump` to apply queued worker results with `&mut App`, so the front end needs no global

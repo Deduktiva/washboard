@@ -153,8 +153,8 @@ pub fn small_label(text: &str, mtm: MainThreadMarker) -> Retained<NSTextField> {
 
 const SMALL_FONT_SIZE: f64 = 11.0;
 
-/// Status text beside other controls (the request bar's well-formedness, the HTTP log's TLS
-/// line): a step above [`small_label`], still below the body size.
+/// Status text beside other controls (the request bar's well-formedness):
+/// a step above [`small_label`], still below the body size.
 pub const STATUS_FONT_SIZE: f64 = 12.0;
 
 /// The request bar's and the response status line's height, so the two halves of the content

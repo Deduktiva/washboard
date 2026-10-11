@@ -1,4 +1,4 @@
-//! What is sent and what came back: input for the response pane, history and the HTTP log.
+//! What is sent and what came back: input for the response pane, history.
 
 use std::time::{Duration, SystemTime};
 
@@ -16,7 +16,7 @@ pub struct SendRequest {
     pub body: String,
 }
 
-/// Request or response as shown in the HTTP log.
+/// Request or response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawMessage {
     /// `POST /path HTTP/1.1` or `HTTP/1.1 200 OK`.
@@ -56,14 +56,6 @@ impl RawMessage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TlsInfo {
-    /// `None` for plain HTTP.
-    pub protocol: Option<String>,
-    /// True if the server's "ignore TLS errors" setting was in effect.
-    pub verification_skipped: bool,
-}
-
 #[derive(Debug, Clone)]
 pub struct Exchange {
     pub started_at: SystemTime,
@@ -71,7 +63,6 @@ pub struct Exchange {
     pub request: RawMessage,
     /// `None` if no response was received; then `error` is set.
     pub response: Option<RawMessage>,
-    pub tls: TlsInfo,
     pub error: Option<String>,
 }
 

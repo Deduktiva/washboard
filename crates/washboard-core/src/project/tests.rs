@@ -8,7 +8,7 @@ use rusqlite::params;
 use tempfile::TempDir;
 
 use super::*;
-use crate::http::{Exchange, RawMessage, TlsInfo};
+use crate::http::{Exchange, RawMessage};
 use crate::model::{Auth, HistoryId, OperationRef, QName, Server};
 use crate::secrets::{MemorySecretStore, SecretKey, SecretStore};
 use crate::test_support::{self, fixtures};
@@ -91,7 +91,6 @@ fn exchange(at_secs: u64, status: Option<&str>) -> Exchange {
             ],
             body: format!("<resp n='{at_secs}'/>").into_bytes(),
         }),
-        tls: TlsInfo::default(),
         error: status.is_none().then(|| "connection refused".to_owned()),
     }
 }

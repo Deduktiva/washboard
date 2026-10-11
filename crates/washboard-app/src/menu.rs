@@ -203,8 +203,6 @@ const WINDOW: &[Entry] = &[
     item("Minimize", c"performMiniaturize:", "m", CMD),
     item("Zoom", c"performZoom:", "", NONE),
     Entry::Separator,
-    item("HTTP Log", c"showHttpLog:", "l", OPT_CMD),
-    Entry::Separator,
     item("Bring All to Front", c"arrangeInFront:", "", NONE),
 ];
 

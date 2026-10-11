@@ -21,8 +21,7 @@
 //! reason phrase is not available, so the status line uses the canonical phrase for the code
 //! (`HTTP/1.1 500 Internal Server Error` even if the server wrote `500 Error`). The body is the
 //! exact bytes received (no decompression, no charset conversion), capped at
-//! [`MAX_RESPONSE_BODY`]. native-tls does not report the negotiated TLS version, so
-//! [`TlsInfo::protocol`] is just `"TLS"` for HTTPS responses.
+//! [`MAX_RESPONSE_BODY`].
 
 pub mod exchange;
 mod fault;
@@ -30,21 +29,21 @@ mod fault;
 use std::io::Read;
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::model::Auth;
 use base64::Engine as _;
+use ureq::http::uri::Scheme;
 use ureq::http::{self, HeaderName, HeaderValue, Uri};
 use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Timeout};
 
-use crate::model::Auth;
-
-pub use exchange::{Exchange, RawMessage, SendRequest, TlsInfo};
+pub use exchange::{Exchange, RawMessage, SendRequest};
 pub use fault::{SoapFault, detect_fault};
 
 /// Response bodies beyond this are truncated and reported as an error. Real SOAP responses are
 /// far smaller; this only protects the app from a misbehaving server.
 pub const MAX_RESPONSE_BODY: usize = 50 * 1024 * 1024;
 
-/// Used when a server's timeout is zero, so a send can never block a worker forever.
+/// Used when a server's timeout is zero, so sending cannot block a worker forever.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const USER_AGENT: &str = concat!("Washboard/", env!("CARGO_PKG_VERSION"));
@@ -79,12 +78,8 @@ fn send_with_limit(req: &SendRequest, body_limit: usize) -> Exchange {
                 headers: Vec::new(),
                 body,
             };
-            return failed(started_at, start, request, TlsInfo::default(), msg);
+            return failed(started_at, start, request, msg);
         }
-    };
-    let tls = TlsInfo {
-        protocol: None,
-        verification_skipped: target.https && req.server.ignore_tls_errors,
     };
 
     let headers = build_headers(req, &target);
@@ -103,20 +98,14 @@ fn send_with_limit(req: &SendRequest, body_limit: usize) -> Exchange {
                 "the {name} header contains characters that are not allowed in HTTP headers \
                  (line breaks or control characters)"
             );
-            return failed(started_at, start, request, tls, msg);
+            return failed(started_at, start, request, msg);
         };
         builder = builder.header(name, value);
     }
     let http_req = match builder.body(request.body.as_slice()) {
         Ok(r) => r,
         Err(e) => {
-            return failed(
-                started_at,
-                start,
-                request,
-                tls,
-                format!("invalid request: {e}"),
-            );
+            return failed(started_at, start, request, format!("invalid request: {e}"));
         }
     };
 
@@ -126,7 +115,7 @@ fn send_with_limit(req: &SendRequest, body_limit: usize) -> Exchange {
         Ok(r) => r,
         Err(e) => {
             let msg = describe_error(&e, &target, req.server.ignore_tls_errors, timeout);
-            return failed(started_at, start, request, tls, msg);
+            return failed(started_at, start, request, msg);
         }
     };
 
@@ -179,27 +168,16 @@ fn send_with_limit(req: &SendRequest, body_limit: usize) -> Exchange {
             headers: resp_headers,
             body: resp_body,
         }),
-        tls: TlsInfo {
-            protocol: target.https.then(|| "TLS".to_owned()),
-            ..tls
-        },
         error,
     }
 }
 
-fn failed(
-    started_at: SystemTime,
-    start: Instant,
-    request: RawMessage,
-    tls: TlsInfo,
-    error: String,
-) -> Exchange {
+fn failed(started_at: SystemTime, start: Instant, request: RawMessage, error: String) -> Exchange {
     Exchange {
         started_at,
         duration: start.elapsed(),
         request,
         response: None,
-        tls,
         error: Some(error),
     }
 }
@@ -240,7 +218,6 @@ fn agent(ignore_tls_errors: bool, timeout: Duration) -> Agent {
 #[derive(Debug)]
 struct Target {
     uri: Uri,
-    https: bool,
     /// `Host` header value: host, plus the port when it is not the scheme's default.
     host_header: String,
     /// For error messages.
@@ -250,27 +227,11 @@ struct Target {
 
 impl Target {
     fn parse(url: &str) -> Result<Self, String> {
-        if !url.contains("://") {
-            return Err(format!(
-                "the server URL \"{url}\" has no http:// or https://"
-            ));
-        }
         let uri: Uri = url
             .parse()
             .map_err(|e| format!("the server URL \"{url}\" is not a valid URL ({e})"))?;
-        let https = match uri.scheme_str().map(str::to_ascii_lowercase).as_deref() {
-            Some("https") => true,
-            Some("http") => false,
-            Some(other) => {
-                return Err(format!(
-                    "the server URL must start with http:// or https://, not {other}://"
-                ));
-            }
-            None => {
-                return Err(format!(
-                    "the server URL \"{url}\" has no http:// or https://"
-                ));
-            }
+        if uri.scheme() != Some(&Scheme::HTTP) && uri.scheme() != Some(&Scheme::HTTPS) {
+            return Err("the server URL must start with http:// or https://".to_owned());
         };
         let authority = uri
             .authority()
@@ -287,7 +248,11 @@ impl Target {
         if host.is_empty() {
             return Err(format!("the server URL \"{url}\" has no host"));
         }
-        let default_port = if https { 443 } else { 80 };
+        let default_port = if uri.scheme() == Some(&Scheme::HTTPS) {
+            443
+        } else {
+            80
+        };
         let host_header = match authority.port_u16() {
             Some(p) if p != default_port => format!("{host}:{p}"),
             _ => host.to_owned(),
@@ -300,7 +265,6 @@ impl Target {
         Ok(Self {
             authority: authority.as_str().to_owned(),
             uri,
-            https,
             host_header,
             path_and_query,
         })

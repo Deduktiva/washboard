@@ -1,7 +1,7 @@
 //! App-level state: open projects, recent projects, restore on launch, and the plumbing that
 //! brings worker results back to the main thread.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -18,7 +18,6 @@ use crate::event::Event;
 use crate::format::FormatSettings;
 use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
 use crate::import::Imports;
-use crate::send::LogEntry;
 use crate::timers::TimerKind;
 use crate::watch::Watching;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
@@ -114,7 +113,6 @@ pub struct App {
     done_tx: Sender<Completion>,
     done_rx: Receiver<Completion>,
     jobs: usize,
-    pub(crate) log: VecDeque<LogEntry>,
     pub(crate) imports: Imports,
     pub(crate) format: FormatSettings,
     pub(crate) watching: Watching,
@@ -146,7 +144,6 @@ impl App {
             done_tx,
             done_rx,
             jobs: 0,
-            log: VecDeque::new(),
             imports: Imports::new(),
             format: FormatSettings::default(),
             watching: Watching::new(),

@@ -1,7 +1,6 @@
-//! Send, the response pane, the request's history and the app's HTTP log
+//! Send, the response pane and the request's history
 //! (`docs/specs/requests.md`, `docs/specs/response-pane.md`).
 
-use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};
 
 use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
@@ -14,9 +13,6 @@ use crate::app::{App, ModelError, ProjectKey};
 use crate::diagnostics::{Check, Issue};
 use crate::event::Event;
 use crate::window::ProjectWindow;
-
-/// The HTTP log keeps this many exchanges, across all projects.
-pub const LOG_CAPACITY: usize = 50;
 
 /// An older exchange of the selected request, shown whole in place of the latest one
 /// (`docs/specs/response-pane.md`): its response in the response pane, its request as sent beside
@@ -146,26 +142,6 @@ fn display_body(bytes: &[u8], indent: usize) -> String {
     match xml::decode(bytes) {
         Ok(decoded) => xml::pretty_print(&decoded.text, indent).unwrap_or(decoded.text),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
-    }
-}
-
-/// One exchange in the HTTP log.
-#[derive(Debug, Clone)]
-pub struct LogEntry {
-    /// The project's name, since the log is shared by all windows.
-    pub project: String,
-    pub exchange: Exchange,
-}
-
-impl LogEntry {
-    /// The request headers with the `Authorization` value masked unless `reveal`.
-    pub fn request_headers(&self, reveal: bool) -> Vec<(String, String)> {
-        let request = &self.exchange.request;
-        if reveal {
-            request.headers.clone()
-        } else {
-            request.masked_headers()
-        }
     }
 }
 
@@ -300,7 +276,6 @@ impl App {
         let recorded = window
             .project
             .record_exchange(request, &server, &exchange, fault.is_some());
-        let name = window.name.clone();
         let indent = self.format.indent;
         let history = match recorded {
             Ok(entry) => Some(entry.id),
@@ -327,15 +302,6 @@ impl App {
         // Recording made it the request's and the project's last server.
         self.events
             .push(Event::ServerSelectionChanged { project: key });
-
-        if self.log.len() == LOG_CAPACITY {
-            self.log.pop_front();
-        }
-        self.log.push_back(LogEntry {
-            project: name,
-            exchange: *exchange,
-        });
-        self.events.push(Event::LogAppended);
     }
 
     /// Shows a history entry of the selected request: the newest returns to the latest
@@ -414,11 +380,6 @@ impl App {
             .map(|h| format!("{h:.0}"));
         project.set_ui_state(DRAWER_HEIGHT_KEY, height.as_deref())?;
         Ok(())
-    }
-
-    /// Oldest first.
-    pub fn http_log(&self) -> &VecDeque<LogEntry> {
-        &self.log
     }
 
     /// Loads the selected request's history and shows its latest entry.

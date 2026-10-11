@@ -1,6 +1,6 @@
 //! Tests against local servers on 127.0.0.1 only; nothing here touches the outside network.
 //!
-//! The server is hand-written on `TcpListener` so it can hand back the raw request bytes,
+//! Server is a `TcpListener` so it can hand back the raw request bytes,
 //! which is what proves that the log matches the wire.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -205,7 +205,6 @@ fn log_matches_wire_exactly_with_preemptive_basic_auth() {
         .filter(|(n, _)| n == "x-multi")
         .collect();
     assert_eq!(multi.len(), 2);
-    assert_eq!(ex.tls, TlsInfo::default());
 }
 
 #[test]
@@ -300,7 +299,7 @@ fn connection_refused_is_reported() {
 fn bad_urls_are_rejected_before_connecting() {
     for (url, needle) in [
         ("ftp://example.invalid/x", "http:// or https://"),
-        ("example.invalid/x", "http:// or https://"),
+        ("example.invalid/x", "not a valid URL"),
         ("http://user:pw@127.0.0.1:9/", "user name or password"),
         ("http://exa mple/", "not a valid URL"),
     ] {
@@ -329,7 +328,6 @@ fn host_header_omits_default_port() {
     let t = Target::parse("https://Example.org:443").expect("parse");
     assert_eq!(t.host_header, "Example.org");
     assert_eq!(t.path_and_query, "/");
-    assert!(t.https);
     let t = Target::parse("http://[::1]:8080/a?b").expect("parse");
     assert_eq!(t.host_header, "[::1]:8080");
     assert_eq!(t.path_and_query, "/a?b");
@@ -362,8 +360,6 @@ fn https_self_signed_fails_with_verification() {
     let err = ex.error.expect("error");
     assert!(err.contains("TLS"), "{err}");
     assert!(err.contains("Ignore TLS errors"), "{err}");
-    assert!(!ex.tls.verification_skipped);
-    assert_eq!(ex.tls.protocol, None);
 }
 
 #[test]
@@ -380,8 +376,6 @@ fn https_self_signed_succeeds_when_ignoring_tls_errors() {
     assert_eq!(ex.error, None);
     assert_eq!(wire, wire_from_log(&ex.request));
     assert_eq!(ex.response.expect("response").body, b"<ok/>");
-    assert!(ex.tls.verification_skipped);
-    assert_eq!(ex.tls.protocol.as_deref(), Some("TLS"));
 }
 
 #[test]

@@ -30,7 +30,6 @@ use washboard_ui_model::{
 
 use crate::app_settings;
 use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
-use crate::http_log::HttpLog;
 use crate::menu;
 use crate::project_window::ProjectWindowController;
 use crate::settings_window::{Pane, SettingsWindowController};
@@ -78,7 +77,6 @@ pub struct AppDelegateIvars {
     timers: Rc<RefCell<HashMap<TimerId, u64>>>,
     welcome: OnceCell<Retained<WelcomeController>>,
     projects: RefCell<Vec<Retained<ProjectWindowController>>>,
-    http_log: OnceCell<Retained<HttpLog>>,
     new_project: RefCell<Option<Retained<ImportSheetController>>>,
     defaults: OnceCell<Retained<NSUserDefaults>>,
     settings: OnceCell<Retained<SettingsWindowController>>,
@@ -189,11 +187,6 @@ define_class!(
         #[unsafe(method(showSettings:))]
         fn show_settings_action(&self, _sender: Option<&AnyObject>) {
             self.show_settings(None);
-        }
-
-        #[unsafe(method(showHttpLog:))]
-        fn show_http_log(&self, _sender: Option<&AnyObject>) {
-            self.http_log().show();
         }
     }
 );
@@ -411,15 +404,6 @@ impl AppDelegate {
         closed
     }
 
-    /// The app's one HTTP log panel, created on first use.
-    pub fn http_log(&self) -> &HttpLog {
-        self.ivars().http_log.get_or_init(|| {
-            let log = HttpLog::new(self.mtm());
-            log.reload();
-            log
-        })
-    }
-
     /// The welcome window's controller, created on first use.
     pub fn welcome(&self) -> &WelcomeController {
         self.ivars()
@@ -518,11 +502,6 @@ impl AppDelegate {
             Event::HistoryChanged { project } => {
                 if let Some(controller) = self.project(project) {
                     controller.response().show_history();
-                }
-            }
-            Event::LogAppended => {
-                if let Some(log) = self.ivars().http_log.get() {
-                    log.reload();
                 }
             }
             Event::EditedChanged { project } => {

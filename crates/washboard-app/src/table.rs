@@ -1,6 +1,6 @@
 //! A text-only table: rows of strings, one label per cell, and a callback for the row the user
 //! picks, by clicking it or by moving the selection with the keyboard. Shared by the issues
-//! bar, the response history, the HTTP log, the import sheet and the Servers pane.
+//! bar, the response history, the import sheet and the Servers pane.
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;

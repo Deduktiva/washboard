@@ -15,7 +15,7 @@ paths it owns.
 | IDs, `QName`, `OperationRef`, `Server`, `Auth`, `RequestMeta`, `HistoryEntry` | `crates/washboard-core/src/model.rs` | all |
 | `SchemaBundle`, `SchemaDoc`, `SchemaOrigin` | `crates/washboard-core/src/model.rs` | WSDL → LIBXML2, SCHEMA |
 | `Diagnostic`, `TextPos`, `TextSpan`, `DiagDetail`, `LineIndex`, `pos_at_byte`, `has_errors`, `error_count` | `crates/washboard-core/src/diag.rs` | XML, LIBXML2, VALIDATE, WSDL, CLI, APP |
-| `SendRequest`, `Exchange`, `RawMessage`, `TlsInfo` | `crates/washboard-core/src/http/exchange.rs` | HTTP, PROJECT (history), APP |
+| `SendRequest`, `Exchange`, `RawMessage` | `crates/washboard-core/src/http/exchange.rs` | HTTP, PROJECT (history), APP |
 | `SecretStore`, `MemorySecretStore` | `crates/washboard-core/src/secrets.rs` | PROJECT, HTTP callers |
 | `xml::decode`, `xml::encode_utf8` | `crates/washboard-core/src/xml/encoding.rs` | everything that reads XML |
 | SOAP/WSDL/XSD namespace constants | `crates/washboard-core/src/soap.rs` | all |
@@ -36,7 +36,7 @@ those one at a time, or split the paths before handing them out in parallel.
 ### Manual checks on a Mac
 Not a coding package: what CI cannot see, done by a person from `make app` or the CI artifact.
 - The whole loop on a real project: restore on launch, edit, autosave, validate, send, history,
-  HTTP log, New Project, Replace WSDL, the Settings window, the Keychain prompt (the only check of
+  New Project, Replace WSDL, the Settings window, the Keychain prompt (the only check of
   `KeychainSecretStore` so far; it is type-checked on Linux).
 - Typing stays responsive in a 1 MB request; completion and hover appear where expected.
 - Layout and light/dark appearance against `docs/gui-draft.html`. Findings become app fixes.

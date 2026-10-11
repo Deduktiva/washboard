@@ -1311,7 +1311,6 @@ fn send_shows_the_response_and_records_history() {
         Event::SendStateChanged { project: key },
         Event::ResponseChanged { project: key },
         Event::HistoryChanged { project: key },
-        Event::LogAppended,
     ] {
         assert!(events.contains(&e), "{e:?} in {events:?}");
     }
@@ -1355,19 +1354,6 @@ fn send_shows_the_response_and_records_history() {
     assert_eq!(window.history().len(), 1);
     assert_eq!(response.history, Some(window.history()[0].id));
     assert_eq!(window.history()[0].request_id, first);
-
-    let log = app.http_log();
-    assert_eq!(log.len(), 1);
-    let masked = log[0].request_headers(false);
-    let auth = masked
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"));
-    assert_eq!(auth.map(|(_, v)| v.as_str()), Some("Basic ••••••••"));
-    let revealed = log[0].request_headers(true);
-    let auth = revealed
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case("authorization"));
-    assert_ne!(auth.map(|(_, v)| v.as_str()), Some("Basic ••••••••"));
 }
 
 #[test]
@@ -1446,7 +1432,6 @@ fn send_refuses_an_invalid_request() {
     );
     assert!(window.response().is_none());
     assert!(window.history().is_empty());
-    assert!(app.http_log().is_empty());
     assert!(
         on_disk(&app, key, window.editor().expect("editor").request()).contains("yesterday"),
         "send saves first"
@@ -1471,7 +1456,6 @@ fn a_cancelled_send_is_ignored() {
     let window = project(&app, key);
     assert!(window.response().is_none());
     assert!(window.history().is_empty());
-    assert!(app.http_log().is_empty());
 }
 
 /// Two sends of the first request: an answered one, then a failed one (the newest).

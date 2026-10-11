@@ -5,7 +5,6 @@ use std::ops::Range;
 use std::path::Path;
 
 use washboard_core::diag::{Diagnostic, Severity};
-use washboard_core::http::TlsInfo;
 use washboard_core::model::OperationRef;
 use washboard_core::wsdl::{Reference, Resolution, Unresolved};
 use washboard_ui_model::{
@@ -256,25 +255,9 @@ pub(crate) fn well_formedness_text(state: WellFormedness) -> String {
     }
 }
 
-/// The HTTP log's TLS line for an exchange: the protocol and whether the certificate was
-/// checked. `None` for an exchange that failed before anything about TLS was known.
-/// native-tls does not report the negotiated version, so the protocol is just "TLS".
-pub(crate) fn tls_line(tls: &TlsInfo, got_response: bool) -> Option<String> {
-    const SKIPPED: &str = "certificate verification SKIPPED (server setting)";
-    match (&tls.protocol, tls.verification_skipped) {
-        (Some(protocol), true) => Some(format!("{protocol} · {SKIPPED}")),
-        (Some(protocol), false) => Some(format!("{protocol} · certificate verified")),
-        // HTTPS that failed before a response: the setting was in effect all the same.
-        (None, true) => Some(SKIPPED.to_owned()),
-        (None, false) if got_response => Some("No TLS (plain HTTP)".to_owned()),
-        (None, false) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use washboard_core::diag::{DiagSource, Severity, TextPos};
-    use washboard_core::http::TlsInfo;
     use washboard_core::model::{OperationRef, QName, RequestId};
     use washboard_core::wsdl::{MatchedBy, RefKind, Reference, Resolution, Unresolved};
     use washboard_ui_model::{
@@ -283,8 +266,7 @@ mod tests {
 
     use super::{
         LineMarker, completion_kinds, hover_text, import_files, import_status, line_markers,
-        operation_chip, reference_row, replace_summary, text_tool_tip, tls_line,
-        well_formedness_text,
+        operation_chip, reference_row, replace_summary, text_tool_tip, well_formedness_text,
     };
 
     #[test]
@@ -307,31 +289,6 @@ mod tests {
             well_formedness_text(WellFormedness::Error { line: None }),
             "XML error"
         );
-    }
-
-    #[test]
-    fn the_tls_line_says_whether_the_certificate_was_checked() {
-        let tls = |protocol: Option<&str>, verification_skipped| TlsInfo {
-            protocol: protocol.map(Into::into),
-            verification_skipped,
-        };
-        assert_eq!(
-            tls_line(&tls(Some("TLS"), true), true).as_deref(),
-            Some("TLS · certificate verification SKIPPED (server setting)")
-        );
-        assert_eq!(
-            tls_line(&tls(Some("TLS"), false), true).as_deref(),
-            Some("TLS · certificate verified")
-        );
-        assert_eq!(
-            tls_line(&tls(None, true), false).as_deref(),
-            Some("certificate verification SKIPPED (server setting)")
-        );
-        assert_eq!(
-            tls_line(&tls(None, false), true).as_deref(),
-            Some("No TLS (plain HTTP)")
-        );
-        assert_eq!(tls_line(&tls(None, false), false), None);
     }
 
     #[test]

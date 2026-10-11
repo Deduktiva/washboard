@@ -59,8 +59,6 @@ pub enum Event {
     ShownExchangeChanged { project: ProjectKey },
     /// The selected request's history list changed.
     HistoryChanged { project: ProjectKey },
-    /// An exchange was added to the HTTP log (and the oldest maybe dropped).
-    LogAppended,
     /// An import sheet opened, closed or changed (check finished, fields set).
     ImportChanged { target: ImportTarget },
     /// Replace WSDL finished: schema reloaded, requests re-validated, outcome available.

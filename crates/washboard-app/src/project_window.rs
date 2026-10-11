@@ -21,9 +21,8 @@ use objc2_app_kit::{
     NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
     NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarFlexibleSpaceItemIdentifier, NSToolbarItem,
-    NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController, NSWindow,
-    NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
+    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController,
+    NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
     NSWindowToolbarStyle,
 };
 use objc2_foundation::{
@@ -47,38 +46,18 @@ use crate::text::replace_summary;
 
 const SERVER_ITEM: &str = "server";
 const SEND_ITEM: &str = "send";
-const HTTP_LOG_ITEM: &str = "httpLog";
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
-const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
-    (SEND_ITEM, "Send", "paperplane", "sendRequest:"),
-    (
-        HTTP_LOG_ITEM,
-        "HTTP Log",
-        "list.bullet.rectangle",
-        "showHttpLog:",
-    ),
-];
+const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] =
+    &[(SEND_ITEM, "Send", "paperplane", "sendRequest:")];
 
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     // SAFETY: AppKit's identifier constants are immutable statics.
-    let (tracking, flexible) = unsafe {
-        (
-            NSToolbarSidebarTrackingSeparatorItemIdentifier,
-            NSToolbarFlexibleSpaceItemIdentifier,
-        )
-    };
-    // No sidebar button: View ▸ Show Sidebar (⌃⌘S) toggles it, as in macOS 26 apps. The
-    // server sits right before Send, which goes to it. No Save All: autosave makes it a no-op
-    // nearly always, and File ▸ Save All (⌘S) remains. No Validate: requests are validated
-    // as they are edited and the issues bar shows the result; Project ▸ Validate (⌘B) skips
-    // the wait.
+    let tracking = unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier };
     vec![
         tracking.copy(),
         NSString::from_str(SERVER_ITEM),
         NSString::from_str(SEND_ITEM),
-        flexible.copy(),
-        NSString::from_str(HTTP_LOG_ITEM),
     ]
 }
 
@@ -609,7 +588,7 @@ impl ProjectWindowController {
         if let Some(toolbar) = window.toolbar() {
             for item in toolbar.items().iter() {
                 let id = item.itemIdentifier().to_string();
-                if [SERVER_ITEM, SEND_ITEM, HTTP_LOG_ITEM].contains(&id.as_str()) {
+                if [SERVER_ITEM, SEND_ITEM].contains(&id.as_str()) {
                     item.setHidden(shown);
                 }
             }
