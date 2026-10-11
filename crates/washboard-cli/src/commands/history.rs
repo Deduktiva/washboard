@@ -1,13 +1,12 @@
 //! `history <request>`: entries newest first; `--show N` prints one entry's stored messages.
 
-use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 use serde::Serialize;
-use washboard_core::model::ServerId;
+use washboard_core::http;
 use washboard_core::project::format_timestamp;
 
 use crate::support::{self, short_time};
@@ -70,17 +69,13 @@ pub fn run(dir: &Path, name: &str, json: bool, show: Option<usize>) -> anyhow::R
         return Ok(ExitCode::SUCCESS);
     }
 
-    let servers: HashMap<ServerId, String> = project
-        .servers()?
-        .into_iter()
-        .map(|s| (s.id, s.name))
-        .collect();
+    let servers = project.servers()?;
     let rows: Vec<Row> = entries
         .iter()
         .map(|e| Row {
             id: e.id.to_string(),
             sent_at: format_timestamp(e.sent_at),
-            server: e.server_id.and_then(|s| servers.get(&s).cloned()),
+            server: http::server_name(&servers, e.server_id).map(str::to_owned),
             url: e.url.clone(),
             duration_ms: e.duration.map(|d| d.as_millis()),
             http_status: e.http_status,

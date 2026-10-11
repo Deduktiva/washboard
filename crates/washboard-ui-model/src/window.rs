@@ -380,12 +380,7 @@ impl ProjectWindow {
     /// host of the URL it went to when that server has been deleted since
     /// ([`http::host_label`]; the URL itself if it doesn't parse).
     pub fn server_label(&self, server: Option<ServerId>, url: &str) -> String {
-        server
-            .and_then(|id| self.servers.iter().find(|s| s.id == id))
-            .map_or_else(
-                || http::host_label(url).unwrap_or_else(|| url.to_owned()),
-                |s| s.name.clone(),
-            )
+        http::server_label(&self.servers, server, url)
     }
 
     /// The server popup's selection: the selected request's last server, else the project's

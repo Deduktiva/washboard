@@ -29,7 +29,7 @@ mod fault;
 use std::io::Read;
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::model::Auth;
+use crate::model::{Auth, Server, ServerId};
 use base64::Engine as _;
 use ureq::http::uri::Scheme;
 use ureq::http::{self, HeaderName, HeaderValue, Uri};
@@ -54,6 +54,22 @@ pub const CONTENT_TYPE: &str = "text/xml; charset=utf-8";
 /// the port only if it isn't the scheme's default. `None` for a URL [`send`] would refuse.
 pub fn host_label(url: &str) -> Option<String> {
     Target::parse(url).ok().map(|t| t.host_header)
+}
+
+/// The current name of server `id` among `servers`. `None` without an id, or when that server
+/// has been deleted since: history entries keep the id of a deleted server.
+pub fn server_name(servers: &[Server], id: Option<ServerId>) -> Option<&str> {
+    let id = id?;
+    servers.iter().find(|s| s.id == id).map(|s| s.name.as_str())
+}
+
+/// How a response or history entry names its server: [`server_name`], else the host of the URL
+/// it went to ([`host_label`]), else the URL itself.
+pub fn server_label(servers: &[Server], id: Option<ServerId>, url: &str) -> String {
+    server_name(servers, id).map_or_else(
+        || host_label(url).unwrap_or_else(|| url.to_owned()),
+        str::to_owned,
+    )
 }
 
 /// Sends one SOAP 1.1 request and records what went over the wire.
