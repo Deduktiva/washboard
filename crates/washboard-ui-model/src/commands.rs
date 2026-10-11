@@ -5,9 +5,8 @@
 use std::time::Duration;
 
 use washboard_core::model::{Auth, OperationRef, RequestId, Server, ServerId};
-use washboard_core::project::{names, operation_folder};
+use washboard_core::project::names;
 use washboard_core::schema::TemplateOptions;
-use washboard_core::soap;
 
 use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
@@ -41,8 +40,10 @@ impl App {
 
     /// File ▸ New Request…: generates the body from the schema, names it `<Operation> <n>`,
     /// selects it and starts inline rename. It goes into `folder` (the folder selected in the
-    /// sidebar), else into the operation's folder ([`operation_folder`]), created on first
-    /// use and matched ignoring case.
+    /// sidebar), else into the operation's folder, created on first use and matched ignoring
+    /// case ([`Project::create_request_for`]).
+    ///
+    /// [`Project::create_request_for`]: washboard_core::project::Project::create_request_for
     pub fn new_request(
         &mut self,
         key: ProjectKey,
@@ -55,12 +56,9 @@ impl App {
         };
         let window = self.window(key)?;
         let schema = window.schema.ready()?.clone();
-        let text = soap::request_envelope(&schema.wsdl, schema.model(), operation, &opts)?;
-        let folder =
-            folder.map_or_else(|| operation_folder(&schema.wsdl, operation), str::to_owned);
-        let meta = window
-            .project
-            .create_request_in(&folder, operation, &text)?;
+        let text = schema.request_template(operation, &opts)?;
+        let project = &mut window.project;
+        let meta = project.create_request_for(&schema.wsdl, operation, folder, None, &text)?;
         window.expand(&meta.folder)?;
         self.requests_changed(key)?;
         self.select_request(key, Some(meta.id))?;

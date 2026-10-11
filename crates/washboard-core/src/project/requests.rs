@@ -233,6 +233,25 @@ impl Project {
         self.create_request_named_in(folder, &name, Some(operation), text)
     }
 
+    /// New Request, in the app and the CLI: `text` (usually
+    /// [`ProjectSchema::request_template`](super::ProjectSchema::request_template)) goes into
+    /// `folder`, else into the operation's folder ([`operation_folder`]), named `name`, else
+    /// `<Operation> <n>`.
+    pub fn create_request_for(
+        &mut self,
+        wsdl: &Wsdl,
+        operation: &OperationRef,
+        folder: Option<&str>,
+        name: Option<&str>,
+        text: &str,
+    ) -> Result<RequestMeta> {
+        let folder = folder.map_or_else(|| operation_folder(wsdl, operation), str::to_owned);
+        match name {
+            Some(name) => self.create_request_named_in(&folder, name, Some(operation), text),
+            None => self.create_request_in(&folder, operation, text),
+        }
+    }
+
     /// Creates a request with a given name at the top level. The file is written as UTF-8
     /// without BOM.
     pub fn create_request_named(

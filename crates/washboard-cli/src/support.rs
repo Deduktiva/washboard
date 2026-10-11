@@ -190,16 +190,6 @@ pub fn resolve_operation(w: &Wsdl, spec: &str) -> anyhow::Result<OperationRef> {
     }
 }
 
-/// The request envelope for an operation.
-pub fn envelope(schema: &ProjectSchema, op: &OperationRef) -> anyhow::Result<String> {
-    Ok(washboard_core::soap::request_envelope(
-        &schema.wsdl,
-        schema.model(),
-        op,
-        &Default::default(),
-    )?)
-}
-
 /// `2026-10-06T14:03:12.123456789Z` → `2026-10-06 14:03:12Z`, for human output.
 pub fn short_time(full: &str) -> String {
     match (full.get(..10), full.get(11..19)) {

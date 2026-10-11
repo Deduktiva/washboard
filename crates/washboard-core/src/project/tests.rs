@@ -1409,3 +1409,31 @@ fn project_schema_loads_the_copied_set() {
     let ops = schema.wsdl.supported_operations();
     assert!(ops.iter().any(|o| o.operation == "GetCustomer"), "{ops:?}");
 }
+
+#[test]
+fn create_request_for_files_like_new_request() {
+    let (_tmp, _folder, mut p) = new_project();
+    let schema = ProjectSchema::load(&p.entry_wsdl().expect("entry"), p.wsdl_dir()).expect("load");
+    let op = schema
+        .wsdl
+        .supported_operations()
+        .into_iter()
+        .find(|o| o.operation == "GetCustomer")
+        .expect("op");
+    let text = schema
+        .request_template(&op, &crate::schema::TemplateOptions::default())
+        .expect("template");
+
+    let a = p
+        .create_request_for(&schema.wsdl, &op, None, None, &text)
+        .expect("a");
+    assert_eq!(a.folder, operation_folder(&schema.wsdl, &op));
+    assert_eq!(a.name, "GetCustomer 1");
+    assert_eq!(a.operation.as_ref(), Some(&op));
+    assert_eq!(p.read_request(a.id).expect("read"), text);
+
+    let b = p
+        .create_request_for(&schema.wsdl, &op, Some("Mine"), Some("Mine 1"), "<a/>")
+        .expect("b");
+    assert_eq!((b.folder.as_str(), b.name.as_str()), ("Mine", "Mine 1"));
+}

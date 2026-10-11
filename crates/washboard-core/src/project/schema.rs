@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use crate::diag::Diagnostic;
-use crate::schema::SchemaModel;
+use crate::model::OperationRef;
+use crate::schema::{SchemaModel, TemplateOptions};
+use crate::soap::{self, EnvelopeError};
 use crate::validate::RequestSchema;
 use crate::wsdl::{self, SourceError, Sources, Wsdl};
 
@@ -69,6 +71,15 @@ impl ProjectSchema {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
         )
+    }
+
+    /// The request envelope New Request starts from ([`soap::request_envelope`]).
+    pub fn request_template(
+        &self,
+        operation: &OperationRef,
+        opts: &TemplateOptions,
+    ) -> Result<String, EnvelopeError> {
+        soap::request_envelope(&self.wsdl, self.model(), operation, opts)
     }
 
     fn request(&self) -> &Result<Mutex<RequestSchema>, Vec<Diagnostic>> {
