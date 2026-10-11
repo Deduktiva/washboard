@@ -45,7 +45,7 @@ use crate::secrets::SecretError;
 use crate::wsdl::{Sources, Wsdl};
 use crate::xml::DecodeError;
 
-pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE};
+pub use app_state::{AppState, AppStateError, MAX_RECENT, OpenProject, STATE_FILE, same_folder};
 pub use db::SCHEMA_VERSION;
 pub use history::{HistoryRecord, RequestHead};
 pub use names::{NameError, validate_folder_path, validate_request_name};

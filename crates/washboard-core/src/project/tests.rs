@@ -1331,6 +1331,33 @@ fn app_state_round_trip() {
     assert_eq!(dir_names(&dir), [STATE_FILE]);
 }
 
+#[cfg(unix)]
+#[test]
+fn note_recent_keeps_one_entry_per_folder() {
+    let tmp = TempDir::new().expect("tempdir");
+    let folder = tmp.path().join("Customer API");
+    fs::create_dir(&folder).expect("mkdir");
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&folder, &link).expect("symlink");
+
+    let mut state = AppState::default();
+    state.note_recent(&folder);
+    state.note_recent(&tmp.path().join("other"));
+    state.note_recent(&link);
+    state.note_recent(&tmp.path().join(".").join("Customer API"));
+    assert_eq!(
+        state.recent_projects,
+        [
+            tmp.path().join(".").join("Customer API"),
+            tmp.path().join("other")
+        ]
+    );
+    assert!(same_folder(&folder, &link));
+    // A folder that is gone compares as spelled.
+    assert!(same_folder(Path::new("/gone/x"), Path::new("/gone/x")));
+    assert!(!same_folder(Path::new("/gone/x"), Path::new("/gone/y")));
+}
+
 #[test]
 fn app_state_tolerates_unknown_fields_and_rejects_garbage() {
     let tmp = TempDir::new().expect("tempdir");
