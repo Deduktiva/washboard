@@ -109,6 +109,11 @@ pub fn rebase(path: &str, from: &str, to: &str) -> Option<String> {
     })
 }
 
+/// The file name of the request called `name`.
+pub(crate) fn file_name(name: &str) -> String {
+    format!("{name}{REQUEST_EXT}")
+}
+
 /// Key for clash detection.
 pub(crate) fn fold(name: &str) -> String {
     name.to_lowercase()

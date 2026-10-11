@@ -14,7 +14,7 @@ use rusqlite::{OptionalExtension, params};
 use super::fsutil::{
     IoContext, atomic_write, join_rel, remove_dir_if_exists, remove_file_if_exists,
 };
-use super::names::{self, REQUEST_EXT};
+use super::names;
 use super::{
     HISTORY_DIR, LAST_SERVER_KEY, Project, ProjectError, REQUESTS_DIR, Result, parse_time,
     parse_uuid, timefmt,
@@ -269,7 +269,7 @@ impl Project {
         bytes: &[u8],
         after: Option<RequestId>,
     ) -> Result<RequestMeta> {
-        let file_name = names::join(folder, &format!("{name}{REQUEST_EXT}"));
+        let file_name = names::join(folder, &names::file_name(name));
         let path = join_rel(&self.requests_dir(), &file_name);
         atomic_write(&path, bytes)?;
         let id = RequestId::new();
@@ -330,18 +330,9 @@ impl Project {
 
         let dir = self.requests_dir();
         let old_path = join_rel(&dir, &self.file_name(id)?);
-        let new_file = names::join(&old.folder, &format!("{new_name}{REQUEST_EXT}"));
+        let new_file = names::join(&old.folder, &names::file_name(new_name));
         let new_path = join_rel(&dir, &new_file);
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "UPDATE request SET file_name = ?1 WHERE id = ?2",
-            params![new_file, id.to_string()],
-        )?;
-        fs::rename(&old_path, &new_path).at(&old_path)?;
-        if let Err(e) = tx.commit() {
-            let _ = fs::rename(&new_path, &old_path);
-            return Err(e.into());
-        }
+        self.rename_with_rows(&[(id.to_string(), new_file)], &old_path, &new_path)?;
         self.request(id)
     }
 
@@ -414,16 +405,7 @@ impl Project {
         let old_file = self.file_name(id)?;
         let new_file = names::join(&folder, names::split(&old_file).1);
         let (old_path, new_path) = (join_rel(&dir, &old_file), join_rel(&dir, &new_file));
-        let tx = self.conn.transaction()?;
-        tx.execute(
-            "UPDATE request SET file_name = ?1 WHERE id = ?2",
-            params![new_file, id.to_string()],
-        )?;
-        fs::rename(&old_path, &new_path).at(&old_path)?;
-        if let Err(e) = tx.commit() {
-            let _ = fs::rename(&new_path, &old_path);
-            return Err(e.into());
-        }
+        self.rename_with_rows(&[(id.to_string(), new_file)], &old_path, &new_path)?;
         self.request(id)
     }
 
@@ -437,7 +419,7 @@ impl Project {
         if resolved == meta.folder {
             return Ok(());
         }
-        let file = format!("{}{REQUEST_EXT}", meta.name);
+        let file = names::file_name(&meta.name);
         if child_named(&join_rel(&self.requests_dir(), &resolved), &file)?.is_some() {
             return Err(ProjectError::NameTaken(meta.name));
         }
@@ -601,19 +583,33 @@ impl Project {
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<rusqlite::Result<_>>()?
         };
-        let (from_path, to_path) = (join_rel(&dir, from), join_rel(&dir, to));
+        // A file and a folder can't share a path, so every match is strictly inside `from`.
+        let moved: Vec<(String, String)> = rows
+            .into_iter()
+            .filter_map(|(id, file)| Some((id, names::rebase(&file, from, to)?)))
+            .collect();
+        self.rename_with_rows(&moved, &join_rel(&dir, from), &join_rel(&dir, to))
+    }
+
+    /// Points each request in `rows` (id, new file name) at its new file and renames `from` to
+    /// `to` on disk, in one transaction that is only committed once the rename worked. A failed
+    /// commit renames back.
+    fn rename_with_rows(
+        &mut self,
+        rows: &[(String, String)],
+        from: &Path,
+        to: &Path,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
-        for (id, file) in &rows {
-            if let Some(rest) = file.strip_prefix(from).filter(|r| r.starts_with('/')) {
-                tx.execute(
-                    "UPDATE request SET file_name = ?1 WHERE id = ?2",
-                    params![format!("{to}{rest}"), id],
-                )?;
-            }
+        for (id, file) in rows {
+            tx.execute(
+                "UPDATE request SET file_name = ?1 WHERE id = ?2",
+                params![file, id],
+            )?;
         }
-        fs::rename(&from_path, &to_path).at(&from_path)?;
+        fs::rename(from, to).at(from)?;
         if let Err(e) = tx.commit() {
-            let _ = fs::rename(&to_path, &from_path);
+            let _ = fs::rename(to, from);
             return Err(e.into());
         }
         Ok(())
