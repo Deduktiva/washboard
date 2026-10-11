@@ -88,6 +88,10 @@ pub(crate) enum PendingDialog {
         project: ProjectKey,
         request: RequestId,
     },
+    DeleteFolder {
+        project: ProjectKey,
+        path: String,
+    },
 }
 
 /// Work finished on a worker thread, to be applied on the main thread.
@@ -330,6 +334,12 @@ impl App {
                     Err(e) => self.alert_error("Could not delete the request", &e),
                 }
             }
+            (PendingDialog::DeleteFolder { project, path }, DialogAnswer::Confirmed) => {
+                match self.delete_folder_now(project, &path) {
+                    Ok(()) | Err(ModelError::UnknownProject) => {}
+                    Err(e) => self.alert_error("Could not delete the folder", &e),
+                }
+            }
             (PendingDialog::DeleteServer { project, server }, DialogAnswer::Confirmed) => {
                 match self.delete_server(project, server) {
                     Ok(()) | Err(ModelError::UnknownProject) => {}
@@ -371,12 +381,14 @@ impl App {
             sending: None,
             replace_outcome: None,
             watcher: None,
+            collapsed: Default::default(),
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
         let _ = window.reload_servers();
+        window.load_collapsed();
         if window.selected_request().is_none() {
-            window.restore.last_selected_request = window.sidebar.requests.first().map(|r| r.id);
+            window.restore.last_selected_request = window.sidebar.request_order().first().copied();
         }
         self.projects.push((key, window));
         self.events.push(Event::ProjectOpened { project: key });

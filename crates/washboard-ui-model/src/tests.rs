@@ -381,7 +381,7 @@ fn new_request_creates_selects_and_starts_rename() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op).expect("new request");
+    let id = app.new_request(key, &op, None).expect("new request");
     assert_eq!(
         app.take_events(),
         [
@@ -408,7 +408,7 @@ fn unsupported_operations_get_no_request() {
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyEncodedPort").operation;
     assert!(matches!(
-        app.new_request(key, &op),
+        app.new_request(key, &op, None),
         Err(ModelError::Envelope(_))
     ));
     assert!(names(&app, key).is_empty());
@@ -419,7 +419,7 @@ fn rename_and_duplicate() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op).expect("new request");
+    let id = app.new_request(key, &op, None).expect("new request");
     app.rename_request(key, id, "Find customer")
         .expect("rename");
     assert!(matches!(
@@ -468,7 +468,7 @@ fn requests_sort_by_name_and_keep_the_selection() {
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
     let ids: Vec<_> = (0..10)
-        .map(|_| app.new_request(key, &op).expect("new"))
+        .map(|_| app.new_request(key, &op, None).expect("new"))
         .collect();
     assert_eq!(names(&app, key)[..3], ["Lookup 1", "Lookup 2", "Lookup 3"]);
     assert_eq!(names(&app, key)[9], "Lookup 10", "numbers by value");
@@ -484,7 +484,7 @@ fn requests_sort_by_name_and_keep_the_selection() {
 
     // A new one goes to its place too, not to the end.
     app.rename_request(key, ids[1], "Zulu").expect("rename");
-    let new = app.new_request(key, &op).expect("new");
+    let new = app.new_request(key, &op, None).expect("new");
     let window = app.project(key).expect("open");
     let rows = &window.sidebar().requests;
     assert_eq!(rows[2].name, "Lookup 2");
@@ -498,8 +498,8 @@ fn delete_asks_first_and_selects_a_neighbour() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let first = app.new_request(key, &op).expect("new");
-    let second = app.new_request(key, &op).expect("new");
+    let first = app.new_request(key, &op, None).expect("new");
+    let second = app.new_request(key, &op, None).expect("new");
     app.select_request(key, Some(first)).expect("select");
 
     app.delete_request(key, first).expect("delete");
@@ -518,12 +518,190 @@ fn delete_asks_first_and_selects_a_neighbour() {
     assert!(events.contains(&Event::SelectionChanged { project: key }));
 }
 
+/// The sidebar tree as `folder/` and request lines, indented by depth.
+fn tree(app: &App, key: ProjectKey) -> Vec<String> {
+    fn walk(node: &crate::FolderNode, rows: &crate::Sidebar, depth: usize, out: &mut Vec<String>) {
+        for f in &node.folders {
+            out.push(format!("{}{}/", "  ".repeat(depth), f.name));
+            walk(f, rows, depth + 1, out);
+        }
+        for id in &node.requests {
+            let name = &rows.request(*id).expect("row").name;
+            out.push(format!("{}{name}", "  ".repeat(depth)));
+        }
+    }
+    let sidebar = app.project(key).expect("open").sidebar();
+    let mut out = Vec::new();
+    walk(&sidebar.tree, sidebar, 0, &mut out);
+    out
+}
+
+#[test]
+fn new_request_goes_into_the_operations_folder() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    // One supported port (the other is rpc/encoded): one level, created on first use.
+    let first = app.new_request(key, &op, None).expect("new");
+    assert_eq!(tree(&app, key), ["Lookup/", "  Lookup 1"]);
+    let window = app.project(key).expect("open");
+    assert!(window.path().join(REQUESTS_DIR).join("Lookup").is_dir());
+    assert_eq!(
+        window.sidebar().request(first).expect("row").folder,
+        "Lookup"
+    );
+
+    // An existing folder is matched ignoring case.
+    app.rename_folder(key, "Lookup", "lookup").expect("rename");
+    app.new_request(key, &op, None).expect("new");
+    assert_eq!(tree(&app, key), ["lookup/", "  Lookup 1", "  Lookup 2"]);
+    // A folder the user renamed is theirs: the next request gets a new one.
+    app.rename_folder(key, "lookup", "Mine").expect("rename");
+    app.new_request(key, &op, None).expect("new");
+    assert_eq!(
+        tree(&app, key),
+        ["Lookup/", "  Lookup 3", "Mine/", "  Lookup 1", "  Lookup 2"]
+    );
+    // A selected folder wins; duplicate stays beside the original.
+    app.new_folder(key, "").expect("new folder");
+    let chosen = app.new_request(key, &op, Some("New Folder")).expect("new");
+    app.duplicate_request(key, chosen).expect("duplicate");
+    assert_eq!(
+        tree(&app, key)[..3],
+        ["Lookup/", "  Lookup 3", "Mine/"],
+        "folders sort by name"
+    );
+    assert_eq!(
+        tree(&app, key)[5..],
+        ["New Folder/", "  Lookup 4", "  Lookup 4 copy"]
+    );
+}
+
+#[test]
+fn folder_commands_rename_move_and_delete() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    let a = app.new_request(key, &op, None).expect("new");
+    let b = app.new_request(key, &op, None).expect("new");
+    app.take_events();
+
+    // New Folder: created in the parent, then renamed inline.
+    let path = app.new_folder(key, "Lookup").expect("new folder");
+    assert_eq!(path, "Lookup/New Folder");
+    assert_eq!(
+        app.take_events(),
+        [
+            Event::SidebarChanged { project: key },
+            Event::BeginRenameFolder {
+                project: key,
+                path: path.clone()
+            }
+        ]
+    );
+    let path = app.rename_folder(key, &path, "Archive").expect("rename");
+    assert!(matches!(
+        app.rename_folder(key, &path, "a:b"),
+        Err(ModelError::Project(_))
+    ));
+
+    // Moves keep ids, history and the open editor.
+    app.select_request(key, Some(a)).expect("select");
+    app.move_request(key, a, &path).expect("move");
+    assert_eq!(
+        tree(&app, key),
+        ["Lookup/", "  Archive/", "    Lookup 1", "  Lookup 2"]
+    );
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), Some(a));
+    assert_eq!(window.editor().map(|e| e.request()), Some(a));
+    assert!(window.can_move_folder("Lookup/Archive", ""));
+    assert!(
+        !window.can_move_folder("Lookup", "Lookup/Archive"),
+        "into itself"
+    );
+    assert!(window.can_move_request(b, "Lookup/Archive"));
+    let archive = app.move_folder(key, "Lookup/Archive", "").expect("move");
+    assert_eq!(archive, "Archive");
+    assert_eq!(
+        tree(&app, key),
+        ["Archive/", "  Lookup 1", "Lookup/", "  Lookup 2"]
+    );
+    assert!(matches!(
+        app.move_folder(key, "Lookup", "Lookup"),
+        Err(ModelError::Project(_))
+    ));
+
+    // Deleting a folder with requests asks, saying how many go; the selection moves on.
+    app.delete_folder(key, "Archive").expect("delete");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(confirm.title, "Delete “Archive” and its request?");
+    assert_eq!(
+        confirm.message,
+        "Their history is deleted too. This can't be undone."
+    );
+    app.new_request(key, &op, Some("Archive")).expect("new");
+    app.select_request(key, Some(a)).expect("select");
+    app.delete_folder(key, "Archive").expect("delete");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert_eq!(confirm.title, "Delete “Archive” and its 2 requests?");
+    assert_eq!(tree(&app, key), ["Lookup/", "  Lookup 2"]);
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), Some(b));
+    assert!(!window.path().join(REQUESTS_DIR).join("Archive").exists());
+
+    // An empty folder goes without asking.
+    app.new_folder(key, "").expect("new folder");
+    app.delete_folder(key, "New Folder").expect("delete");
+    assert_eq!(tree(&app, key), ["Lookup/", "  Lookup 2"]);
+}
+
+#[test]
+fn collapsed_folders_survive_a_relaunch_and_follow_renames() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let op = lookup(&app, key, "LegacyPort").operation;
+    app.new_request(key, &op, None).expect("new");
+    app.new_folder(key, "Lookup").expect("new folder");
+    app.set_folder_collapsed(key, "Lookup/New Folder", true)
+        .expect("collapse");
+    app.rename_folder(key, "Lookup", "Renamed").expect("rename");
+    let collapsed: Vec<_> = app
+        .project(key)
+        .expect("open")
+        .collapsed_folders()
+        .iter()
+        .cloned()
+        .collect();
+    assert_eq!(collapsed, ["Renamed/New Folder"]);
+    app.set_folder_collapsed(key, "Renamed", true)
+        .expect("collapse");
+    assert!(app.quit().expect("quit"));
+    drop(app);
+
+    let (_fake, mut app) = setup.launch();
+    let key = app.projects().next().expect("open").0;
+    let collapsed: Vec<_> = app
+        .project(key)
+        .expect("open")
+        .collapsed_folders()
+        .iter()
+        .cloned()
+        .collect();
+    assert_eq!(collapsed, ["Renamed", "Renamed/New Folder"]);
+    // A request created in a collapsed folder shows it expanded.
+    app.new_folder(key, "Renamed/New Folder")
+        .expect("new folder");
+    let collapsed = app.project(key).expect("open").collapsed_folders();
+    assert!(collapsed.is_empty(), "{collapsed:?}");
+}
+
 #[test]
 fn deleting_the_last_request_clears_the_selection() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let id = app.new_request(key, &op).expect("new");
+    let id = app.new_request(key, &op, None).expect("new");
     app.delete_request(key, id).expect("delete");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert_eq!(app.project(key).expect("open").selected_request(), None);
@@ -534,8 +712,8 @@ fn the_selection_survives_a_relaunch() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    let first = app.new_request(key, &op).expect("new");
-    let _second = app.new_request(key, &op).expect("new");
+    let first = app.new_request(key, &op, None).expect("new");
+    let _second = app.new_request(key, &op, None).expect("new");
     app.select_request(key, Some(first)).expect("select");
     assert!(app.quit().expect("quit"));
     drop(app);
@@ -560,9 +738,9 @@ fn the_server_popup_follows_the_request() {
         "first server without a request"
     );
 
-    let first = app.new_request(key, &op).expect("new");
+    let first = app.new_request(key, &op, None).expect("new");
     app.choose_server(key, b).expect("choose");
-    let second = app.new_request(key, &op).expect("new");
+    let second = app.new_request(key, &op, None).expect("new");
     assert_eq!(
         app.project(key).expect("open").selected_server(),
         Some(b),
@@ -650,8 +828,8 @@ fn ms(n: u64) -> Duration {
 fn with_requests(setup: &Setup, name: &str) -> (Fake, App, ProjectKey, RequestId, RequestId) {
     let (fake, mut app, key) = open_loaded(setup, name);
     let op = lookup(&app, key, "LegacyPort").operation;
-    let first = app.new_request(key, &op).expect("new");
-    let second = app.new_request(key, &op).expect("new");
+    let first = app.new_request(key, &op, None).expect("new");
+    let second = app.new_request(key, &op, None).expect("new");
     app.select_request(key, Some(first)).expect("select");
     settle(&fake, &mut app);
     (fake, app, key, first, second)
@@ -669,8 +847,7 @@ fn on_disk(app: &App, key: ProjectKey, request: RequestId) -> String {
 
 fn request_file(app: &App, key: ProjectKey, request: RequestId) -> PathBuf {
     let window = app.project(key).expect("open");
-    let name = window.project().request(request).expect("meta").name;
-    window.path().join(REQUESTS_DIR).join(format!("{name}.xml"))
+    window.project().request_path(request).expect("path")
 }
 
 #[test]
@@ -814,7 +991,7 @@ fn save_all_and_quit_cover_every_project() {
     let kb = app.open_project(&folder).expect("open");
     fake.pump_until(&mut app, |app| loaded(app, kb));
     let op = lookup(&app, kb, "LegacyPort").operation;
-    let b = app.new_request(kb, &op).expect("new");
+    let b = app.new_request(kb, &op, None).expect("new");
 
     app.edit(ka, 0..0, "<!--a-->").expect("edit");
     app.edit(kb, 0..0, "<!--b-->").expect("edit");
@@ -937,7 +1114,7 @@ fn an_opened_request_is_validated() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op).expect("new");
+    app.new_request(key, &op, None).expect("new");
     assert_eq!(next_check(&fake, &mut app, key), []);
 }
 
@@ -975,7 +1152,7 @@ fn the_request_summary_follows_checks_and_renames() {
     let setup = Setup::new();
     let (fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op).expect("new");
+    app.new_request(key, &op, None).expect("new");
     assert_eq!(well_formedness(&app, key), WellFormedness::Pending);
     let window = app.project(key).expect("open");
     let summary = window.request_summary().expect("a request is open");
@@ -1110,7 +1287,7 @@ fn without_a_schema_only_well_formedness_is_checked() {
         let key = app.open_project(&folder).expect("open");
         fake.pump_until(&mut app, |app| loaded(app, key));
         let op = lookup(&app, key, "LegacyPort").operation;
-        app.new_request(key, &op).expect("new");
+        app.new_request(key, &op, None).expect("new");
         assert!(app.quit().expect("quit"));
     }
     fs::remove_file(folder.join("wsdl/Legacy.wsdl")).expect("remove");
@@ -1467,7 +1644,7 @@ fn restore_request_hands_back_the_sent_text() {
 
     // Another request has no history; coming back shows the last response again.
     let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op).expect("new");
+    app.new_request(key, &op, None).expect("new");
     assert!(app.project(key).expect("open").response().is_none());
     app.select_request(key, Some(first)).expect("select");
     let window = app.project(key).expect("open");
@@ -1771,7 +1948,7 @@ fn customer_editor(setup: &Setup) -> (Fake, App, ProjectKey, String) {
         .expect("CreateOrder")
         .operation
         .clone();
-    app.new_request(key, &op).expect("new");
+    app.new_request(key, &op, None).expect("new");
     let text =
         fs::read_to_string(customer().join("requests/valid-create-order.xml")).expect("fixture");
     set_text(&mut app, key, &text);
@@ -1984,7 +2161,7 @@ fn new_requests_and_responses_use_the_indent() {
         on_save: false,
     });
     let op = lookup(&app, key, "LegacyPort").operation;
-    app.new_request(key, &op).expect("new");
+    app.new_request(key, &op, None).expect("new");
     let text = editor_text(&app, key);
     assert!(text.contains("\n    <soapenv:Body>"), "{text}");
     assert_eq!(formatted(&app, key, 0..0), None, "{text}");

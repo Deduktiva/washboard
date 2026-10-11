@@ -29,6 +29,8 @@ pub enum Event {
         project: ProjectKey,
         request: RequestId,
     },
+    /// A new folder's row should enter inline rename.
+    BeginRenameFolder { project: ProjectKey, path: String },
     /// The server list or the WSDL's addresses changed; the popup and the Servers pane reload.
     ServersChanged { project: ProjectKey },
     /// The server popup's selection changed.
