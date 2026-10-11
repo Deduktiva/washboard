@@ -11,7 +11,7 @@ use washboard_core::soap;
 
 use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
-use crate::front_end::{Confirm, DialogId};
+use crate::front_end::Confirm;
 use crate::timers::TimerKind;
 
 /// A new server's timeout until the user changes it.
@@ -104,24 +104,13 @@ impl App {
         request: RequestId,
     ) -> Result<(), ModelError> {
         let name = self.window(key)?.project.request(request)?.name;
-        let id = DialogId(self.next());
-        self.dialogs.insert(
-            id,
+        self.confirm_delete(
             PendingDialog::DeleteRequest {
                 project: key,
                 request,
             },
-        );
-        self.front.dialogs.confirm(
-            id,
-            Confirm {
-                title: format!("Delete “{name}”?"),
-                message: "The request and its response history are deleted. This can't be \
-                          undone."
-                    .into(),
-                action: "Delete".into(),
-                cancel: None,
-            },
+            format!("Delete “{name}”?"),
+            "The request and its response history are deleted. This can't be undone.",
         );
         Ok(())
     }
@@ -256,22 +245,13 @@ impl App {
         } else {
             format!("its {count} requests")
         };
-        let id = DialogId(self.next());
-        self.dialogs.insert(
-            id,
+        self.confirm_delete(
             PendingDialog::DeleteFolder {
                 project: key,
                 path: path.to_owned(),
             },
-        );
-        self.front.dialogs.confirm(
-            id,
-            Confirm {
-                title: format!("Delete “{name}” and {requests}?"),
-                message: "Their history is deleted too. This can't be undone.".into(),
-                action: "Delete".into(),
-                cancel: None,
-            },
+            format!("Delete “{name}” and {requests}?"),
+            "Their history is deleted too. This can't be undone.",
         );
         Ok(())
     }
@@ -395,24 +375,14 @@ impl App {
             .find(|s| s.id == server)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let id = DialogId(self.next());
-        self.dialogs.insert(
-            id,
+        self.confirm_delete(
             PendingDialog::DeleteServer {
                 project: key,
                 server,
             },
-        );
-        self.front.dialogs.confirm(
-            id,
-            Confirm {
-                title: format!("Delete “{name}”?"),
-                message: "Requests that used it will use another server. Its password is \
-                          removed from the Keychain."
-                    .into(),
-                action: "Delete".into(),
-                cancel: None,
-            },
+            format!("Delete “{name}”?"),
+            "Requests that used it will use another server. Its password is removed from the \
+             Keychain.",
         );
         Ok(())
     }
@@ -449,5 +419,20 @@ impl App {
         self.events
             .push(Event::ServerSelectionChanged { project: key });
         Ok(())
+    }
+
+    /// The one shape every Delete confirmation takes: a destructive "Delete" and Cancel, with
+    /// `pending` saying what to delete once it is confirmed.
+    fn confirm_delete(&mut self, pending: PendingDialog, title: String, message: &str) {
+        let id = self.pend_dialog(pending);
+        self.front.dialogs.confirm(
+            id,
+            Confirm {
+                title,
+                message: message.into(),
+                action: "Delete".into(),
+                cancel: None,
+            },
+        );
     }
 }
