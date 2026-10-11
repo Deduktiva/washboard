@@ -65,6 +65,7 @@ is the reference for the details they leave out.
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
 | [response pane](specs/response-pane.md) | response, history drawer, older exchanges |
+| [WSDL viewer](specs/wsdl-viewer.md) | the read-only WSDL/XSD viewer, Jump to Definition |
 | [settings](specs/settings.md) | the Settings window, servers |
 | [WSDL](specs/wsdl.md) | WSDL details, `rpc/literal` |
 | [schema bundle](specs/schema-bundle.md) | turning the WSDL's schemas into what libxml2 compiles |
