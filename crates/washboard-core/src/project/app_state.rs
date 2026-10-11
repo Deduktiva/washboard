@@ -117,11 +117,22 @@ impl AppState {
         })
     }
 
-    /// Moves `path` to the front of the recent list, keeping at most [`MAX_RECENT`].
+    /// Moves `path` to the front of the recent list, keeping at most [`MAX_RECENT`]. An older
+    /// entry for the same folder (see [`same_folder`]) is replaced by this spelling.
     pub fn note_recent(&mut self, path: &Path) {
-        self.recent_projects.retain(|p| p != path);
+        self.recent_projects.retain(|p| !same_folder(p, path));
         self.recent_projects.insert(0, path.to_owned());
         self.recent_projects.truncate(MAX_RECENT);
+    }
+}
+
+/// Paths name the same folder: a symlink or another spelling of a project folder is still that
+/// project. Falls back to comparing as given when either can't be resolved (a folder that
+/// vanished is still "the same" as its old path).
+pub fn same_folder(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
     }
 }
 

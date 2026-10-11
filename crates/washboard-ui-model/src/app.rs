@@ -8,7 +8,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use thiserror::Error;
 use washboard_core::model::{RequestId, ServerId};
-use washboard_core::project::{AppState, AppStateError, OpenProject, Project, ProjectError};
+use washboard_core::project::{
+    AppState, AppStateError, OpenProject, Project, ProjectError, same_folder,
+};
 use washboard_core::soap::EnvelopeError;
 
 use crate::diagnostics::Check;
@@ -496,14 +498,5 @@ impl App {
         let id = DialogId(self.next());
         self.dialogs.insert(id, pending);
         id
-    }
-}
-
-/// Paths name the same folder. Falls back to comparing as given when either can't be resolved
-/// (a folder that vanished is still "the same" as its old path).
-fn same_folder(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
     }
 }

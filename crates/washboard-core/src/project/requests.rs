@@ -173,7 +173,8 @@ impl Project {
         Ok(join_rel(&self.requests_dir(), &self.file_name(id)?))
     }
 
-    fn requests_dir(&self) -> PathBuf {
+    /// The `requests/` folder, which holds the request files and their folders.
+    pub fn requests_dir(&self) -> PathBuf {
         self.root.join(REQUESTS_DIR)
     }
 

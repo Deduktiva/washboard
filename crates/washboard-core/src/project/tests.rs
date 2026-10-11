@@ -1264,6 +1264,26 @@ fn failed_replace_leaves_wsdl_untouched() {
     assert!(dir_names(&folder).iter().all(|n| !n.starts_with(".wb-")));
 }
 
+#[test]
+fn wsdl_files_lists_entry_first_and_skips_hidden() {
+    let (_tmp, folder, mut p) = new_project();
+    fs::write(folder.join(WSDL_DIR).join(".DS_Store"), "x").expect("write");
+    assert_eq!(
+        p.wsdl_files().expect("files"),
+        [
+            "CustomerService.wsdl",
+            "CustomerBinding.wsdl",
+            "xsd/common/party-ids.xsd",
+            "xsd/common/party.xsd",
+            "xsd/customer.xsd",
+            "xsd/ext/audit.xsd",
+        ]
+    );
+    // `.previous` holds the old set and is not listed.
+    p.replace_wsdl(&legacy_set()).expect("replace");
+    assert_eq!(p.wsdl_files().expect("files"), ["Legacy.wsdl"]);
+}
+
 // ---- ui_state ----------------------------------------------------------------------------
 
 #[test]
@@ -1309,6 +1329,33 @@ fn app_state_round_trip() {
     state.save(&dir).expect("save");
     assert_eq!(AppState::load(&dir).expect("load"), state);
     assert_eq!(dir_names(&dir), [STATE_FILE]);
+}
+
+#[cfg(unix)]
+#[test]
+fn note_recent_keeps_one_entry_per_folder() {
+    let tmp = TempDir::new().expect("tempdir");
+    let folder = tmp.path().join("Customer API");
+    fs::create_dir(&folder).expect("mkdir");
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&folder, &link).expect("symlink");
+
+    let mut state = AppState::default();
+    state.note_recent(&folder);
+    state.note_recent(&tmp.path().join("other"));
+    state.note_recent(&link);
+    state.note_recent(&tmp.path().join(".").join("Customer API"));
+    assert_eq!(
+        state.recent_projects,
+        [
+            tmp.path().join(".").join("Customer API"),
+            tmp.path().join("other")
+        ]
+    );
+    assert!(same_folder(&folder, &link));
+    // A folder that is gone compares as spelled.
+    assert!(same_folder(Path::new("/gone/x"), Path::new("/gone/x")));
+    assert!(!same_folder(Path::new("/gone/x"), Path::new("/gone/y")));
 }
 
 #[test]

@@ -664,11 +664,7 @@ impl SettingsWindowController {
         let mtm = self.mtm();
         let (name, folder, wsdl) = self
             .read_project(key, |window| {
-                let project = window.project();
-                let dir = project.wsdl_dir();
-                let entry = project.entry_wsdl().ok();
-                let entry = entry.as_deref().and_then(|e| e.strip_prefix(&dir).ok());
-                let files = wsdl_files(&dir, entry);
+                let files = window.project().wsdl_files().unwrap_or_default();
                 (window.name().to_owned(), window.path().to_owned(), files)
             })
             .unwrap_or_default();
@@ -789,38 +785,6 @@ fn app_pane(
         mtm,
     );
     (view, indent, on_save)
-}
-
-/// The WSDL files under `dir`, relative to it, the entry first.
-fn wsdl_files(dir: &Path, entry: Option<&Path>) -> Vec<String> {
-    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            // Hidden names in `wsdl/` are Washboard's: `.previous` holds the set before the
-            // last Replace WSDL.
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, root, out);
-            } else if let Ok(relative) = path.strip_prefix(root) {
-                out.push(relative.display().to_string());
-            }
-        }
-    }
-    let mut files = Vec::new();
-    walk(dir, dir, &mut files);
-    files.sort();
-    if let Some(entry) = entry.map(|e| e.display().to_string())
-        && let Some(i) = files.iter().position(|f| *f == entry)
-    {
-        let first = files.remove(i);
-        files.insert(0, first);
-    }
-    files
 }
 
 pub(crate) fn state(on: bool) -> NSControlStateValue {
