@@ -59,6 +59,9 @@ pub struct Confirm {
     pub message: String,
     /// The action button's label, e.g. "Delete".
     pub action: String,
+    /// The other button's label; "Cancel" when `None`. Answered with
+    /// [`DialogAnswer::Cancelled`] either way.
+    pub cancel: Option<String>,
 }
 
 /// Panels and alerts. Answers come back through
