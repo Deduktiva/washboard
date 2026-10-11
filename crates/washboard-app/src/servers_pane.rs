@@ -305,14 +305,7 @@ impl ServersPane {
     }
 
     fn add_new(&self, name: String, url: String) {
-        let server = Server {
-            id: ServerId::new(),
-            name,
-            url,
-            ignore_tls_errors: false,
-            auth: Auth::None,
-            timeout: DEFAULT_TIMEOUT,
-        };
+        let server = new_server(name, url);
         self.ivars().editing.set(Some(None));
         self.ivars().stored_password.set(false);
         self.load(&server, "New Server");
@@ -321,23 +314,27 @@ impl ServersPane {
     }
 
     /// Writes the sheet's server through the model and closes the sheet. A typed password goes
-    /// to the secret store; an empty one leaves the stored one alone.
+    /// to the secret store; an empty one leaves the stored one alone. A server the project
+    /// refuses (no URL, a bad one, a taken name) is reported, and the sheet stays open on it.
     pub fn save(&self) {
         let Some(editing) = self.ivars().editing.get() else {
             return;
         };
         let key = self.ivars().key;
-        let id = match editing {
-            Some(id) => id,
-            None => match self.command("Could not add a server", |app| app.add_server(key)) {
-                // From here on the sheet edits the added server, so that a second Save after
-                // a failed one does not add another.
-                Some(id) => {
-                    self.ivars().editing.set(Some(Some(id)));
-                    id
-                }
-                None => return,
-            },
+        let Some(id) = editing else {
+            let (server, password) = self.edited(&new_server(String::new(), String::new()));
+            let added = self.command("Could not add a server", |app| {
+                app.add_server(key, &server, password.as_deref())
+            });
+            if added.is_some() {
+                self.close_sheet();
+            } else if self.row_of(server.id).is_some() {
+                // Added, but its password was not stored: from here on the sheet edits it, so
+                // that a second Save does not add another.
+                self.ivars().editing.set(Some(Some(server.id)));
+                self.form().delete.setHidden(false);
+            }
+            return;
         };
         let current = self
             .read_project(key, |w| w.servers().iter().find(|s| s.id == id).cloned())
@@ -392,11 +389,9 @@ impl ServersPane {
         let form = self.form();
         let basic_auth = form.auth_basic.state() == NSControlStateValueOn;
         let mut server = current.clone();
-        let name = form.name.stringValue().to_string();
-        if !name.trim().is_empty() {
-            server.name = name;
-        }
-        server.url = form.url.stringValue().to_string();
+        // Blank on a new server: the model names it. The project refuses a blank name otherwise.
+        server.name = form.name.stringValue().to_string().trim().to_owned();
+        server.url = form.url.stringValue().to_string().trim().to_owned();
         server.ignore_tls_errors = form.ignore_tls.state() == NSControlStateValueOn;
         server.auth = if basic_auth {
             Auth::Basic {
@@ -627,6 +622,18 @@ impl ServersPane {
 }
 
 impl ModelAccess for ServersPane {}
+
+/// What Add Server… and Add as Server… start from: the sheet's defaults.
+fn new_server(name: String, url: String) -> Server {
+    Server {
+        id: ServerId::new(),
+        name,
+        url,
+        ignore_tls_errors: false,
+        auth: Auth::None,
+        timeout: DEFAULT_TIMEOUT,
+    }
+}
 
 /// The row a button stands for, from its tag.
 fn tag(sender: Option<&AnyObject>) -> usize {

@@ -2,7 +2,6 @@
 //! straight to the project folder; the window's state is re-read from it so the sidebar always
 //! shows what is on disk.
 
-use washboard_core::http::DEFAULT_TIMEOUT;
 use washboard_core::model::{Auth, OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::names;
 use washboard_core::schema::TemplateOptions;
@@ -11,6 +10,9 @@ use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
 use crate::front_end::Confirm;
 use crate::timers::TimerKind;
+
+/// What a server added without a name is called, numbered from 2 when taken.
+const NEW_SERVER_NAME: &str = "New Server";
 
 impl App {
     /// Selects `request` (or nothing) and opens it in the editor. Remembered for the next
@@ -308,20 +310,35 @@ impl App {
         Ok(())
     }
 
-    /// Settings ▸ Servers ▸ +: a server the user then fills in.
-    pub fn add_server(&mut self, key: ProjectKey) -> Result<ServerId, ModelError> {
+    /// Settings ▸ Servers ▸ Add Server…'s Save: adds the sheet's server in one step, so a
+    /// server the project refuses (no URL, a bad one, a taken name) is never added. A blank
+    /// name becomes “New Server”, numbered when taken. `password` as for
+    /// [`update_server`](Self::update_server).
+    pub fn add_server(
+        &mut self,
+        key: ProjectKey,
+        server: &Server,
+        password: Option<&str>,
+    ) -> Result<(), ModelError> {
+        let secrets = self.front.secrets.clone();
         let window = self.window(key)?;
-        let server = Server {
-            id: ServerId::new(),
-            name: "New Server".into(),
-            url: "https://".into(),
-            ignore_tls_errors: false,
-            auth: Auth::None,
-            timeout: DEFAULT_TIMEOUT,
-        };
+        let mut server = server.clone();
+        if server.name.trim().is_empty() {
+            server.name = free_server_name(window.servers());
+        }
         window.project.add_server(&server)?;
+        // The server is added even if its password cannot be stored; the list shows it either
+        // way, so the sheet can go on editing it.
+        let stored = match (&server.auth, password) {
+            (Auth::Basic { .. }, Some(password)) => {
+                window
+                    .project
+                    .set_server_password(server.id, Some(password), secrets.as_ref())
+            }
+            _ => Ok(()),
+        };
         self.servers_changed(key)?;
-        Ok(server.id)
+        Ok(stored?)
     }
 
     /// Saves the settings form for one server. `password` is only looked at with Basic auth:
@@ -426,4 +443,16 @@ impl App {
             },
         );
     }
+}
+
+/// “New Server”, or the first of “New Server 2”, “New Server 3”, … no server is called.
+fn free_server_name(servers: &[Server]) -> String {
+    let taken = |name: &str| servers.iter().any(|s| s.name.trim() == name);
+    (1..)
+        .map(|n| match n {
+            1 => NEW_SERVER_NAME.to_owned(),
+            n => format!("{NEW_SERVER_NAME} {n}"),
+        })
+        .find(|name| !taken(name))
+        .unwrap_or_else(|| NEW_SERVER_NAME.to_owned())
 }

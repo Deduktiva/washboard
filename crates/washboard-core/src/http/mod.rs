@@ -73,6 +73,13 @@ pub fn server_label(servers: &[Server], id: Option<ServerId>, url: &str) -> Stri
     )
 }
 
+/// Whether [`send`] would accept `url` as a server URL: absolute `http` or `https` with a host
+/// and no user name or password. The error is the message [`send`] would report. Checked when a
+/// server is saved, so the rule cannot drift from what sending enforces.
+pub fn check_url(url: &str) -> Result<(), String> {
+    Target::parse(url).map(|_| ())
+}
+
 /// Sends one SOAP 1.1 request and records what went over the wire.
 ///
 /// Never fails: transport problems (bad URL, DNS, connect, TLS, timeout, oversized body) are

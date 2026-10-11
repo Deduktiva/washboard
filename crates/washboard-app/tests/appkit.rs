@@ -2061,12 +2061,10 @@ mod checks {
         // A server on this machine, with Basic auth so the log has an `Authorization` header.
         let key = project.key();
         let (url, server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::ZERO);
-        let id = ctx
-            .delegate
+        let id = ServerId::new();
+        ctx.delegate
             .command("add a server", |app| {
-                let id = app.add_server(key)?;
-                app.update_server(key, &local_server(id, &url), Some("secret"))?;
-                Ok(id)
+                app.add_server(key, &local_server(id, &url), Some("secret"))
             })
             .expect("server added");
         let popup = project.server_popup();
@@ -3200,6 +3198,13 @@ mod checks {
         servers
             .name_field()
             .setStringValue(&NSString::from_str("Local"));
+        // No URL: refused with an alert, and the sheet stays open on the unsaved server.
+        servers.save();
+        let alerts = ctx.alerts();
+        assert_eq!(alerts.len(), 1, "{alerts:?}");
+        assert!(alerts[0].message.contains("URL"), "{alerts:?}");
+        assert!(servers.is_editing() && servers.editing().is_none());
+        assert_eq!(server_names(ctx, key).len(), names.len(), "nothing added");
         servers
             .url_field()
             .setStringValue(&NSString::from_str("http://localhost:8080/ws"));
