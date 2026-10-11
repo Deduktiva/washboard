@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 
-use super::{LAST_SERVER_KEY, Project, ProjectError, Result, parse_uuid};
+use super::{LAST_SERVER_KEY, Project, ProjectError, Result, names, parse_uuid};
 use crate::http;
 use crate::model::{Auth, Server, ServerId};
 use crate::secrets::{SecretKey, SecretStore};
@@ -22,7 +22,8 @@ pub enum ServerError {
     #[error("server name may not be empty")]
     EmptyName,
     /// Names address servers on the command line and in the toolbar's popup. Compared after
-    /// trimming, case-sensitively, as the command line looks them up.
+    /// trimming and case-insensitively, so "Prod" and "prod" cannot both exist; a server may
+    /// change the case of its own name.
     #[error("a server named {0:?} already exists")]
     NameTaken(String),
     #[error("server URL may not be empty")]
@@ -135,7 +136,7 @@ impl Project {
         if self
             .servers()?
             .iter()
-            .any(|s| s.id != server.id && s.name.trim() == name)
+            .any(|s| s.id != server.id && names::fold(s.name.trim()) == names::fold(name))
         {
             return Err(ServerError::NameTaken(name.to_owned()).into());
         }

@@ -821,6 +821,19 @@ fn added_and_saved_servers_follow_the_projects_rules() {
         refused(app.update_server(key, &edited, None));
     }
     assert_eq!(project(&app, key).servers()[1], saved);
+
+    // Names clash ignoring case, but a server may change the case of its own name.
+    let e = refused(app.add_server(key, &new_server("new server", "https://d.invalid/"), None));
+    assert_eq!(e, ServerError::NameTaken("new server".into()));
+    let recased = Server {
+        name: "NEW SERVER 2".into(),
+        ..saved
+    };
+    app.update_server(key, &recased, None).expect("recase");
+    assert_eq!(names(&app), ["New Server", "NEW SERVER 2"]);
+    // So the next default name skips both, whatever their case.
+    add_server(&mut app, key, "", "https://e.invalid/");
+    assert_eq!(names(&app)[2], "New Server 3");
 }
 
 #[test]

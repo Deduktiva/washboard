@@ -447,7 +447,11 @@ impl App {
 
 /// “New Server”, or the first of “New Server 2”, “New Server 3”, … no server is called.
 fn free_server_name(servers: &[Server]) -> String {
-    let taken = |name: &str| servers.iter().any(|s| s.name.trim() == name);
+    let taken = |name: &str| {
+        servers
+            .iter()
+            .any(|s| s.name.trim().to_lowercase() == name.to_lowercase())
+    };
     (1..)
         .map(|n| match n {
             1 => NEW_SERVER_NAME.to_owned(),

@@ -991,7 +991,7 @@ fn servers_need_a_free_name_and_a_url_send_accepts() {
         Err(ProjectError::InvalidServer(ServerError::EmptyName))
     ));
 
-    // Taken: compared trimmed and case-sensitively; the server's own name is not a clash.
+    // Taken: compared trimmed and case-insensitively; the server's own name is not a clash.
     let twin = Server {
         name: " dev ".into(),
         ..server("x")
@@ -1004,12 +1004,25 @@ fn servers_need_a_free_name_and_a_url_send_accepts() {
         p.add_server(&twin).expect_err("taken").to_string(),
         "a server named \"dev\" already exists"
     );
-    p.check_server(&Server {
-        name: "Dev".into(),
-        ..server("x")
-    })
-    .expect("case differs");
+    assert_eq!(
+        server_error(
+            &p,
+            &Server {
+                name: "DEV".into(),
+                ..server("x")
+            }
+        ),
+        ServerError::NameTaken("DEV".into())
+    );
     p.check_server(&dev).expect("its own name");
+    // Renaming a server to another case of its own name is no clash and keeps the new case.
+    let recased = Server {
+        name: "Dev".into(),
+        ..dev.clone()
+    };
+    p.update_server(&recased, &secrets).expect("recase");
+    assert_eq!(p.server(dev.id).expect("server").name, "Dev");
+    dev = recased;
 
     for (url, expected) in [
         ("", ServerError::EmptyUrl),
