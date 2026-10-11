@@ -496,6 +496,78 @@ fn legacy_rpc_bundle_includes_real_schema() {
     assert_eq!(w.report.rpc_wrappers_generated, 2);
 }
 
+/// Every generated document of `w`, each headed by its URI and namespace.
+fn generated_docs(w: &Wsdl) -> String {
+    w.bundle
+        .docs
+        .iter()
+        .filter(|d| d.origin == SchemaOrigin::Generated)
+        .map(|d| format!("=== {} [{}]\n{}", d.uri, d.target_ns, d.text))
+        .collect()
+}
+
+/// The generated documents byte for byte, for the case nothing else covers: a wrapper with an
+/// empty target namespace, and an rpc wrapper importing a namespaced and a no-namespace document,
+/// with `type` and `element` parts. The fixtures' wrappers are checked piecewise above.
+#[test]
+fn generated_documents_are_byte_exact() {
+    let types = r#"<xs:schema targetNamespace="urn:t">
+      <xs:complexType name="Pt"><xs:sequence/></xs:complexType>
+    </xs:schema>
+    <xs:schema><xs:complexType name="Nt"><xs:sequence/></xs:complexType></xs:schema>
+    <xs:schema><xs:element name="Ne" type="xs:string"/></xs:schema>"#;
+    let rest = r#"
+  <wsdl:message name="In">
+    <wsdl:part name="p1" type="xs:int"/>
+    <wsdl:part name="p2" type="tns:Pt"/>
+    <wsdl:part name="p3" type="Nt"/>
+    <wsdl:part name="p4" element="Ne"/>
+  </wsdl:message>
+  <wsdl:portType name="PT">
+    <wsdl:operation name="R"><wsdl:input message="tns:In"/></wsdl:operation>
+  </wsdl:portType>
+  <wsdl:binding name="B" type="tns:PT">
+    <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="R">
+      <wsdl:input><soap:body use="literal" namespace="urn:rpc"/></wsdl:input>
+    </wsdl:operation>
+  </wsdl:binding>"#;
+    let w = mem(&[("S.wsdl", &wsdl(types, rest))]);
+    assert_eq!(
+        generated_docs(&w),
+        r#"=== washboard:/ns/1.xsd []
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
+  <xs:include schemaLocation="washboard:/inline/1.xsd"/>
+  <xs:include schemaLocation="washboard:/inline/2.xsd"/>
+</xs:schema>
+=== washboard:/rpc/2.xsd [urn:rpc]
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:n0="urn:t" targetNamespace="urn:rpc">
+  <xs:import namespace="urn:t" schemaLocation="washboard:/inline/0.xsd"/>
+  <xs:import schemaLocation="washboard:/ns/1.xsd"/>
+  <xs:element name="R">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="p1" type="xs:int"/>
+        <xs:element name="p2" type="n0:Pt"/>
+        <xs:element name="p3" type="Nt"/>
+        <xs:element ref="Ne"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
+=== washboard:/root.xsd [urn:washboard:root]
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:root">
+  <xs:import namespace="urn:t" schemaLocation="washboard:/inline/0.xsd"/>
+  <xs:import schemaLocation="washboard:/ns/1.xsd"/>
+  <xs:import namespace="urn:rpc" schemaLocation="washboard:/rpc/2.xsd"/>
+</xs:schema>
+"#
+    );
+}
+
 #[test]
 fn structural_report_has_counts_but_no_names() {
     let w = customer();

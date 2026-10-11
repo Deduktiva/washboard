@@ -16,6 +16,7 @@
 //! unchanged. Relative URIs would be resolved against the including document and miss.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
 
 use crate::diag::{DiagSource, Diagnostic};
 use crate::model::{QName, SchemaBundle, SchemaDoc, SchemaOrigin};
@@ -315,7 +316,7 @@ pub(crate) fn build(
     // ---- generated wrappers
     let mut rpc_count = 0;
     for (ns, c) in &generated_ns {
-        let mut g = GenSchema::new(ns);
+        let mut g = SchemaWriter::new(ns);
         for &n in &by_ns[ns] {
             g.include(&uri(n));
         }
@@ -347,31 +348,15 @@ pub(crate) fn build(
     }
 
     // ---- root
-    let mut root = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    root.push_str(&format!(
-        "<xs:schema xmlns:xs=\"{XSD_NS}\" targetNamespace=\"{ROOT_NS}\">\n"
-    ));
+    let mut root = SchemaWriter::new(ROOT_NS);
     for ns in &ns_order {
-        let c = &canonical[ns];
-        if ns.is_empty() {
-            root.push_str(&format!(
-                "  <xs:import schemaLocation=\"{}\"/>\n",
-                escape_attr(c)
-            ));
-        } else {
-            root.push_str(&format!(
-                "  <xs:import namespace=\"{}\" schemaLocation=\"{}\"/>\n",
-                escape_attr(ns),
-                escape_attr(c)
-            ));
-        }
+        root.import(ns, &canonical[ns]);
     }
-    root.push_str("</xs:schema>\n");
     docs.push(SchemaDoc {
         uri: ROOT_URI.to_owned(),
         target_ns: ROOT_NS.to_owned(),
         origin: SchemaOrigin::Generated,
-        text: root,
+        text: root.finish(),
     });
 
     BundleOut {
@@ -512,8 +497,9 @@ fn add_wrapper(
     });
 }
 
-/// Writer for generated schema documents.
-struct GenSchema {
+/// Writer for generated schema documents: the bundle root, namespace and rpc wrappers here,
+/// and the request root in `validate`. Imports come before the body, as XSD requires.
+pub(crate) struct SchemaWriter {
     tns: String,
     prefixes: BTreeMap<String, String>,
     body: String,
@@ -521,8 +507,8 @@ struct GenSchema {
     imports: Vec<(String, String)>,
 }
 
-impl GenSchema {
-    fn new(tns: &str) -> Self {
+impl SchemaWriter {
+    pub(crate) fn new(tns: &str) -> Self {
         Self {
             tns: tns.to_owned(),
             prefixes: BTreeMap::new(),
@@ -532,10 +518,17 @@ impl GenSchema {
     }
 
     fn include(&mut self, uri: &str) {
-        self.body.push_str(&format!(
-            "  <xs:include schemaLocation=\"{}\"/>\n",
+        let _ = writeln!(
+            self.body,
+            "  <xs:include schemaLocation=\"{}\"/>",
             escape_attr(uri)
-        ));
+        );
+    }
+
+    /// Imports `ns` (empty: no namespace) from `uri`. Callers keep namespaces unique; libxml2
+    /// would skip a second import of the same namespace.
+    pub(crate) fn import(&mut self, ns: &str, uri: &str) {
+        self.imports.push((ns.to_owned(), uri.to_owned()));
     }
 
     /// A QName reference usable in an attribute value. No-namespace names stay unprefixed;
@@ -611,29 +604,22 @@ impl GenSchema {
         self.body.push_str(&s);
     }
 
-    fn finish(self) -> String {
-        let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-        out.push_str(&format!("<xs:schema xmlns:xs=\"{XSD_NS}\""));
+    pub(crate) fn finish(self) -> String {
+        let mut out =
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<xs:schema xmlns:xs=\"{XSD_NS}\"");
         for (ns, p) in &self.prefixes {
-            out.push_str(&format!(" xmlns:{p}=\"{}\"", escape_attr(ns)));
+            let _ = write!(out, " xmlns:{p}=\"{}\"", escape_attr(ns));
         }
         if !self.tns.is_empty() {
-            out.push_str(&format!(" targetNamespace=\"{}\"", escape_attr(&self.tns)));
+            let _ = write!(out, " targetNamespace=\"{}\"", escape_attr(&self.tns));
         }
         out.push_str(">\n");
         for (ns, uri) in &self.imports {
-            if ns.is_empty() {
-                out.push_str(&format!(
-                    "  <xs:import schemaLocation=\"{}\"/>\n",
-                    escape_attr(uri)
-                ));
-            } else {
-                out.push_str(&format!(
-                    "  <xs:import namespace=\"{}\" schemaLocation=\"{}\"/>\n",
-                    escape_attr(ns),
-                    escape_attr(uri)
-                ));
+            out.push_str("  <xs:import ");
+            if !ns.is_empty() {
+                let _ = write!(out, "namespace=\"{}\" ", escape_attr(ns));
             }
+            let _ = writeln!(out, "schemaLocation=\"{}\"/>", escape_attr(uri));
         }
         out.push_str(&self.body);
         out.push_str("</xs:schema>\n");

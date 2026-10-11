@@ -23,8 +23,8 @@ use roxmltree::Node;
 use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, pos_at_byte};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::schema::{SchemaModel, SuggestionSource, block_path};
-use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS, XSD_NS};
-use crate::wsdl::{Dispatch, Wsdl};
+use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS};
+use crate::wsdl::{Dispatch, SchemaWriter, Wsdl};
 use crate::xml;
 
 use super::xsd::{CompiledSchema, StripAttributes};
@@ -87,33 +87,18 @@ pub fn request_bundle(bundle: &SchemaBundle) -> SchemaBundle {
         .get(&bundle.root)
         .map(|d| d.target_ns.clone())
         .unwrap_or_default();
-    let mut root = format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <xs:schema xmlns:xs=\"{XSD_NS}\" targetNamespace=\"{REQUEST_ROOT_NS}\">\n"
-    );
-    let import = |ns: &str, uri: &str| match ns {
-        "" => format!(
-            "  <xs:import schemaLocation=\"{}\"/>\n",
-            xml::escape_attr(uri)
-        ),
-        ns => format!(
-            "  <xs:import namespace=\"{}\" schemaLocation=\"{}\"/>\n",
-            xml::escape_attr(ns),
-            xml::escape_attr(uri)
-        ),
-    };
+    let mut root = SchemaWriter::new(REQUEST_ROOT_NS);
     if !bundle.root.is_empty() {
-        root.push_str(&import(&root_ns, &bundle.root));
+        root.import(&root_ns, &bundle.root);
     }
     if !own_envelope {
-        root.push_str(&import(SOAP11_ENV_NS, ENVELOPE_URI));
+        root.import(SOAP11_ENV_NS, ENVELOPE_URI);
     }
-    root.push_str("</xs:schema>\n");
     out.docs.push(SchemaDoc {
         uri: REQUEST_ROOT_URI.to_owned(),
         target_ns: REQUEST_ROOT_NS.to_owned(),
         origin: SchemaOrigin::Generated,
-        text: root,
+        text: root.finish(),
     });
     out.root = REQUEST_ROOT_URI.to_owned();
     out
@@ -691,5 +676,56 @@ mod tests {
         let r = request_bundle(&b);
         assert!(r.get(ENVELOPE_URI).is_none());
         assert_eq!(r.root, REQUEST_ROOT_URI);
+    }
+
+    /// The generated request root byte for byte: with and without our envelope, and for a
+    /// project root with and without a namespace.
+    #[test]
+    fn request_root_is_byte_exact() {
+        let root = |b: &SchemaBundle| {
+            request_bundle(b)
+                .get(REQUEST_ROOT_URI)
+                .expect("request root")
+                .text
+                .clone()
+        };
+        assert_eq!(
+            root(&test_support::customer().bundle),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+  <xs:import namespace="urn:washboard:root" schemaLocation="washboard:/root.xsd"/>
+  <xs:import namespace="http://schemas.xmlsoap.org/soap/envelope/" schemaLocation="washboard:/soap/envelope-1.1.xsd"/>
+</xs:schema>
+"#
+        );
+        let mut b = SchemaBundle {
+            docs: vec![SchemaDoc {
+                uri: "washboard:/wsdl/a.xsd".into(),
+                target_ns: String::new(),
+                origin: SchemaOrigin::File {
+                    path: "a.xsd".into(),
+                },
+                text: String::new(),
+            }],
+            root: "washboard:/wsdl/a.xsd".into(),
+        };
+        assert_eq!(
+            root(&b),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+  <xs:import schemaLocation="washboard:/wsdl/a.xsd"/>
+  <xs:import namespace="http://schemas.xmlsoap.org/soap/envelope/" schemaLocation="washboard:/soap/envelope-1.1.xsd"/>
+</xs:schema>
+"#
+        );
+        b.docs[0].target_ns = SOAP11_ENV_NS.into();
+        b.root = String::new();
+        assert_eq!(
+            root(&b),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="urn:washboard:request-root">
+</xs:schema>
+"#
+        );
     }
 }
