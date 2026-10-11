@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::Context;
-use washboard_core::diag::Severity;
+use washboard_core::diag;
 use washboard_core::model::RequestId;
 use washboard_core::project::{Project, ReplaceReport, format_timestamp, request_texts};
 use washboard_core::validate::RequestSchema;
@@ -86,21 +86,9 @@ pub fn replace_wsdl(dir: &Path, entry: &Path, extra: &[PathBuf]) -> anyhow::Resu
 pub fn show(dir: &Path) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let w = support::load_project_wsdl(&project)?;
-    let (errors, warnings) =
-        w.check
-            .diagnostics
-            .iter()
-            .fold((0, 0), |(e, wn), d| match d.severity {
-                Severity::Error => (e + 1, wn),
-                Severity::Warning => (e, wn + 1),
-            });
-    let ops: Vec<_> = w
-        .definitions
-        .bindings
-        .iter()
-        .flat_map(|b| &b.operations)
-        .collect();
-    let supported = ops.iter().filter(|o| o.is_supported()).count();
+    let errors = diag::error_count(&w.check.diagnostics);
+    let warnings = w.check.diagnostics.len() - errors;
+    let (ops, supported) = (w.report.operations, w.report.operations_supported);
     println!("name:        {}", project.name()?);
     println!(
         "folder:      {}",
@@ -120,9 +108,8 @@ pub fn show(dir: &Path) -> anyhow::Result<ExitCode> {
         println!("  {d}");
     }
     println!(
-        "operations:  {} ({supported} supported, {} unsupported)",
-        ops.len(),
-        ops.len() - supported
+        "operations:  {ops} ({supported} supported, {} unsupported)",
+        ops - supported
     );
     println!("requests:    {}", project.requests()?.len());
     println!("servers:     {}", project.servers()?.len());
