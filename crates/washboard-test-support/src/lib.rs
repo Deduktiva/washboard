@@ -3,8 +3,8 @@
 //!
 //! Every crate takes this as a dev-dependency only, so none of it ships;
 //! `washboard-core/tests/network_boundary.rs` checks that, which is what lets [`server`] use
-//! sockets outside `washboard_core::http` (PLAN §6). It depends on no workspace crate, so
-//! core's unit tests can use it too without seeing a second copy of core's types.
+//! sockets outside `washboard_core::http` (`docs/specs/network.md`). It depends on no workspace
+//! crate, so core's unit tests can use it too without seeing a second copy of core's types.
 
 pub mod server;
 

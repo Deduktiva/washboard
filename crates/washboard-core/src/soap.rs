@@ -39,9 +39,9 @@ pub enum EnvelopeError {
     Schema(#[from] SchemaError),
 }
 
-/// A complete SOAP 1.1 request envelope for an operation's input (PLAN "Template
-/// generation"): the declared `soap:header` blocks in a `Header` (omitted when there are none)
-/// and the body element(s) expanded from the schema.
+/// A complete SOAP 1.1 request envelope for an operation's input (`docs/specs/schema-model.md`,
+/// "Templates"): the declared `soap:header` blocks in a `Header` (omitted when there are none) and
+/// the body element(s) expanded from the schema.
 ///
 /// Namespaces are declared once on the `Envelope` when the templates agree on prefixes, and on
 /// each block otherwise. Header parts declared with `type=` have no element to emit and are

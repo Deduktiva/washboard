@@ -1,6 +1,6 @@
-//! Project window commands (PLAN §4 "Requests", §8 "Project settings → Servers"). Every
-//! change goes straight to the project folder; the window's state is re-read from it so the
-//! sidebar always shows what is on disk.
+//! Project window commands (`docs/specs/requests.md`, `docs/specs/settings.md`). Every change goes
+//! straight to the project folder; the window's state is re-read from it so the sidebar always
+//! shows what is on disk.
 
 use std::time::Duration;
 
@@ -299,8 +299,8 @@ impl App {
         Ok(())
     }
 
-    /// The toolbar's server popup. Remembered on the selected request, which is also what a
-    /// new request starts with (PLAN §4 "Requests").
+    /// The toolbar's server popup. Remembered on the selected request, which is also what a new
+    /// request starts with (`docs/specs/requests.md`).
     pub fn choose_server(&mut self, key: ProjectKey, server: ServerId) -> Result<(), ModelError> {
         let window = self.window(key)?;
         let Some(request) = window.selected_request() else {

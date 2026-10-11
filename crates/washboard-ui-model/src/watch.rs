@@ -1,5 +1,5 @@
-//! Request files changed outside the app (PLAN M5, §2: `notify`, FSEvents on macOS): an editor,
-//! `git checkout`, Finder.
+//! Request files changed outside the app (`docs/specs/editor.md`; `notify`, FSEvents on macOS): an
+//! editor, `git checkout`, Finder.
 //!
 //! The watcher only says that something under `requests/` changed. After a short debounce the
 //! model re-reads the folder ([`Project::reconcile`](washboard_core::project::Project)) and the
@@ -108,8 +108,8 @@ mod backend {
     }
 }
 
-/// No watching off macOS: `notify`'s inotify backend brings `mio`, which the network boundary
-/// check keeps out of the dependency graph (PLAN §6), and only macOS has a front end. The
+/// No watching off macOS: `notify`'s inotify backend brings `mio`, which the network boundary check
+/// keeps out of the dependency graph (`docs/specs/network.md`), and only macOS has a front end. The
 /// rescan itself is the same everywhere and tested on Linux.
 #[cfg(not(target_os = "macos"))]
 mod backend {

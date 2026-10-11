@@ -132,7 +132,7 @@ define_class!(
         // SAFETY: the signature matches `applicationDidResignActive:`.
         #[unsafe(method(applicationDidResignActive:))]
         fn did_resign_active(&self, _notification: &NSNotification) {
-            // Switching apps saves every edit (PLAN §4 "Save / autosave").
+            // Switching apps saves every edit (`docs/specs/editor.md`).
             self.apply(App::app_deactivated);
         }
 
@@ -224,7 +224,7 @@ impl AppDelegate {
             .unwrap_or_else(NSUserDefaults::standardUserDefaults);
         let mut model = App::new(options.state_dir, front);
         model.set_format_settings(app_settings::load(&defaults));
-        // FSEvents: requests edited outside the app show up (PLAN M5).
+        // FSEvents: requests edited outside the app show up (`docs/specs/editor.md`).
         model.watch_request_files();
         *this.ivars().model.borrow_mut() = Some(model);
         let _ = this.ivars().defaults.set(defaults);

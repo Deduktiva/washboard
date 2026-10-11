@@ -1,5 +1,5 @@
-//! Structural report for `washboard inspect` (PLAN §5.1): counts and flags only, never
-//! names, namespaces or contents, so it can be shared from machines holding confidential
+//! Structural report for `washboard inspect` (`docs/specs/performance.md`): counts and flags only,
+//! never names, namespaces or contents, so it can be shared from machines holding confidential
 //! WSDLs to check them against the plan's assumptions.
 
 use std::collections::HashSet;

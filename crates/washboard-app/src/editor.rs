@@ -1,5 +1,5 @@
-//! The request editor: an `NSTextView` on TextKit 1 with a line-number ruler and XML
-//! highlighting (PLAN §4 "Editor").
+//! The request editor: an `NSTextView` on TextKit 1 with a line-number ruler and XML highlighting
+//! (`docs/specs/editor.md`).
 //!
 //! TextKit 1, because highlighting uses the layout manager's temporary attributes: they colour
 //! glyphs without touching the text storage, so undo and the saved text never see them.

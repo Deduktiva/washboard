@@ -1,6 +1,6 @@
-//! The request editor's buffer and autosave (PLAN §4 "Save / autosave"). The text widget owns
-//! the visible text and undo; it reports each edit here, and the buffer is what gets saved,
-//! highlighted and validated.
+//! The request editor's buffer and autosave (`docs/specs/editor.md`). The text widget owns the
+//! visible text and undo; it reports each edit here, and the buffer is what gets saved, highlighted
+//! and validated.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;

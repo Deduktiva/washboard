@@ -1,6 +1,6 @@
 //! Project folders: layout, `washboard.sqlite`, request files, history, reconciliation.
 //!
-//! Layout and schema: `docs/PLAN.md` §3.
+//! Layout and schema: `docs/specs/disk-layout.md`.
 //!
 //! A [`Project`] is an open project folder. Opening takes an exclusive lock on the folder, so
 //! one `Project` value is the only writer; it is meant to live on the main thread (one per

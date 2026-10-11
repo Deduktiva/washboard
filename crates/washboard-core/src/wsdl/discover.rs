@@ -1,10 +1,10 @@
 //! Loading from disk with the referenced files that sit where the references say.
 //!
-//! A WSDL usually ships with its XSDs beside it and imports them by relative path. Making the
-//! user add each of them by hand is busywork, so [`load_from_disk`] follows unresolved
-//! relative references to files that exist on disk at the referenced path, adds them, and
-//! loads again until nothing new turns up. Only local files named by a relative path are
-//! read; remote locations are still never fetched (PLAN §4, §6).
+//! A WSDL usually ships with its XSDs beside it and imports them by relative path. Making the user
+//! add each of them by hand is busywork, so [`load_from_disk`] follows unresolved relative
+//! references to files that exist on disk at the referenced path, adds them, and loads again until
+//! nothing new turns up. Only local files named by a relative path are read; remote locations are
+//! still never fetched (`docs/specs/new-project.md`, `docs/specs/network.md`).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

@@ -627,7 +627,7 @@ fn redefine_replaces_type_and_keeps_original_as_base() {
 
 #[test]
 fn rpc_wrapper_including_real_schema_of_same_namespace() {
-    // Shape of the `wsdl` output for fixtures/legacy-rpc (PLAN §5.4): unqualified parts.
+    // Shape of the `wsdl` output for fixtures/legacy-rpc (`docs/specs/wsdl.md`): unqualified parts.
     let real = r#"<xs:schema xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:example:legacy" targetNamespace="urn:example:legacy">
       <xs:complexType name="Address"><xs:sequence>
         <xs:element name="street" type="xs:string"/><xs:element name="city" type="xs:string"/>

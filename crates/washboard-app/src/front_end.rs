@@ -1,4 +1,4 @@
-//! The model's front-end traits on AppKit and GCD (PLAN §2.1).
+//! The model's front-end traits on AppKit and GCD (`docs/specs/architecture.md`).
 //!
 //! None of these call back into the model synchronously: the model is borrowed while it calls
 //! them, so every answer arrives on a later main-queue turn, through the app delegate.

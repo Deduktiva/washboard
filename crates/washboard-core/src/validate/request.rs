@@ -1,4 +1,4 @@
-//! The request validation pipeline (PLAN §4 "Validation semantics").
+//! The request validation pipeline (`docs/specs/validation.md`).
 //!
 //! [`validate_request`] runs well-formedness → SOAP 1.1 root → dispatch of every `Body` child →
 //! **one** libxml2 pass over the whole document, and stops as soon as a step makes the next one
@@ -11,10 +11,10 @@
 //! block is cut out of the document, so there is nothing to re-declare and no line mapping
 //! beyond the start-tag adjustment in [`super::xsd`].
 //!
-//! With a [`SchemaModel`] attached ([`RequestSchema::with_model`]), libxml2's terse errors
-//! about abstract elements and types get the concrete alternatives appended (PLAN §5.2
-//! "Validation errors"). The error kind and element come from the diagnostic's
-//! [`crate::diag::DiagDetail`], never from its message.
+//! With a [`SchemaModel`] attached ([`RequestSchema::with_model`]), libxml2's terse errors about
+//! abstract elements and types get the concrete alternatives appended (`docs/specs/validation.md`,
+//! "Errors"). The error kind and element come from the diagnostic's [`crate::diag::DiagDetail`],
+//! never from its message.
 
 use std::sync::Arc;
 
@@ -131,7 +131,7 @@ pub struct Validation {
 }
 
 impl Validation {
-    /// Send is blocked while this is true (PLAN §4). Warnings do not block.
+    /// Send is blocked while this is true (`docs/specs/validation.md`). Warnings do not block.
     pub fn has_errors(&self) -> bool {
         crate::diag::has_errors(&self.diagnostics)
     }

@@ -51,8 +51,9 @@ pub enum DiagSource {
     Import,
 }
 
-/// What libxml2 said about a schema error, as data rather than message text (PLAN §5.2
-/// "Validation errors"), so later stages can act on the kind of error and the node it is about.
+/// What libxml2 said about a schema error, as data rather than message text
+/// (`docs/specs/validation.md`, "Errors"), so later stages can act on the kind of error and the
+/// node it is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagDetail {
     /// libxml2's `xmlParserErrors` code, e.g. 1876 (`XML_SCHEMAV_CVC_TYPE_2`, abstract type).

@@ -1,4 +1,4 @@
-//! The operation picker's list (Project ▸ New Request…, PLAN §4 "Requests"): which operations
+//! The operation picker's list (Project ▸ New Request…, `docs/specs/requests.md`): which operations
 //! a search shows, grouped and ordered. The front end only draws the result.
 
 use crate::window::{OperationNode, PortNode, ServiceNode};

@@ -1,4 +1,4 @@
-//! Performance of the Rust schema model on a synthetic ~2 MB bundle (PLAN §5.1).
+//! Performance of the Rust schema model on a synthetic ~2 MB bundle (`docs/specs/performance.md`).
 //!
 //! Targets: build < 500 ms, completion queries < 50 ms. Timings are always printed
 //! (`cargo test --release --test schema_perf -- --nocapture`) and asserted only in release

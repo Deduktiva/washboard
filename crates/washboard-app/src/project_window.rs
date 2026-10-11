@@ -1,7 +1,7 @@
-//! One window per open project (PLAN §8): unified toolbar, sidebar, and a content split of the
-//! request (request bar, editor, issues bar) beside the response pane (PLAN §4 "Response pane
-//! and history"). An older exchange from the history replaces the editor with its request as
-//! sent and the toolbar's items with a titlebar accessory.
+//! One window per open project (`docs/gui-drafts.md`): unified toolbar, sidebar, and a content
+//! split of the request (request bar, editor, issues bar) beside the response pane
+//! (`docs/specs/response-pane.md`). An older exchange from the history replaces the editor with its
+//! request as sent and the toolbar's items with a titlebar accessory.
 //!
 //! The controller is an `NSWindowController`, so it sits in the window's responder chain and
 //! answers the Project menu while its window is key. One per project open in the model; the
@@ -146,7 +146,7 @@ define_class!(
         // SAFETY: the signature matches `windowDidResignKey:`.
         #[unsafe(method(windowDidResignKey:))]
         fn window_did_resign_key(&self, _notification: &NSNotification) {
-            // Leaving the window saves its edits (PLAN §4 "Save / autosave").
+            // Leaving the window saves its edits (`docs/specs/editor.md`).
             let key = self.key();
             self.apply(|app| app.window_resigned_key(key));
         }
@@ -351,8 +351,9 @@ impl ProjectWindowController {
         window.setContentViewController(Some(&split));
         // `setContentViewController` resizes the window to the controllers' fitting size.
         window.setContentSize(NSSize::new(1100.0, 700.0));
-        // Size and position are kept per project, by folder (the key changes every launch),
-        // as PLAN §3 intends; a project opened for the first time starts centred.
+        // Size and position are kept per project, by folder (the key changes every launch), as
+        // `docs/specs/macos-app-state.md` intends; a project opened for the first time starts
+        // centred.
         layout::keep_frame(&window, &autosave_name("ProjectWindow", folder));
         this.add_accessory(&window, mtm);
         // Request and response start with half each, unless the project remembers them.
@@ -665,9 +666,10 @@ impl ProjectWindowController {
         self.ivars().content_split.get().expect("set in new()")
     }
 
-    /// The bar under the toolbar for an older exchange (PLAN §4): a yellow tint that works in
-    /// both appearances, the exchange, Restore Request, and Show Latest on Esc. A unified
-    /// toolbar cannot be coloured itself; an accessory is AppKit's way to attach a bar to it.
+    /// The bar under the toolbar for an older exchange (`docs/specs/response-pane.md`): a yellow
+    /// tint that works in both appearances, the exchange, Restore Request, and Show Latest on Esc.
+    /// A unified toolbar cannot be coloured itself; an accessory is AppKit's way to attach a bar to
+    /// it.
     fn add_accessory(&self, window: &NSWindow, mtm: MainThreadMarker) {
         let label = layout::small_label("", mtm);
         layout::truncating(&label, NSLineBreakMode::ByTruncatingTail);

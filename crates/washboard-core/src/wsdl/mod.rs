@@ -2,7 +2,8 @@
 //! operations, messages, SOAP 1.1 binding details (style, soapAction, body/header parts),
 //! plus the import graph, the import check, and the [`SchemaBundle`].
 //!
-//! Details: `docs/PLAN.md` §4 (import check), §5, §5.3, §5.4.
+//! Details: `docs/specs/new-project.md` (import check), `docs/specs/schema-bundle.md`,
+//! `docs/specs/wsdl.md`.
 //!
 //! Entry point: [`load`] on a [`Sources`] set. Loading never fails as a whole: malformed or
 //! missing files are reported in [`ImportCheck::diagnostics`] and the rest is still
@@ -65,7 +66,7 @@ pub struct Wsdl {
     dispatch: HashMap<QName, Vec<Dispatch>>,
 }
 
-/// The import check shown in the New Project / Replace WSDL sheet (PLAN §4).
+/// The import check shown in the New Project / Replace WSDL sheet (`docs/specs/new-project.md`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImportCheck {
     /// Per supplied file, parallel to [`Sources::files`].
@@ -100,7 +101,7 @@ pub struct FileInfo {
     pub target_namespace: Option<String>,
 }
 
-/// Where a request body element is dispatched to (PLAN §4 "Validation semantics" step 4).
+/// Where a request body element is dispatched to (`docs/specs/validation.md` step 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dispatch {
     pub operation: OperationRef,

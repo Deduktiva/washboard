@@ -94,7 +94,7 @@ pub struct CheckedImport {
 }
 
 /// Runs the import check and the schema compile; prints every finding to stderr. Fails when
-/// anything is unresolved or the schema set does not compile (PLAN §4 "Create project").
+/// anything is unresolved or the schema set does not compile (`docs/specs/new-project.md`).
 pub fn check_import(entry: &Path, extra: &[PathBuf]) -> anyhow::Result<CheckedImport> {
     let wsdl::Loaded {
         sources,

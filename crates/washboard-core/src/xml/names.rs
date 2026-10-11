@@ -80,9 +80,9 @@ impl NamespaceMap {
         self.namespace("").unwrap_or("")
     }
 
-    /// How to refer to `ns` in an element name or a QName value such as `xsi:type`: `""` if it
-    /// is the default namespace (no prefix needed), else the alphabetically first prefix bound
-    /// to it. `None` means completion must add a declaration (PLAN §5.2).
+    /// How to refer to `ns` in an element name or a QName value such as `xsi:type`: `""` if it is
+    /// the default namespace (no prefix needed), else the alphabetically first prefix bound to it.
+    /// `None` means completion must add a declaration (`docs/specs/schema-model.md`).
     pub fn prefix_for(&self, ns: &str) -> Option<&str> {
         if !ns.is_empty() && self.default_namespace() == ns {
             return Some("");

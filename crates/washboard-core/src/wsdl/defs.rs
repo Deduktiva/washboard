@@ -1,8 +1,8 @@
 //! WSDL 1.1 definitions, merged across the `wsdl:import` closure by QName.
 //!
 //! Operations are resolved here into what the rest of the app needs (body parts, headers,
-//! soapAction, style). Operations we cannot handle are kept and marked with a [`Support`]
-//! reason so the UI can list them greyed out (`docs/PLAN.md` §1, §5.3).
+//! soapAction, style). Operations we cannot handle are kept and marked with a [`Support`] reason so
+//! the UI can list them greyed out (`docs/specs/wsdl.md`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -113,9 +113,9 @@ impl Operation {
 
     /// QNames of the elements expected as children of `soap:Body`.
     ///
-    /// Document style: the `element` of each body part (parts declared with `type=` cannot
-    /// appear and are skipped). Rpc style: the generated wrapper, named after the operation
-    /// (`<name>Response` for the output) in the `soap:body namespace` (PLAN §5.4).
+    /// Document style: the `element` of each body part (parts declared with `type=` cannot appear
+    /// and are skipped). Rpc style: the generated wrapper, named after the operation
+    /// (`<name>Response` for the output) in the `soap:body namespace` (`docs/specs/wsdl.md`).
     pub fn body_elements(&self, dir: Direction) -> Vec<QName> {
         let Some(m) = self.message(dir) else {
             return Vec::new();
