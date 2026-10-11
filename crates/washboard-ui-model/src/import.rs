@@ -3,16 +3,14 @@
 //! Replace) is enabled only when nothing is unresolved and the schema set compiles.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use washboard_core::diag::{self, Diagnostic};
-use washboard_core::project::{OpenProject, Project, ReplaceReport, WsdlSet, request_texts};
-use washboard_core::validate::xsd::CompiledSchema;
-use washboard_core::wsdl::{self, ImportCheck, StructuralReport};
+pub use washboard_core::project::CheckedImport;
+use washboard_core::project::{OpenProject, Project, ReplaceReport, check_import, request_texts};
 
 use crate::app::{App, ModelError, ProjectKey};
 use crate::event::Event;
-use crate::window::ProjectSchema;
+use crate::window::{ProjectSchema, load_schema};
 
 /// Which sheet: there is at most one New Project sheet and one Replace WSDL sheet per project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -44,30 +42,6 @@ pub enum CheckState {
     Done(Box<CheckedImport>),
     /// The files could not be read at all.
     Failed(String),
-}
-
-/// What the import check found.
-#[derive(Debug)]
-pub struct CheckedImport {
-    /// Every reference with its resolution, and the findings.
-    pub check: ImportCheck,
-    pub report: StructuralReport,
-    /// Schema compile errors and warnings; empty if the check already failed.
-    pub compile: Vec<Diagnostic>,
-    /// `(port, address)` of each SOAP 1.1 port: New Project opens the Servers pane when there
-    /// is one, before the new project's schema has loaded.
-    pub addresses: Vec<(String, String)>,
-    /// Files read because a relative reference named them and they exist next to the
-    /// importing file; the user did not add them.
-    pub found: Vec<PathBuf>,
-    set: WsdlSet,
-}
-
-impl CheckedImport {
-    /// Nothing unresolved and the schema set compiles.
-    pub fn is_usable(&self) -> bool {
-        !self.check.has_errors() && !diag::has_errors(&self.compile)
-    }
 }
 
 impl ImportSheet {
@@ -139,7 +113,7 @@ impl App {
         sheet.generation = generation;
         self.events.push(Event::ImportChanged { target });
         self.spawn(
-            move || check_import(&entry, &extra),
+            move || check_import(&entry, &extra).map_err(|e| e.to_string()),
             move |app, result| app.import_checked(target, generation, result),
         );
         Ok(())
@@ -218,7 +192,7 @@ impl App {
         self.events.push(Event::ServersChanged { project: key });
         self.spawn(
             move || {
-                let schema = ProjectSchema::load(&entry, wsdl_dir)?;
+                let schema = load_schema(&entry, wsdl_dir)?;
                 let report = ReplaceReport::new(
                     &old_operations,
                     &schema.wsdl,
@@ -248,32 +222,6 @@ impl App {
         );
         Ok(())
     }
-}
-
-/// Runs on a worker.
-fn check_import(entry: &Path, extra: &[PathBuf]) -> Result<CheckedImport, String> {
-    let wsdl::Loaded {
-        sources,
-        wsdl: w,
-        found,
-    } = wsdl::load_from_disk(entry, extra).map_err(|e| e.to_string())?;
-    let compile = if w.check.has_errors() {
-        Vec::new()
-    } else {
-        match CompiledSchema::compile(&w.bundle) {
-            Ok(schema) => schema.warnings().to_vec(),
-            Err(diagnostics) => diagnostics,
-        }
-    };
-    let set = WsdlSet::from_import(&sources, &w);
-    Ok(CheckedImport {
-        addresses: w.soap11_addresses(),
-        check: w.check,
-        report: w.report,
-        compile,
-        found,
-        set,
-    })
 }
 
 /// Sheets keyed by target; lives in [`App`].

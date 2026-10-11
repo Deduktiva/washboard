@@ -5,7 +5,8 @@ use std::process::ExitCode;
 
 use serde::Serialize;
 use washboard_core::model::{OperationRef, RequestMeta};
-use washboard_core::project::{Project, operation_folder};
+use washboard_core::project::{Project, ProjectSchema};
+use washboard_core::schema::TemplateOptions;
 use washboard_core::wsdl::Protocol;
 
 use crate::support::{self, protocol_label, style_label};
@@ -25,7 +26,7 @@ struct OperationRow {
 
 pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
-    let w = support::load_project_wsdl(&project)?;
+    let w = support::load_project_schema(&project)?.wsdl;
     let mut rows = Vec::new();
     for b in &w.definitions.bindings {
         for o in &b.operations {
@@ -93,12 +94,11 @@ pub fn template(
     Ok(ExitCode::SUCCESS)
 }
 
-/// An operation's request envelope, and where New Request would file it.
+/// An operation's request envelope, and the WSDL that says where New Request files it.
 pub struct Generated {
-    pub operation: OperationRef,
+    schema: ProjectSchema,
+    operation: OperationRef,
     pub text: String,
-    /// The operation's folder ([`operation_folder`]).
-    pub folder: String,
 }
 
 impl Generated {
@@ -110,23 +110,18 @@ impl Generated {
         name: Option<&str>,
         text: &str,
     ) -> anyhow::Result<RequestMeta> {
-        let (folder, op) = (&self.folder, &self.operation);
-        Ok(match name {
-            Some(n) => project.create_request_named_in(folder, n, Some(op), text)?,
-            None => project.create_request_in(folder, op, text)?,
-        })
+        Ok(project.create_request_for(&self.schema.wsdl, &self.operation, None, name, text)?)
     }
 }
 
 /// Resolves the operation and builds its request envelope.
 pub fn generate(project: &Project, spec: &str) -> anyhow::Result<Generated> {
-    let w = support::load_project_wsdl(project)?;
-    let operation = support::resolve_operation(&w, spec)?;
-    let text = support::envelope(&w, &operation)?;
-    let folder = operation_folder(&w, &operation);
+    let schema = support::load_project_schema(project)?;
+    let operation = support::resolve_operation(&schema.wsdl, spec)?;
+    let text = schema.request_template(&operation, &TemplateOptions::default())?;
     Ok(Generated {
+        schema,
         operation,
         text,
-        folder,
     })
 }

@@ -1041,6 +1041,38 @@ fn deleting_a_server_clears_last_server_and_secret() {
     ));
 }
 
+#[test]
+fn default_server_is_the_requests_else_the_projects_last() {
+    let (_tmp, _folder, mut p) = new_project();
+    let secrets = MemorySecretStore::default();
+    let dev = server("dev");
+    let prod = server("prod");
+    p.add_server(&dev).expect("add");
+    p.add_server(&prod).expect("add");
+    let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
+    assert_eq!(p.default_server(Some(&a)).expect("default"), None);
+    assert_eq!(p.default_server(None).expect("default"), None);
+
+    p.set_request_last_server(a.id, Some(dev.id)).expect("last");
+    let b = p.create_request(&op("GetCustomer"), "<b/>").expect("b");
+    p.set_request_last_server(b.id, Some(prod.id))
+        .expect("last");
+    let a = p.request(a.id).expect("a");
+    assert_eq!(p.default_server(Some(&a)).expect("default"), Some(dev.id));
+    assert_eq!(p.default_server(None).expect("default"), Some(prod.id));
+
+    // A stale `RequestMeta` naming a deleted server falls back to the project's last.
+    p.set_request_last_server(b.id, Some(dev.id)).expect("last");
+    p.set_request_last_server(a.id, Some(prod.id))
+        .expect("last");
+    let stale = p.request(b.id).expect("b");
+    p.delete_server(dev.id, &secrets).expect("delete");
+    assert_eq!(
+        p.default_server(Some(&stale)).expect("default"),
+        Some(prod.id)
+    );
+}
+
 // ---- history -----------------------------------------------------------------------------
 
 #[test]
@@ -1376,4 +1408,64 @@ fn app_state_tolerates_unknown_fields_and_rejects_garbage() {
         AppState::load(tmp.path()),
         Err(AppStateError::Invalid { .. })
     ));
+}
+
+#[test]
+fn import_check_finds_the_set_and_refuses_unresolved_references() {
+    let base = fixtures().join("customer");
+    let checked = check_import(&base.join("CustomerService.wsdl"), &[]).expect("check");
+    assert!(checked.is_usable(), "{:?}", checked.wsdl.check.diagnostics);
+    let mut dests: Vec<&str> = checked.set.files.iter().map(|f| f.dest.as_str()).collect();
+    dests.sort_unstable();
+    let mut expected = CUSTOMER_FILES.to_vec();
+    expected.sort_unstable();
+    assert_eq!(dests, expected);
+
+    // Alone, the entry WSDL's import of the binding cannot resolve; nothing is compiled.
+    let tmp = TempDir::new().expect("tempdir");
+    let alone = tmp.path().join("CustomerService.wsdl");
+    fs::copy(base.join("CustomerService.wsdl"), &alone).expect("copy");
+    let checked = check_import(&alone, &[]).expect("check");
+    assert!(!checked.is_usable());
+    assert!(checked.compile.is_empty());
+}
+
+#[test]
+fn project_schema_loads_the_copied_set() {
+    let (_tmp, _folder, p) = new_project();
+    let schema = ProjectSchema::load(&p.entry_wsdl().expect("entry"), p.wsdl_dir())
+        .expect("load")
+        .prepared();
+    assert!(schema.compile_errors().is_empty());
+    assert!(schema.request_schema().is_some());
+    let ops = schema.wsdl.supported_operations();
+    assert!(ops.iter().any(|o| o.operation == "GetCustomer"), "{ops:?}");
+}
+
+#[test]
+fn create_request_for_files_like_new_request() {
+    let (_tmp, _folder, mut p) = new_project();
+    let schema = ProjectSchema::load(&p.entry_wsdl().expect("entry"), p.wsdl_dir()).expect("load");
+    let op = schema
+        .wsdl
+        .supported_operations()
+        .into_iter()
+        .find(|o| o.operation == "GetCustomer")
+        .expect("op");
+    let text = schema
+        .request_template(&op, &crate::schema::TemplateOptions::default())
+        .expect("template");
+
+    let a = p
+        .create_request_for(&schema.wsdl, &op, None, None, &text)
+        .expect("a");
+    assert_eq!(a.folder, operation_folder(&schema.wsdl, &op));
+    assert_eq!(a.name, "GetCustomer 1");
+    assert_eq!(a.operation.as_ref(), Some(&op));
+    assert_eq!(p.read_request(a.id).expect("read"), text);
+
+    let b = p
+        .create_request_for(&schema.wsdl, &op, Some("Mine"), Some("Mine 1"), "<a/>")
+        .expect("b");
+    assert_eq!((b.folder.as_str(), b.name.as_str()), ("Mine", "Mine 1"));
 }

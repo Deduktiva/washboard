@@ -189,7 +189,7 @@ impl App {
         let SchemaState::Ready(schema) = window.schema() else {
             return None;
         };
-        Some((window.editor()?.text(), &*schema.model))
+        Some((window.editor()?.text(), &**schema.model()))
     }
 }
 

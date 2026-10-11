@@ -1,14 +1,14 @@
 //! `request list|new|show|rename|duplicate|mv|delete|format` (`validate`, `send` and `history` live in
 //! their own modules).
 
-use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::Context;
 use serde::Serialize;
-use washboard_core::model::{OperationRef, ServerId};
+use washboard_core::http;
+use washboard_core::model::OperationRef;
 use washboard_core::xml;
 
 use crate::commands::operation;
@@ -31,11 +31,7 @@ struct RequestRow {
 /// writable open are not listed yet.
 pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
-    let servers: HashMap<ServerId, String> = project
-        .servers()?
-        .into_iter()
-        .map(|s| (s.id, s.name))
-        .collect();
+    let servers = project.servers()?;
     let rows: Vec<RequestRow> = project
         .requests()?
         .into_iter()
@@ -45,7 +41,7 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
             name: r.name,
             folder: r.folder,
             operation: r.operation.as_ref().map(OperationRef::to_string),
-            last_server: r.last_server.and_then(|s| servers.get(&s).cloned()),
+            last_server: http::server_name(&servers, r.last_server).map(str::to_owned),
         })
         .collect();
     if json {

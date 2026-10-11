@@ -233,6 +233,25 @@ impl Project {
         self.create_request_named_in(folder, &name, Some(operation), text)
     }
 
+    /// New Request, in the app and the CLI: `text` (usually
+    /// [`ProjectSchema::request_template`](super::ProjectSchema::request_template)) goes into
+    /// `folder`, else into the operation's folder ([`operation_folder`]), named `name`, else
+    /// `<Operation> <n>`.
+    pub fn create_request_for(
+        &mut self,
+        wsdl: &Wsdl,
+        operation: &OperationRef,
+        folder: Option<&str>,
+        name: Option<&str>,
+        text: &str,
+    ) -> Result<RequestMeta> {
+        let folder = folder.map_or_else(|| operation_folder(wsdl, operation), str::to_owned);
+        match name {
+            Some(name) => self.create_request_named_in(&folder, name, Some(operation), text),
+            None => self.create_request_in(&folder, operation, text),
+        }
+    }
+
     /// Creates a request with a given name at the top level. The file is written as UTF-8
     /// without BOM.
     pub fn create_request_named(
@@ -644,15 +663,33 @@ impl Project {
         let Ok(u) = uuid::Uuid::parse_str(&s) else {
             return Ok(None);
         };
+        let id = ServerId(u);
+        Ok(self.server_exists(id)?.then_some(id))
+    }
+
+    /// The server a request is sent to when nobody chooses one: its last server, else the
+    /// project's most recently used one; servers deleted since are skipped. With no request,
+    /// the most recently used one. `None` leaves the choice to the front end: the app selects
+    /// its first server, the CLI asks for `--server` when there are several.
+    pub fn default_server(&self, request: Option<&RequestMeta>) -> Result<Option<ServerId>> {
+        if let Some(id) = request.and_then(|r| r.last_server)
+            && self.server_exists(id)?
+        {
+            return Ok(Some(id));
+        }
+        self.last_used_server()
+    }
+
+    fn server_exists(&self, id: ServerId) -> Result<bool> {
         let exists: Option<i64> = self
             .conn
             .query_row(
                 "SELECT 1 FROM server WHERE id = ?1",
-                params![u.to_string()],
+                params![id.to_string()],
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(exists.map(|_| ServerId(u)))
+        Ok(exists.is_some())
     }
 
     /// Sets the sidebar order. Requests not listed keep their relative order after the

@@ -93,11 +93,11 @@ pub(crate) fn import_status(sheet: &ImportSheet, target: ImportTarget) -> String
                     (false, false) => {}
                 }
             }
-            let files = checked.check.files.iter().filter(|f| f.used).count();
+            let files = checked.wsdl.check.files.iter().filter(|f| f.used).count();
             format!(
                 "{}, {} resolved.",
                 count(files, "file"),
-                count(checked.check.references.len(), "reference")
+                count(checked.wsdl.check.references.len(), "reference")
             )
         }
     }
@@ -117,7 +117,12 @@ pub(crate) fn import_messages(checked: &CheckedImport) -> Vec<Vec<String>> {
 }
 
 fn import_diagnostics(checked: &CheckedImport) -> impl Iterator<Item = &Diagnostic> {
-    checked.check.diagnostics.iter().chain(&checked.compile)
+    checked
+        .wsdl
+        .check
+        .diagnostics
+        .iter()
+        .chain(&checked.compile)
 }
 
 /// What Replace WSDL changed, in one sentence for the alert after it.

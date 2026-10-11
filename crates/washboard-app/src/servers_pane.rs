@@ -22,6 +22,7 @@ use objc2_app_kit::{
 use objc2_foundation::{
     NSInteger, NSNumber, NSNumberFormatter, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
 };
+use washboard_core::http::DEFAULT_TIMEOUT;
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_ui_model::{ProjectKey, WsdlServer};
 
@@ -32,8 +33,6 @@ use crate::settings_window::{project_note, state};
 
 const TIMEOUT_WIDTH: f64 = 60.0;
 const SHEET_WIDTH: f64 = 480.0;
-/// A new server's timeout, until the user picks another; the model's default.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const WSDL_TAG: &str = "From WSDL";
 const WSDL_TOOL_TIP: &str = "From the WSDL's soap:address. Add it as a server to use it.";
 

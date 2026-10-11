@@ -26,10 +26,10 @@ pub fn run(
     let mut project = support::open_write(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
-    let wsdl = support::load_project_wsdl(&project)?;
+    let schema = support::load_project_schema(&project)?;
     // With --skip-validation the request is still validated, so the errors are on record,
     // but nothing stops the send: sending broken requests on purpose is how servers get tested.
-    let validation = match validation::check(&wsdl, &request, &text) {
+    let validation = match validation::check(&schema, &request, &text) {
         Ok(v) => {
             let errors = diag::error_count(&v.diagnostics);
             let s = if errors == 1 { "" } else { "s" };
@@ -55,7 +55,7 @@ pub fn run(
         Auth::Basic { username } => Some(passwords::for_send(&project, &server, username)?),
         Auth::None => None,
     };
-    let soap_action = soap_action(&wsdl, &request, validation.as_ref());
+    let soap_action = soap_action(&schema.wsdl, &request, validation.as_ref());
 
     let exchange = http::send(&SendRequest {
         server: server.clone(),
@@ -99,8 +99,8 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `--server`, else the request's last server, else the project's most recently used one,
-/// else the only server.
+/// `--server`, else the request's last server, else the project's most recently used one
+/// ([`Project::default_server`]), else the only server.
 fn choose_server(
     project: &Project,
     request: &RequestMeta,
@@ -109,7 +109,7 @@ fn choose_server(
     if let Some(n) = name {
         return support::find_server(project, n);
     }
-    if let Some(id) = request.last_server.or(project.last_used_server()?) {
+    if let Some(id) = project.default_server(Some(request))? {
         return Ok(project.server(id)?);
     }
     let mut all = project.servers()?;

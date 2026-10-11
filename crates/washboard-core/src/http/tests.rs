@@ -324,6 +324,22 @@ fn host_label_is_the_host_header() {
 }
 
 #[test]
+fn server_label_is_the_name_else_the_host_else_the_url() {
+    let dev = server("https://dev.example:8443/soap".into());
+    let servers = [dev.clone()];
+    assert_eq!(server_name(&servers, Some(dev.id)), Some("test"));
+    assert_eq!(server_name(&servers, Some(ServerId::new())), None);
+    assert_eq!(server_name(&servers, None), None);
+    assert_eq!(server_label(&servers, Some(dev.id), "ignored"), "test");
+    let gone = Some(ServerId::new());
+    assert_eq!(
+        server_label(&servers, gone, "https://old.example/soap"),
+        "old.example"
+    );
+    assert_eq!(server_label(&servers, None, "not a url"), "not a url");
+}
+
+#[test]
 fn host_header_omits_default_port() {
     let t = Target::parse("https://Example.org:443").expect("parse");
     assert_eq!(t.host_header, "Example.org");

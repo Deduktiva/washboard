@@ -5,15 +5,13 @@ use std::collections::BTreeSet;
 use std::iter::Peekable;
 use std::path::{Path, PathBuf};
 use std::str::Chars;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
-use washboard_core::diag::Diagnostic;
 use washboard_core::http;
 use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::{OpenProject, Project, names};
 use washboard_core::schema::SchemaModel;
-use washboard_core::validate::request::RequestSchema;
-use washboard_core::wsdl::{self, Direction, Protocol, Sources, Style, Wsdl};
+use washboard_core::wsdl::{self, Direction, Protocol, Style, Wsdl};
 
 use crate::app::ModelError;
 use crate::diagnostics::WellFormedness;
@@ -22,49 +20,14 @@ use crate::import::ReplaceOutcome;
 use crate::send::{OlderExchange, ResponseView, Sending};
 use crate::watch::RequestWatcher;
 
-/// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
-/// off the main thread and then shared read-only with the main thread and workers.
-#[derive(Debug)]
-pub struct ProjectSchema {
-    pub wsdl: Wsdl,
-    pub model: Arc<SchemaModel>,
-    /// libxml2 schemas are `Send` but not `Sync`; validations of one project take turns.
-    request: Result<Mutex<RequestSchema>, Vec<Diagnostic>>,
-}
+pub use washboard_core::project::ProjectSchema;
 
-impl ProjectSchema {
-    /// Reads and analyzes the WSDL set and compiles its schemas; runs on a worker.
-    pub(crate) fn load(entry: &Path, wsdl_dir: PathBuf) -> Result<ProjectSchema, String> {
-        let sources = Sources::from_disk(entry, &[wsdl_dir]).map_err(|e| e.to_string())?;
-        let wsdl = wsdl::load(&sources);
-        let model = Arc::new(SchemaModel::build(&wsdl.bundle));
-        let request = RequestSchema::compile(&wsdl.bundle)
-            .map(|schema| Mutex::new(schema.with_model(model.clone())));
-        Ok(ProjectSchema {
-            wsdl,
-            model,
-            request,
-        })
-    }
-
-    /// Why requests can't be schema-validated, if they can't.
-    pub fn compile_errors(&self) -> &[Diagnostic] {
-        match &self.request {
-            Ok(_) => &[],
-            Err(errors) => errors,
-        }
-    }
-
-    /// `None` if the schemas did not compile. A validation that panicked doesn't poison it for
-    /// good: libxml2 keeps no state between validations.
-    pub(crate) fn request_schema(&self) -> Option<MutexGuard<'_, RequestSchema>> {
-        let mutex = self.request.as_ref().ok()?;
-        Some(
-            mutex
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
-    }
+/// Reads the project's WSDL set, builds its schema model and compiles its schemas; runs on a
+/// worker, so the main thread never compiles.
+pub(crate) fn load_schema(entry: &Path, wsdl_dir: PathBuf) -> Result<ProjectSchema, String> {
+    ProjectSchema::load(entry, wsdl_dir)
+        .map(ProjectSchema::prepared)
+        .map_err(|e| e.to_string())
 }
 
 /// Where the project's schema stands.
@@ -417,23 +380,19 @@ impl ProjectWindow {
     /// host of the URL it went to when that server has been deleted since
     /// ([`http::host_label`]; the URL itself if it doesn't parse).
     pub fn server_label(&self, server: Option<ServerId>, url: &str) -> String {
-        server
-            .and_then(|id| self.servers.iter().find(|s| s.id == id))
-            .map_or_else(
-                || http::host_label(url).unwrap_or_else(|| url.to_owned()),
-                |s| s.name.clone(),
-            )
+        http::server_label(&self.servers, server, url)
     }
 
     /// The server popup's selection: the selected request's last server, else the project's
-    /// most recently used one, else the first.
+    /// most recently used one ([`Project::default_server`]), else the first.
     pub fn selected_server(&self) -> Option<ServerId> {
-        let from_request = self
+        let request = self
             .selected_request()
-            .and_then(|id| self.project.request(id).ok().and_then(|r| r.last_server));
-        let from_project = || self.project.last_used_server().ok().flatten();
-        from_request
-            .or_else(from_project)
+            .and_then(|id| self.project.request(id).ok());
+        self.project
+            .default_server(request.as_ref())
+            .ok()
+            .flatten()
             .filter(|id| self.servers.iter().any(|s| s.id == *id))
             .or_else(|| self.servers.first().map(|s| s.id))
     }

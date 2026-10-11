@@ -1680,7 +1680,11 @@ fn a_missing_include_blocks_create() {
     let CheckState::Done(result) = &sheet.check else {
         panic!("{:?}", sheet.check);
     };
-    assert!(result.check.has_errors(), "{:?}", result.check.diagnostics);
+    assert!(
+        result.wsdl.check.has_errors(),
+        "{:?}",
+        result.wsdl.check.diagnostics
+    );
     assert!(!sheet.can_finish(target));
     assert!(matches!(
         app.create_project(),
@@ -1698,7 +1702,7 @@ fn files_next_to_the_wsdl_are_found_without_adding_them() {
     let CheckState::Done(result) = &sheet.check else {
         panic!("{:?}", sheet.check);
     };
-    assert!(result.is_usable(), "{:?}", result.check.diagnostics);
+    assert!(result.is_usable(), "{:?}", result.wsdl.check.diagnostics);
     let found: Vec<&str> = result
         .found
         .iter()
