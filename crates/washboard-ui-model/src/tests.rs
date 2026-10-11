@@ -708,22 +708,6 @@ fn deleting_the_last_request_clears_the_selection() {
 }
 
 #[test]
-fn the_selection_survives_a_relaunch() {
-    let setup = Setup::new();
-    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
-    let op = lookup(&app, key, "LegacyPort").operation;
-    let first = app.new_request(key, &op, None).expect("new");
-    let _second = app.new_request(key, &op, None).expect("new");
-    app.select_request(key, Some(first)).expect("select");
-    assert!(app.quit().expect("quit"));
-    drop(app);
-
-    let (_fake, app) = setup.launch();
-    let (_, window) = app.projects().next().expect("open");
-    assert_eq!(window.selected_request(), Some(first));
-}
-
-#[test]
 fn the_server_popup_follows_the_request() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
@@ -1068,7 +1052,7 @@ fn a_utf8_bom_is_kept_and_utf16_becomes_utf8() {
 }
 
 #[test]
-fn the_restored_selection_opens_in_the_editor() {
+fn the_selection_survives_a_relaunch_and_opens_in_the_editor() {
     let setup = Setup::new();
     let (_fake, mut app, key, _, second) = with_requests(&setup, "Legacy");
     app.select_request(key, Some(second)).expect("select");
@@ -1077,6 +1061,7 @@ fn the_restored_selection_opens_in_the_editor() {
     drop(app);
     let (_fake, app) = setup.launch();
     let (_, window) = app.projects().next().expect("open");
+    assert_eq!(window.selected_request(), Some(second));
     let editor = window.editor().expect("editor");
     assert_eq!((editor.request(), editor.text()), (second, text.as_str()));
 }

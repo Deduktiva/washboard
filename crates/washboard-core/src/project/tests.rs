@@ -202,16 +202,6 @@ fn read_only_open_works_while_locked_and_cannot_write() {
 }
 
 #[test]
-fn read_only_open_refuses_non_projects_and_creates_nothing() {
-    let tmp = TempDir::new().expect("tempdir");
-    match Project::open_read_only(tmp.path()) {
-        Err(ProjectError::NotAProject(_)) => {}
-        other => panic!("expected NotAProject, got {other:?}"),
-    }
-    assert_eq!(fs::read_dir(tmp.path()).expect("read_dir").count(), 0);
-}
-
-#[test]
 fn create_refuses_non_empty_folder_and_bad_names() {
     let tmp = TempDir::new().expect("tempdir");
     fs::write(tmp.path().join("x"), "x").expect("write");
@@ -309,6 +299,10 @@ fn open_rejects_non_projects_without_leaving_files() {
     let tmp = TempDir::new().expect("tempdir");
     assert!(matches!(
         Project::open(tmp.path()),
+        Err(ProjectError::NotAProject(_))
+    ));
+    assert!(matches!(
+        Project::open_read_only(tmp.path()),
         Err(ProjectError::NotAProject(_))
     ));
     assert!(dir_names(tmp.path()).is_empty());
