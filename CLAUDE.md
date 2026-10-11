@@ -1,7 +1,7 @@
 # Washboard
 
-Native macOS SOAP client in Rust. AppKit UI via `objc2`; everything else in a UI-free core
-library that builds and tests on Linux.
+Native macOS SOAP client in Rust. AppKit UI via `objc2`; the app's behaviour in a toolkit-free
+UI model, and the domain logic in a UI-free core library, both of which build and test on Linux.
 
 - Plan and decisions: `docs/PLAN.md`; behaviour per topic: `docs/specs/` (read the specs you
   touch, and `architecture.md` and `network.md`, before larger changes)
@@ -13,6 +13,7 @@ library that builds and tests on Linux.
 
 ```
 crates/washboard-core   UI-free library: model, diag, xml, wsdl, schema, validate, project, http, secrets, soap
+crates/washboard-ui-model  toolkit-free app behaviour: window state, commands, buffers, jobs
 crates/libxml2-sys      FFI to a vendored, statically linked libxml2
 crates/washboard-cli    `washboard` command-line harness
 crates/washboard-app    macOS app (objc2 + AppKit); stub `main` on other platforms
@@ -27,13 +28,15 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 LIBSQLITE3_SYS_USE_PKG_CONFIG=1 cargo clippy -p washboard-app --target aarch64-apple-darwin -- -D warnings   # macOS type-check from Linux
+cargo deny check bans                                                        # after adding a dependency
 uv run --script fixtures/check_fixtures.py                                   # after changing fixtures
 make app                                                                     # Washboard.app, on a Mac
 ```
 
 Run all of the first four before every commit. CI runs fmt, clippy and tests on Linux and
-clippy and tests on macOS, all with `-D warnings`; the cross-target clippy is the local stand-in
-for the macOS job when you have no Mac.
+clippy and tests on macOS, all with `-D warnings`, plus `cargo deny check bans` (the ban list
+in `deny.toml` enforces the network and no-async rules); the cross-target clippy is the local
+stand-in for the macOS job when you have no Mac.
 Linking the app needs a Mac; from Linux only type-check it. The env var is needed because no
 macOS SDK is available to compile bundled C code (SQLite) for the Apple target; C code you add
 must likewise skip its build when cross-checking for macOS from another host (see `libxml2-sys`). The toolchain and the
