@@ -129,6 +129,14 @@ impl Diagnostic {
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error
     }
+
+    /// The bytes of `lines`' text to mark: the span, or an empty range at `pos` when there is
+    /// no span or it is reversed or not in the text. `None` when neither is in the text.
+    pub fn range(&self, lines: &LineIndex<'_>) -> Option<std::ops::Range<usize>> {
+        self.span
+            .and_then(|span| lines.range(span))
+            .or_else(|| self.pos.and_then(|pos| lines.byte(pos)).map(|b| b..b))
+    }
 }
 
 /// Whether any diagnostic is an error, i.e. whether the thing checked is blocked.
@@ -267,6 +275,29 @@ mod tests {
         assert_eq!(li.range(span(pos(2, 1), pos(2, 1))), Some(3..3));
         assert_eq!(li.range(span(pos(2, 2), pos(1, 2))), None);
         assert_eq!(li.range(span(pos(1, 1), pos(9, 1))), None);
+    }
+
+    #[test]
+    fn diagnostic_range_falls_back_to_its_position() {
+        let t = "<a>\n  <b/>\n</a>";
+        let li = LineIndex::new(t);
+        let pos = |line, column| TextPos { line, column };
+        let d = Diagnostic::error(DiagSource::Schema, Some(pos(2, 3)), "bad");
+        let spanned = |start, end| d.clone().with_span(TextSpan { start, end });
+        assert_eq!(d.range(&li), Some(6..6));
+        assert_eq!(spanned(pos(2, 3), pos(2, 7)).range(&li), Some(6..10));
+        assert_eq!(
+            spanned(pos(2, 5), pos(2, 3)).range(&li),
+            Some(6..6),
+            "reversed"
+        );
+        assert_eq!(
+            spanned(pos(2, 3), pos(9, 1)).range(&li),
+            Some(6..6),
+            "outside"
+        );
+        let nowhere = Diagnostic::error(DiagSource::Schema, Some(pos(9, 1)), "bad");
+        assert_eq!(nowhere.range(&li), None);
     }
 
     #[test]

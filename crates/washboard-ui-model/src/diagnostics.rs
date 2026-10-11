@@ -37,18 +37,9 @@ pub struct Issue {
 
 impl Issue {
     pub(crate) fn new(text: &str, lines: &LineIndex<'_>, d: Diagnostic) -> Issue {
-        let utf16 = |b| byte_to_utf16(text, b);
-        let point = || {
-            d.pos
-                .and_then(|pos| lines.byte(pos))
-                .map(utf16)
-                .map(|at| at..at)
-        };
         let range = d
-            .span
-            .and_then(|span| lines.range(span))
-            .map(|r| utf16(r.start)..utf16(r.end))
-            .or_else(point);
+            .range(lines)
+            .map(|r| byte_to_utf16(text, r.start)..byte_to_utf16(text, r.end));
         Issue {
             severity: d.severity,
             source: d.source,
