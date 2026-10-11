@@ -82,22 +82,19 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     pub fn error(source: DiagSource, pos: Option<TextPos>, message: impl Into<String>) -> Self {
-        Self {
-            severity: Severity::Error,
-            source,
-            pos,
-            message: message.into(),
-            span: None,
-            detail: None,
-        }
+        Self::new(Severity::Error, source, pos, message.into())
     }
 
     pub fn warning(source: DiagSource, pos: Option<TextPos>, message: impl Into<String>) -> Self {
+        Self::new(Severity::Warning, source, pos, message.into())
+    }
+
+    fn new(severity: Severity, source: DiagSource, pos: Option<TextPos>, message: String) -> Self {
         Self {
-            severity: Severity::Warning,
+            severity,
             source,
             pos,
-            message: message.into(),
+            message,
             span: None,
             detail: None,
         }

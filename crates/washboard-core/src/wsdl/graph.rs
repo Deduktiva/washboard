@@ -565,12 +565,8 @@ fn check_targets(w: &mut Walk, names: &[String]) {
         let Some(t) = w.sites[r].target else { continue };
         let rf = &w.refs[r];
         let kind = w.files[t].kind;
-        let ok = match (rf.kind, kind) {
-            (_, FileKind::Unreadable) => true, // already reported
-            (RefKind::WsdlImport, FileKind::Wsdl | FileKind::Xsd) => true,
-            (_, FileKind::Xsd | FileKind::Wsdl) => true,
-            _ => false,
-        };
+        // Unreadable targets are already reported.
+        let ok = matches!(kind, FileKind::Unreadable | FileKind::Xsd | FileKind::Wsdl);
         if !ok {
             let d = err(
                 Some(rf.pos),

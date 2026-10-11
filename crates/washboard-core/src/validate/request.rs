@@ -292,21 +292,17 @@ fn header_blocks<'a, 'i>(env: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>
 
 /// `soapenv:mustUnderstand` is `0` or `1` (SOAP 1.1 §4.2.3).
 fn check_must_understand(text: &str, block: Node<'_, '_>, diags: &mut Vec<Diagnostic>) {
-    let Some(value) = block.attribute((SOAP11_ENV_NS, "mustUnderstand")) else {
+    let Some(attr) = block.attribute_node((SOAP11_ENV_NS, "mustUnderstand")) else {
         return;
     };
+    let value = attr.value();
     if !matches!(value.trim(), "0" | "1") {
-        let mut d = Diagnostic::error(
+        let d = Diagnostic::error(
             DiagSource::Schema,
             Some(pos_of(text, block)),
             format!("soapenv:mustUnderstand must be 0 or 1, not {value:?}"),
-        );
-        if let Some(attr) = block
-            .attributes()
-            .find(|a| a.namespace() == Some(SOAP11_ENV_NS) && a.name() == "mustUnderstand")
-        {
-            d = d.with_span(LineIndex::new(text).span(attr.range()));
-        }
+        )
+        .with_span(LineIndex::new(text).span(attr.range()));
         diags.push(d);
     }
 }

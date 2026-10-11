@@ -257,17 +257,13 @@ pub(crate) fn classify(raw: &str) -> Location {
     let s = raw.trim();
     let s = s.split('#').next().unwrap_or("");
     if let Some((scheme, rest)) = split_scheme(s) {
-        if scheme.eq_ignore_ascii_case("file") {
-            let path = match rest.strip_prefix("//") {
-                Some(after) => after.find('/').map_or("", |i| &after[i..]),
-                None => rest,
-            };
-            return Location::Path(normalize(&percent_decode(path)));
-        }
         let after_authority = match rest.strip_prefix("//") {
             Some(after) => after.find('/').map_or("", |i| &after[i..]),
             None => rest,
         };
+        if scheme.eq_ignore_ascii_case("file") {
+            return Location::Path(normalize(&percent_decode(after_authority)));
+        }
         let (path, query) = match after_authority.split_once('?') {
             Some((p, q)) => (p, Some(q)),
             None => (after_authority, None),

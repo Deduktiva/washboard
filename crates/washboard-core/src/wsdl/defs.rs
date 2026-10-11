@@ -668,15 +668,13 @@ fn resolve(raw: Raw, files: &[(usize, &str, &str)], diags: &mut Vec<Diagnostic>)
             let style = op.style.unwrap_or(rb.style);
             let in_name = op.input.as_ref().and_then(|i| i.name.as_deref());
             let aop = pt.and_then(|pt| {
-                let mut c = pt.operations.iter().filter(|o| o.name == op.name);
-                match in_name {
-                    Some(n) => pt.operations.iter().find(|o| {
-                        o.name == op.name
-                            && o.input.as_ref().and_then(|i| i.name.as_deref()) == Some(n)
-                    }),
-                    None => c.next(),
-                }
-                .or_else(|| pt.operations.iter().find(|o| o.name == op.name))
+                let named = || pt.operations.iter().filter(|o| o.name == op.name);
+                in_name
+                    .and_then(|n| {
+                        named()
+                            .find(|o| o.input.as_ref().and_then(|i| i.name.as_deref()) == Some(n))
+                    })
+                    .or_else(|| named().next())
             });
             let mut invalid: Option<String> = None;
             if pt.is_some() && aop.is_none() {

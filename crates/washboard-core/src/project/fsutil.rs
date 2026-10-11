@@ -45,22 +45,16 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectError
 /// Removes a file; a file that is already gone is fine.
 pub(crate) fn remove_file_if_exists(path: &Path) -> Result<(), ProjectError> {
     match fs::remove_file(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(ProjectError::Io {
-            path: path.to_owned(),
-            source: e,
-        }),
-        _ => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        r => r.at(path),
     }
 }
 
 /// Removes a directory tree; a directory that is already gone is fine.
 pub(crate) fn remove_dir_if_exists(path: &Path) -> Result<(), ProjectError> {
     match fs::remove_dir_all(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(ProjectError::Io {
-            path: path.to_owned(),
-            source: e,
-        }),
-        _ => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        r => r.at(path),
     }
 }
 
