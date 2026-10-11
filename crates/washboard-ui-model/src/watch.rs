@@ -181,12 +181,12 @@ impl App {
         if window.project.reconcile().is_err() {
             return;
         }
-        let rows = window.sidebar.requests.clone();
+        let before = window.sidebar.clone();
         let selected = window.selected_request();
         if window.reload_requests().is_err() {
             return;
         }
-        if window.sidebar.requests != rows {
+        if window.sidebar != before {
             self.events.push(Event::SidebarChanged { project: key });
         }
         let Some(window) = self.window_mut(key) else {
