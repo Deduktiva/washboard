@@ -47,24 +47,21 @@ pub fn check(wsdl: &Wsdl, request: &RequestMeta, text: &str) -> anyhow::Result<V
 }
 
 /// A diagnostic as rustc prints one, followed by a blank line: message, location, and the
-/// source lines with the diagnostic's span underlined. Without a span a single caret marks
-/// `pos` (for schema errors, the `<` of the element).
+/// source lines with the diagnostic's span underlined. Without a usable span a single caret
+/// marks `pos` (for schema errors, the `<` of the element).
 fn render(renderer: &Renderer, name: &str, text: &str, d: &Diagnostic) -> String {
     let level = match d.severity {
         Severity::Error => Level::ERROR,
         Severity::Warning => Level::WARNING,
     };
     let title = level.primary_title(d.message.as_str());
-    let lines = LineIndex::new(text);
-    let range = match (d.span, d.pos) {
-        (Some(span), _) => lines
-            .byte(span.start)
-            .zip(lines.byte(span.end))
-            .filter(|(start, end)| start <= end)
-            .map(|(start, end)| start..end),
-        (None, Some(pos)) => lines.byte(pos).map(|b| point(text, b)),
-        (None, None) => None,
-    };
+    let range = d.range(&LineIndex::new(text)).map(|r| {
+        if r.is_empty() {
+            point(text, r.start)
+        } else {
+            r
+        }
+    });
     let report = match (range, d.pos) {
         (Some(range), _) => [title.element(
             Snippet::source(text)
