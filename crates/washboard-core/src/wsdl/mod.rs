@@ -2,8 +2,7 @@
 //! operations, messages, SOAP 1.1 binding details (style, soapAction, body/header parts),
 //! plus the import graph, the import check, and the [`SchemaBundle`].
 //!
-//! Owned by WP-WSDL (`docs/TASKS.md`). Details: `docs/PLAN.md` §4 (import check), §5, §5.3,
-//! §5.4.
+//! Details: `docs/PLAN.md` §4 (import check), §5, §5.3, §5.4.
 //!
 //! Entry point: [`load`] on a [`Sources`] set. Loading never fails as a whole: malformed or
 //! missing files are reported in [`ImportCheck::diagnostics`] and the rest is still

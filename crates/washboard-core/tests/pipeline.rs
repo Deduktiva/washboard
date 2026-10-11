@@ -1,6 +1,6 @@
-//! The whole pipeline over the fixtures: WSDL loading (WP-WSDL) → schema bundle → libxml2
-//! compile (WP-LIBXML2) → request validation (WP-VALIDATE), checked against the expectations
-//! written into the fixture requests (`fixtures/README.md`).
+//! The whole pipeline over the fixtures: WSDL loading → schema bundle → libxml2 compile →
+//! request validation, checked against the expectations written into the fixture requests
+//! (`fixtures/README.md`).
 //!
 //! The same ground truth the lxml oracle (`fixtures/check_fixtures.py`) runs on.
 

@@ -1,4 +1,4 @@
-//! Format XML (⌃I) and its settings (PLAN §4, `docs/TASKS.md` WP-FORMAT-XML). The model
+//! Format XML (⌃I) and its settings (PLAN §4). The model
 //! computes the new text; the front end applies it through the text widget so it is one undo
 //! step, and the widget reports it back as an ordinary edit.
 

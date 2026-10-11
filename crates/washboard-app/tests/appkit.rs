@@ -1,5 +1,4 @@
-//! Headless AppKit checks, run by the macOS CI job (WP-APP-SHELL and WP-APP-INTEGRATION in
-//! `docs/TASKS.md`).
+//! Headless AppKit checks, run by the macOS CI job.
 //!
 //! `harness = false`: AppKit objects must be created on the main thread, and libtest runs
 //! tests on worker threads. The app is launched once, through `NSApplication::run` until

@@ -832,8 +832,7 @@ impl ProjectWindowController {
         self.ivars().replace.borrow().clone()
     }
 
-    /// After Replace WSDL (`WsdlReplaced`): says what changed. The full report is
-    /// WP-REPLACE-REPORT's.
+    /// After Replace WSDL (`WsdlReplaced`): says what changed.
     pub fn show_replace_outcome(&self) {
         let key = self.key();
         let Some(summary) = self

@@ -6,8 +6,6 @@
 //! All state lives on the main thread and is not `Send`. Background work gets owned inputs and
 //! hands its result back through [`App::spawn`]; the front end's [`MainThread::wake`] makes it
 //! call [`App::pump`], which runs the completions on the main thread.
-//!
-//! Owned by WP-UI-MODEL (`docs/TASKS.md`).
 
 mod app;
 mod assist;

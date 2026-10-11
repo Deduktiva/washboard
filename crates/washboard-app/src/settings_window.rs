@@ -1,6 +1,5 @@
 //! One Settings window for the app and every open project (Washboard ▸ Settings…, ⌘,), laid
-//! out like System Settings: a sidebar of panes and grouped forms. It replaces the Project
-//! Settings sheet and the small window WP-FORMAT-XML added.
+//! out like System Settings: a sidebar of panes and grouped forms.
 //!
 //! It is an ordinary window, not a sheet: it stays open beside the project windows and every
 //! change applies as it is made, so there is no Done button. The sidebar has the app's section
@@ -744,7 +743,7 @@ impl SettingsWindowController {
 
 impl ModelAccess for SettingsWindowController {}
 
-/// The app's General pane: the format settings from WP-FORMAT-XML. Later app settings join it.
+/// The app's General pane: the format settings. Later app settings join it.
 fn app_pane(
     target: &SettingsWindowController,
     mtm: MainThreadMarker,
