@@ -203,16 +203,10 @@ pub fn body_elements(text: &str) -> Option<Vec<QName>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use super::*;
-    use crate::test_support::fixtures;
-    use crate::wsdl::{self, Sources};
+    use crate::test_support::{customer, legacy};
 
-    fn load(dir: &str, entry: &str, extra: &[&str]) -> (Wsdl, SchemaModel) {
-        let root = fixtures().join(dir);
-        let extra: Vec<PathBuf> = extra.iter().map(|e| root.join(e)).collect();
-        let w = wsdl::load(&Sources::from_disk(&root.join(entry), &extra).expect("sources"));
+    fn with_model(w: Wsdl) -> (Wsdl, SchemaModel) {
         let m = SchemaModel::build(&w.bundle);
         (w, m)
     }
@@ -226,11 +220,7 @@ mod tests {
 
     #[test]
     fn customer_envelope_has_header_and_body() {
-        let (w, m) = load(
-            "customer",
-            "CustomerService.wsdl",
-            &["CustomerBinding.wsdl", "xsd"],
-        );
+        let (w, m) = with_model(customer());
         let ns = "urn:example:customer:service";
         let env = request_envelope(
             &w,
@@ -263,11 +253,7 @@ mod tests {
 
     #[test]
     fn envelope_uses_the_template_indent() {
-        let (w, m) = load(
-            "customer",
-            "CustomerService.wsdl",
-            &["CustomerBinding.wsdl", "xsd"],
-        );
+        let (w, m) = with_model(customer());
         let op = op(
             "urn:example:customer:service",
             "CustomerBinding",
@@ -290,7 +276,7 @@ mod tests {
 
     #[test]
     fn rpc_envelope_uses_wrapper() {
-        let (w, m) = load("legacy-rpc", "Legacy.wsdl", &[]);
+        let (w, m) = with_model(legacy());
         let env = request_envelope(
             &w,
             &m,

@@ -396,21 +396,12 @@ fn pos_of(text: &str, n: Node<'_, '_>) -> TextPos {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::*;
     use crate::diag::TextSpan;
-    use crate::wsdl::{self, Sources};
+    use crate::test_support;
 
     fn customer() -> (Wsdl, RequestSchema) {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/customer");
-        let extra: Vec<PathBuf> = ["CustomerBinding.wsdl", "xsd"]
-            .iter()
-            .map(|e| root.join(e))
-            .collect();
-        let w = wsdl::load(
-            &Sources::from_disk(&root.join("CustomerService.wsdl"), &extra).expect("sources"),
-        );
+        let w = test_support::customer();
         let s = RequestSchema::compile(&w.bundle).expect("fixture bundle compiles");
         (w, s)
     }

@@ -89,36 +89,14 @@ fn missing_from(a: &[OperationRef], b: &[OperationRef]) -> Vec<OperationRef> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::*;
-    use crate::wsdl;
-
-    fn fixtures() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures")
-    }
-
-    fn customer() -> Wsdl {
-        let dir = fixtures().join("customer");
-        wsdl::load_from_disk(&dir.join("CustomerService.wsdl"), &[dir])
-            .expect("customer")
-            .wsdl
-    }
-
-    fn legacy() -> Wsdl {
-        let dir = fixtures().join("legacy-rpc");
-        wsdl::load_from_disk(&dir.join("Legacy.wsdl"), &[])
-            .expect("legacy")
-            .wsdl
-    }
+    use crate::test_support::{customer, legacy, read_fixture};
 
     fn request(fixture: &str, operation: Option<OperationRef>) -> RequestText {
-        let path = fixtures().join(fixture);
-        let bytes = std::fs::read(&path).expect("fixture");
         RequestText {
             id: RequestId::new(),
             operation,
-            text: crate::xml::decode(&bytes).expect("decode").text,
+            text: read_fixture(fixture),
         }
     }
 

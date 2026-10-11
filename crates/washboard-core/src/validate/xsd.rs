@@ -1190,7 +1190,7 @@ mod tests {
 
     use super::*;
     use crate::model::{SchemaDoc, SchemaOrigin};
-    use crate::test_support::{fixtures, read_fixture};
+    use crate::test_support::{self, fixtures};
 
     const XS: &str = "http://www.w3.org/2001/XMLSchema";
 
@@ -1201,64 +1201,6 @@ mod tests {
             origin,
             text,
         }
-    }
-
-    /// A fixture XSD as `wsdl` would put it into the bundle: decoded, URI relative to the
-    /// project's `wsdl/` folder, `schemaLocation`s rewritten to bundle URIs.
-    fn file_doc(uri: &str, target_ns: &str, rewrites: &[(&str, &str)]) -> SchemaDoc {
-        let mut text = read_fixture(&format!("customer/{uri}"));
-        for (from, to) in rewrites {
-            let from = format!("schemaLocation=\"{from}\"");
-            assert!(text.contains(&from), "{uri} references {from}");
-            text = text.replace(&from, &format!("schemaLocation=\"{to}\""));
-        }
-        doc(
-            uri,
-            target_ns,
-            SchemaOrigin::File { path: uri.into() },
-            text,
-        )
-    }
-
-    /// Copies `el`'s subtree out of `text` with all in-scope namespace declarations put on
-    /// its start tag.
-    fn cut_with_namespaces(text: &str, el: roxmltree::Node<'_, '_>) -> String {
-        let mut s = text[el.range()].to_owned();
-        let tag_end = s.find('>').expect("start tag");
-        let name_end = s
-            .find(|c: char| c.is_whitespace() || c == '/' || c == '>')
-            .expect("tag name");
-        let mut decls = String::new();
-        for ns in el.namespaces() {
-            let attr = match ns.name() {
-                Some(p) => format!("xmlns:{p}="),
-                None => "xmlns=".to_owned(),
-            };
-            if ns.name() != Some("xml") && !s[..tag_end].contains(&attr) {
-                decls.push_str(&format!(" {attr}\"{}\"", ns.uri()));
-            }
-        }
-        s.insert_str(name_end, &decls);
-        s
-    }
-
-    /// The inline schema of `CustomerBinding.wsdl` with namespaces carried over.
-    fn inline_messages_schema() -> SchemaDoc {
-        let wsdl = read_fixture("customer/CustomerBinding.wsdl");
-        let parsed = roxmltree::Document::parse(&wsdl).expect("wsdl parses");
-        let schema = parsed
-            .descendants()
-            .find(|n| n.has_tag_name((XS, "schema")))
-            .expect("inline schema");
-        doc(
-            "washboard:/inline/0.xsd",
-            "urn:example:customer:messages",
-            SchemaOrigin::InlineWsdl {
-                wsdl_path: "CustomerBinding.wsdl".into(),
-                index: 0,
-            },
-            cut_with_namespaces(&wsdl, schema),
-        )
     }
 
     fn root_doc(imports: &[(&str, &str)]) -> SchemaDoc {
@@ -1279,33 +1221,7 @@ mod tests {
     }
 
     fn customer_bundle() -> SchemaBundle {
-        SchemaBundle {
-            docs: vec![
-                root_doc(&[
-                    ("urn:example:customer:messages", "washboard:/inline/0.xsd"),
-                    // Also imported by the inline schema: same location, loaded once.
-                    ("urn:example:customer", "xsd/customer.xsd"),
-                ]),
-                inline_messages_schema(),
-                file_doc(
-                    "xsd/customer.xsd",
-                    "urn:example:customer",
-                    &[
-                        ("common/party.xsd", "xsd/common/party.xsd"),
-                        ("ext/audit.xsd", "xsd/ext/audit.xsd"),
-                    ],
-                ),
-                // Starts with a UTF-8 BOM on disk.
-                file_doc(
-                    "xsd/common/party.xsd",
-                    "urn:example:common",
-                    &[("party-ids.xsd", "xsd/common/party-ids.xsd")],
-                ),
-                file_doc("xsd/common/party-ids.xsd", "urn:example:common", &[]),
-                file_doc("xsd/ext/audit.xsd", "urn:example:audit", &[]),
-            ],
-            root: "washboard:/root.xsd".into(),
-        }
+        test_support::customer().bundle
     }
 
     fn single_doc_bundle(text: &str) -> SchemaBundle {
@@ -1766,10 +1682,22 @@ mod tests {
 
     #[test]
     fn bundle_urls_round_trip() {
-        let bundle = customer_bundle();
+        let mut bundle = single_doc_bundle("<xs:schema/>");
+        bundle.docs.push(doc(
+            "washboard:/inline/0.xsd",
+            "urn:a",
+            SchemaOrigin::Generated,
+            String::new(),
+        ));
+        bundle.docs.push(doc(
+            "xsd/customer.xsd",
+            "urn:b",
+            SchemaOrigin::Generated,
+            String::new(),
+        ));
         assert_eq!(lookup(&bundle, "washboard:/inline/0.xsd"), Some(1));
         assert_eq!(lookup(&bundle, &libxml_url("xsd/customer.xsd")), Some(2));
-        assert_eq!(lookup(&bundle, &format!("{BASE}?doc=3")), Some(3));
+        assert_eq!(lookup(&bundle, &format!("{BASE}?doc=2")), Some(2));
         assert_eq!(lookup(&bundle, &format!("{BASE}?doc=99")), None);
         assert_eq!(lookup(&bundle, "customer.xsd"), None);
         assert!(split_scheme("washboard:/root.xsd").is_some());
