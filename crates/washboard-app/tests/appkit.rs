@@ -678,7 +678,11 @@ mod checks {
                 .expect("the REQUESTS header");
             assert_eq!(
                 context_menu(&project, header),
-                [("New Request…".to_string(), false)]
+                [
+                    ("New Request…".to_string(), false),
+                    ("New Folder".to_string(), true)
+                ],
+                "folders don't need the WSDL"
             );
         } else {
             print!("(the WSDL had loaded, loading checks skipped) ");
