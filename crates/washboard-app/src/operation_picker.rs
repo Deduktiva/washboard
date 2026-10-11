@@ -193,22 +193,8 @@ impl OperationPicker {
         let empty = NSTextField::labelWithString(ns_string!("No operation matches"), mtm);
         empty.setTextColor(Some(&NSColor::secondaryLabelColor()));
 
-        let button = |title: &str, action: Sel, key: &NSString| {
-            let target: &AnyObject = &this;
-            // SAFETY: this object owns the sheet and so the button, whose target is weak.
-            let button = unsafe {
-                NSButton::buttonWithTitle_target_action(
-                    &NSString::from_str(title),
-                    Some(target),
-                    Some(action),
-                    mtm,
-                )
-            };
-            button.setKeyEquivalent(key);
-            button
-        };
-        let cancel = button("Cancel", sel!(cancel:), ns_string!("\u{1b}"));
-        let create = button("Create", sel!(create:), ns_string!("\r"));
+        let cancel = layout::cancel_button("Cancel", &this, sel!(cancel:), mtm);
+        let create = layout::default_button("Create", &this, sel!(create:), mtm);
         let buttons = form::dialog_buttons(None, vec![view(cancel), view(create.clone())], mtm);
 
         let content = NSView::new(mtm);

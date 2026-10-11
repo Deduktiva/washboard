@@ -201,13 +201,13 @@ impl ImportSheetController {
         messages.wrap_column(1);
         let status = NSTextField::labelWithString(ns_string!(""), mtm);
         layout::truncating(&status, NSLineBreakMode::ByTruncatingTail);
-        let cancel = button("Cancel", sel!(cancel:));
-        cancel.setKeyEquivalent(ns_string!("\u{1b}"));
-        let finish = button(
+        let cancel = layout::cancel_button("Cancel", &this, sel!(cancel:), mtm);
+        let finish = layout::default_button(
             if new_project { "Create" } else { "Replace" },
+            &this,
             sel!(finish:),
+            mtm,
         );
-        finish.setKeyEquivalent(ns_string!("\r"));
         let buttons = form::dialog_buttons(None, vec![view(cancel), view(finish.clone())], mtm);
         references.fix_column_width(0, MARK_WIDTH);
         messages.fix_column_width(0, MARK_WIDTH);

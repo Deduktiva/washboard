@@ -581,10 +581,8 @@ impl ServersPane {
         let title = form::header("", mtm);
 
         let delete = layout::button("Delete Server", self, sel!(deleteServer:), mtm);
-        let cancel = layout::button("Cancel", self, sel!(cancelServer:), mtm);
-        cancel.setKeyEquivalent(ns_string!("\u{1b}"));
-        let save = layout::button("Save", self, sel!(saveServer:), mtm);
-        save.setKeyEquivalent(ns_string!("\r"));
+        let cancel = layout::cancel_button("Cancel", self, sel!(cancelServer:), mtm);
+        let save = layout::default_button("Save", self, sel!(saveServer:), mtm);
         let body = form::body(
             vec![
                 form::Section::new(mtm)

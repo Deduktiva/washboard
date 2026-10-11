@@ -14,7 +14,9 @@ use objc2_app_kit::{
     NSStackViewDistribution, NSTableCellView, NSTextField, NSTitlePosition,
     NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    NSArray, NSEdgeInsets, NSObject, NSPoint, NSRect, NSSize, NSString, ns_string,
+};
 
 /// `v` as a plain `NSView`, for stacks and grids, whatever its class's depth below `NSView`.
 pub fn view<T: Message + AsRef<NSView>>(v: Retained<T>) -> Retained<NSView> {
@@ -222,13 +224,55 @@ pub fn button(
     action: Sel,
     mtm: MainThreadMarker,
 ) -> Retained<NSButton> {
-    let target: &AnyObject = target;
-    // SAFETY: every caller owns the button, so the target outlives the button's weak target
-    // reference; action methods take the sender.
+    push_button(title, Some(target), action, mtm)
+}
+
+/// A push button with no target: `action` goes up the responder chain, for actions the app
+/// delegate handles whichever window is key.
+pub fn responder_button(title: &str, action: Sel, mtm: MainThreadMarker) -> Retained<NSButton> {
+    push_button(title, None, action, mtm)
+}
+
+/// A dialog's Cancel button: [`button`] that Esc presses.
+pub fn cancel_button(
+    title: &str,
+    target: &NSObject,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let cancel = button(title, target, action, mtm);
+    cancel.setKeyEquivalent(ns_string!("\u{1b}"));
+    cancel
+}
+
+/// A dialog's default button: [`button`] that Return presses, which AppKit draws as the
+/// default.
+pub fn default_button(
+    title: &str,
+    target: &NSObject,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let default = button(title, target, action, mtm);
+    default.setKeyEquivalent(ns_string!("\r"));
+    default
+}
+
+/// The one place that builds a push button, so its safety argument is made once.
+fn push_button(
+    title: &str,
+    target: Option<&NSObject>,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    let target: Option<&AnyObject> = target.map(|t| t as &AnyObject);
+    // SAFETY: a target owns the button (see `button`), so it outlives the button's weak
+    // target reference; without one the action goes up the responder chain. Action methods
+    // take the sender as their only argument.
     unsafe {
         NSButton::buttonWithTitle_target_action(
             &NSString::from_str(title),
-            Some(target),
+            target,
             Some(action),
             mtm,
         )
