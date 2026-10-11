@@ -11,7 +11,7 @@ use super::*;
 use crate::http::{Exchange, RawMessage, TlsInfo};
 use crate::model::{Auth, HistoryId, OperationRef, QName, Server};
 use crate::secrets::{MemorySecretStore, SecretKey, SecretStore};
-use crate::test_support::fixtures;
+use crate::test_support::{self, fixtures};
 
 const CUSTOMER_FILES: &[&str] = &[
     "CustomerService.wsdl",
@@ -659,6 +659,7 @@ fn paths(p: &Project) -> Vec<String> {
         .collect()
 }
 
+/// A WSDL outside `fixtures/`, with the files next to it.
 fn load_wsdl(path: &Path) -> crate::wsdl::Wsdl {
     crate::wsdl::load_from_disk(path, &[path.parent().expect("dir").to_owned()])
         .expect("wsdl")
@@ -805,11 +806,11 @@ fn same_name_in_two_folders_is_accepted() {
 
 #[test]
 fn placement_follows_the_supported_ports() {
-    let customer = load_wsdl(&fixtures().join("customer/CustomerService.wsdl"));
+    let customer = test_support::customer();
     let get = op_in(&customer, "CustomerBinding", "GetCustomer");
     // One SOAP 1.1 port next to a SOAP 1.2 one: one level.
     assert_eq!(operation_folder(&customer, &get), "GetCustomer");
-    let legacy = load_wsdl(&fixtures().join("legacy-rpc/Legacy.wsdl"));
+    let legacy = test_support::legacy();
     let lookup = op_in(&legacy, "LegacyBinding", "Lookup");
     // rpc/literal next to rpc/encoded: still one level.
     assert_eq!(operation_folder(&legacy, &lookup), "Lookup");
