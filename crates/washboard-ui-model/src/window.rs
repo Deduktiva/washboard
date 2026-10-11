@@ -19,6 +19,7 @@ use crate::diagnostics::WellFormedness;
 use crate::editor::Editor;
 use crate::import::ReplaceOutcome;
 use crate::send::{OlderExchange, ResponseView, Sending};
+use crate::watch::RequestWatcher;
 
 /// The project's WSDL, the schema model built from it, and the compiled request schema, loaded
 /// off the main thread and then shared read-only with the main thread and workers.
@@ -191,6 +192,8 @@ pub struct ProjectWindow {
     pub(crate) older: Option<OlderExchange>,
     pub(crate) sending: Option<Sending>,
     pub(crate) replace_outcome: Option<ReplaceOutcome>,
+    /// `None` while watching is off or could not start.
+    pub(crate) watcher: Option<RequestWatcher>,
 }
 
 impl ProjectWindow {

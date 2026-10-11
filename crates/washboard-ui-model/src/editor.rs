@@ -2,6 +2,7 @@
 //! the visible text and undo; it reports each edit here, and the buffer is what gets saved,
 //! highlighted and validated.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Range;
 use std::time::Duration;
 
@@ -27,6 +28,12 @@ pub struct Editor {
     tokens: TokenBuffer,
     version: u64,
     dirty: bool,
+    /// [`fingerprint`] of the file's text as last read or written by the model, so a file that
+    /// changed on disk since can be told from the model's own save (`watch.rs`).
+    pub(crate) disk: u64,
+    /// The Reload / Keep Edits question about a change on disk is open; nothing is saved until
+    /// it is answered.
+    pub(crate) asking: bool,
     pub(crate) issues: Vec<Issue>,
     /// The version the last full check ran on, and whether it had the schema to check against.
     pub(crate) checked: Option<(u64, bool)>,
@@ -44,9 +51,11 @@ impl Editor {
         Ok(Editor {
             request,
             tokens: TokenBuffer::new(&text),
+            disk: fingerprint(&text),
             text,
             version,
             dirty: false,
+            asking: false,
             issues: Vec::new(),
             checked: None,
             well_formedness_checked: false,
@@ -192,22 +201,32 @@ impl App {
         }
     }
 
-    /// Saves the project's editor if it is dirty.
+    /// Saves the project's editor if it is dirty. A file changed on disk since it was opened or
+    /// last saved is not overwritten: the user is asked first ([`ModelError::ChangedOnDisk`]).
     pub(crate) fn flush(&mut self, key: ProjectKey) -> Result<(), ModelError> {
         let window = self.window(key)?;
-        let saved = match &mut window.editor {
-            Some(editor) if editor.dirty => {
-                window.project.write_request(editor.request, &editor.text)?;
-                editor.dirty = false;
-                Some(editor.request)
-            }
-            _ => None,
+        let Some(editor) = window.editor.as_mut().filter(|e| e.dirty) else {
+            self.stop_timer(key, TimerKind::Autosave);
+            return Ok(());
         };
-        if let Some(request) = saved {
-            window.mark_dirty(request, false);
-            self.events.push(Event::SidebarChanged { project: key });
-            self.events.push(Event::EditedChanged { project: key });
+        // A file that can't be read is written as before: a deleted one comes back, and other
+        // errors are the write's to report.
+        let changed = editor.asking
+            || window
+                .project
+                .read_request(editor.request)
+                .is_ok_and(|text| fingerprint(&text) != editor.disk);
+        if changed {
+            self.ask_reload(key);
+            return Err(ModelError::ChangedOnDisk);
         }
+        window.project.write_request(editor.request, &editor.text)?;
+        editor.disk = fingerprint(&editor.text);
+        editor.dirty = false;
+        let request = editor.request;
+        window.mark_dirty(request, false);
+        self.events.push(Event::SidebarChanged { project: key });
+        self.events.push(Event::EditedChanged { project: key });
         self.stop_timer(key, TimerKind::Autosave);
         Ok(())
     }
@@ -240,10 +259,17 @@ impl App {
             self.events
                 .push(Event::ShownExchangeChanged { project: key });
         }
-        self.stop_timers(key);
+        self.stop_editor_timers(key);
         if let Some(e) = error {
             self.alert_error("Could not open the request", &e);
         }
         self.start_check(key, Check::Full);
     }
+}
+
+/// Identifies a request's text cheaply; only compared within one run.
+pub(crate) fn fingerprint(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }

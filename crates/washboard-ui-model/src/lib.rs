@@ -21,6 +21,7 @@ mod import;
 mod picker;
 mod send;
 mod timers;
+mod watch;
 mod window;
 
 #[cfg(test)]

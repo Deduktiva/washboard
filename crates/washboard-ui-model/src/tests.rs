@@ -1989,3 +1989,166 @@ fn new_requests_and_responses_use_the_indent() {
     assert!(text.contains("\n    <soapenv:Body>"), "{text}");
     assert_eq!(formatted(&app, key, 0..0), None, "{text}");
 }
+
+fn confirms(fake: &Fake) -> usize {
+    fake.dialogs.borrow().confirms.len()
+}
+
+#[test]
+fn a_request_changed_outside_reloads_without_unsaved_edits() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    let theirs = format!("{}<!--theirs-->", on_disk(&app, key, first));
+    fs::write(request_file(&app, key, first), &theirs).expect("write");
+    app.rescan(key);
+    assert_eq!(editor_text(&app, key), theirs);
+    assert!(
+        app.take_events()
+            .contains(&Event::EditorReplaced { project: key })
+    );
+    assert_eq!(confirms(&fake), 0, "nothing asked");
+    assert!(!app.project(key).expect("open").edited());
+}
+
+#[test]
+fn the_models_own_saves_are_no_outside_change() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    app.edit(key, 0..0, "<!--a-->").expect("edit");
+    fake.advance(&mut app, ms(1000));
+    assert!(on_disk(&app, key, first).starts_with("<!--a-->"));
+    app.take_events();
+    app.rescan(key);
+    assert_eq!(app.take_events(), [], "nothing reloaded");
+    // Typing after the save is not a conflict either.
+    app.edit(key, 0..0, "<!--b-->").expect("edit");
+    app.rescan(key);
+    fake.advance(&mut app, ms(1000));
+    assert!(on_disk(&app, key, first).starts_with("<!--b--><!--a-->"));
+    assert_eq!(confirms(&fake), 0);
+}
+
+#[test]
+fn unsaved_edits_and_an_outside_change_ask_and_reload() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    app.edit(key, 0..0, "<!--mine-->").expect("edit");
+    let theirs = "<!--theirs-->".to_owned();
+    fs::write(request_file(&app, key, first), &theirs).expect("write");
+    app.rescan(key);
+    app.rescan(key);
+    assert_eq!(confirms(&fake), 1, "asked once");
+    fake.advance(&mut app, ms(5000));
+    app.save_all();
+    assert_eq!(
+        on_disk(&app, key, first),
+        theirs,
+        "nothing saved while asking"
+    );
+    assert!(fake.alerts().is_empty(), "the question is the message");
+
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert_eq!(confirm.action, "Reload");
+    assert_eq!(confirm.cancel.as_deref(), Some("Keep Edits"));
+    assert_eq!(editor_text(&app, key), theirs);
+    let window = app.project(key).expect("open");
+    assert!(!window.edited());
+    assert!(!window.sidebar().request(first).expect("row").dirty);
+    assert!(
+        app.take_events()
+            .contains(&Event::EditedChanged { project: key })
+    );
+}
+
+#[test]
+fn keep_edits_saves_them_over_the_outside_change() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    let mine = format!("<!--mine-->{}", on_disk(&app, key, first));
+    app.edit(key, 0..0, "<!--mine-->").expect("edit");
+    fs::write(request_file(&app, key, first), "<!--theirs-->").expect("write");
+    app.rescan(key);
+    fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(on_disk(&app, key, first), mine);
+    assert!(!app.project(key).expect("open").edited());
+    // Saved over that change; the next one asks again.
+    app.edit(key, 0..0, "<!--more-->").expect("edit");
+    fs::write(request_file(&app, key, first), "<!--again-->").expect("write");
+    fake.advance(&mut app, ms(1000));
+    assert_eq!(confirms(&fake), 1);
+}
+
+#[test]
+fn autosave_never_overwrites_an_unreported_outside_change() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, second) = with_requests(&setup, "Legacy");
+    app.edit(key, 0..0, "<!--mine-->").expect("edit");
+    fs::write(request_file(&app, key, first), "<!--theirs-->").expect("write");
+    fake.advance(&mut app, ms(1000));
+    assert_eq!(on_disk(&app, key, first), "<!--theirs-->");
+    assert_eq!(confirms(&fake), 1);
+    assert!(matches!(
+        app.select_request(key, Some(second)),
+        Err(ModelError::ChangedOnDisk)
+    ));
+    assert_eq!(
+        app.project(key).expect("open").selected_request(),
+        Some(first)
+    );
+    assert!(!app.close_project(key), "stays open with the question up");
+    assert_eq!(confirms(&fake), 1, "still the one question");
+}
+
+#[test]
+fn request_files_added_or_removed_outside_update_the_sidebar() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, second) = with_requests(&setup, "Legacy");
+    let dir = app.project(key).expect("open").path().join(REQUESTS_DIR);
+    fs::write(dir.join("Extra.xml"), "<extra/>").expect("write");
+    app.rescan(key);
+    assert!(names(&app, key).contains(&"Extra".to_owned()));
+    assert!(
+        app.take_events()
+            .contains(&Event::SidebarChanged { project: key })
+    );
+
+    // The open request's file goes, unsaved edits and all.
+    app.edit(key, 0..0, "<!--mine-->").expect("edit");
+    let file = request_file(&app, key, first);
+    fs::remove_file(&file).expect("remove");
+    app.rescan(key);
+    let window = app.project(key).expect("open");
+    assert_eq!(window.selected_request(), None);
+    assert!(window.editor().is_none());
+    assert!(!window.edited());
+    assert!(window.sidebar().request(first).is_none());
+    assert!(window.sidebar().request(second).is_some());
+    assert!(
+        app.take_events()
+            .contains(&Event::EditorReplaced { project: key })
+    );
+    fake.advance(&mut app, ms(5000));
+    assert!(!file.exists(), "not written back");
+    assert_eq!(confirms(&fake), 0);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_watcher_reports_outside_changes() {
+    let setup = Setup::new();
+    let (fake, mut app, key, first, _) = with_requests(&setup, "Legacy");
+    app.watch_request_files();
+    let theirs = "<!--theirs-->".to_owned();
+    fs::write(request_file(&app, key, first), &theirs).expect("write");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while editor_text(&app, key) != theirs {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the watcher reported nothing"
+        );
+        std::thread::sleep(ms(20));
+        app.pump();
+        fake.advance(&mut app, crate::watch::RESCAN_DELAY);
+    }
+    assert_eq!(confirms(&fake), 0);
+}
