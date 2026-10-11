@@ -6,6 +6,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::bail;
+use clap::Args;
 use washboard_core::http::DEFAULT_TIMEOUT;
 use washboard_core::model::{Auth, Server, ServerId};
 use washboard_core::project::Project;
@@ -13,19 +14,34 @@ use washboard_core::project::Project;
 use crate::passwords::{self, CAN_STORE, PASSWORD_ENV};
 use crate::support;
 
-#[derive(Debug)]
+#[derive(Debug, Args)]
 pub struct Options {
+    /// Basic-auth user name.
+    #[arg(long)]
     pub username: Option<String>,
+    /// Read the basic-auth password from the first line of stdin (macOS only: stored in the
+    /// Keychain).
+    #[arg(long)]
     pub password_stdin: bool,
+    /// Request timeout in seconds.
+    #[arg(long, value_name = "SECS")]
     pub timeout: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Args)]
+// The derived group would be named `Edit`, clashing with the `server edit` variant's own group.
+#[group(skip)]
 pub struct Edit {
+    #[arg(long = "name", value_name = "NEW_NAME")]
     pub new_name: Option<String>,
+    #[arg(long)]
     pub url: Option<String>,
+    #[command(flatten)]
     pub opts: Options,
+    /// Switch to no authentication (removes the stored password).
+    #[arg(long, conflicts_with_all = ["username", "password_stdin"])]
     pub no_auth: bool,
+    #[arg(long, value_name = "BOOL")]
     pub ignore_tls_errors: Option<bool>,
 }
 

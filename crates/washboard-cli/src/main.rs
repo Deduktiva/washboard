@@ -19,7 +19,7 @@ mod validation;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use washboard_core::xml;
 
 #[derive(Debug, Parser)]
@@ -188,30 +188,6 @@ enum RequestCommand {
     },
 }
 
-#[derive(Debug, Args)]
-struct ServerOptions {
-    /// Basic-auth user name.
-    #[arg(long)]
-    username: Option<String>,
-    /// Read the basic-auth password from the first line of stdin (macOS only: stored in the
-    /// Keychain).
-    #[arg(long)]
-    password_stdin: bool,
-    /// Request timeout in seconds.
-    #[arg(long, value_name = "SECS")]
-    timeout: Option<u64>,
-}
-
-impl ServerOptions {
-    fn into_options(self) -> commands::server::Options {
-        commands::server::Options {
-            username: self.username,
-            password_stdin: self.password_stdin,
-            timeout: self.timeout,
-        }
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum ServerCommand {
     List,
@@ -219,24 +195,15 @@ enum ServerCommand {
         name: String,
         url: String,
         #[command(flatten)]
-        opts: ServerOptions,
+        opts: commands::server::Options,
         /// Skip certificate and hostname verification for this server.
         #[arg(long)]
         ignore_tls_errors: bool,
     },
     Edit {
         name: String,
-        #[arg(long = "name", value_name = "NEW_NAME")]
-        new_name: Option<String>,
-        #[arg(long)]
-        url: Option<String>,
         #[command(flatten)]
-        opts: ServerOptions,
-        /// Switch to no authentication (removes the stored password).
-        #[arg(long, conflicts_with_all = ["username", "password_stdin"])]
-        no_auth: bool,
-        #[arg(long, value_name = "BOOL")]
-        ignore_tls_errors: Option<bool>,
+        edit: commands::server::Edit,
     },
     Remove {
         name: String,
@@ -322,25 +289,8 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
                 url,
                 opts,
                 ignore_tls_errors,
-            } => server::add(dir, &name, &url, &opts.into_options(), ignore_tls_errors),
-            ServerCommand::Edit {
-                name,
-                new_name,
-                url,
-                opts,
-                no_auth,
-                ignore_tls_errors,
-            } => server::edit(
-                dir,
-                &name,
-                &server::Edit {
-                    new_name,
-                    url,
-                    opts: opts.into_options(),
-                    no_auth,
-                    ignore_tls_errors,
-                },
-            ),
+            } => server::add(dir, &name, &url, &opts, ignore_tls_errors),
+            ServerCommand::Edit { name, edit } => server::edit(dir, &name, &edit),
             ServerCommand::Remove { name } => server::remove(dir, &name),
         },
     }
