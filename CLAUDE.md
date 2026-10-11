@@ -15,6 +15,7 @@ crates/washboard-core   UI-free library: model, diag, xml, wsdl, schema, validat
 crates/libxml2-sys      FFI to a vendored, statically linked libxml2
 crates/washboard-cli    `washboard` command-line harness
 crates/washboard-app    macOS app (objc2 + AppKit); stub `main` on other platforms
+crates/washboard-test-support  dev-dependency only: fixtures path, local HTTP server for tests
 fixtures/               WSDL/XSD/request fixtures + lxml oracle
 ```
 
