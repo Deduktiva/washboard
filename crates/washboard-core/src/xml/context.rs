@@ -134,10 +134,7 @@ impl Frame {
 /// Describes the cursor at byte offset `cursor` (between `text[cursor - 1]` and
 /// `text[cursor]`). Offsets past the end or inside a character are clamped.
 pub fn cursor_context(text: &str, cursor: usize) -> CursorContext {
-    let mut c = cursor.min(text.len());
-    while !text.is_char_boundary(c) {
-        c -= 1;
-    }
+    let c = text.floor_char_boundary(cursor);
     let mut stack: Vec<Frame> = Vec::new();
     let mut lexer = Lexer::new(text, 0);
     let mut in_tag = false;

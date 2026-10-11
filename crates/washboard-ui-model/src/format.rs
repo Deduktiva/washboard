@@ -109,11 +109,7 @@ fn map_offset(old: &str, new: &str, at: usize) -> usize {
     let solid = |s: &str| s.chars().filter(|c| !is_ws(*c)).collect::<String>();
     let at = at.min(old.len());
     if solid(old) != solid(new) {
-        let mut at = at.min(new.len());
-        while !new.is_char_boundary(at) {
-            at -= 1;
-        }
-        return at;
+        return new.floor_char_boundary(at);
     }
     let before = old[..at].chars().filter(|c| !is_ws(*c)).count();
     new.char_indices()

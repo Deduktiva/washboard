@@ -4,7 +4,7 @@
 //! soapAction, style). Operations we cannot handle are kept and marked with a [`Support`]
 //! reason so the UI can list them greyed out (`docs/PLAN.md` §1, §5.3).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diag::{DiagSource, Diagnostic, TextPos};
 use crate::model::{OperationRef, QName};
@@ -608,11 +608,11 @@ fn dedup<T>(
     what: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Vec<T> {
-    let mut seen: HashMap<QName, ()> = HashMap::new();
+    let mut seen: HashSet<QName> = HashSet::new();
     let mut out = Vec::with_capacity(items.len());
     for it in items {
         let k = key(&it).clone();
-        if seen.insert(k.clone(), ()).is_some() {
+        if !seen.insert(k.clone()) {
             diags.push(Diagnostic::warning(
                 DiagSource::Import,
                 None,
@@ -668,15 +668,13 @@ fn resolve(raw: Raw, files: &[(usize, &str, &str)], diags: &mut Vec<Diagnostic>)
             let style = op.style.unwrap_or(rb.style);
             let in_name = op.input.as_ref().and_then(|i| i.name.as_deref());
             let aop = pt.and_then(|pt| {
-                let mut c = pt.operations.iter().filter(|o| o.name == op.name);
-                match in_name {
-                    Some(n) => pt.operations.iter().find(|o| {
-                        o.name == op.name
-                            && o.input.as_ref().and_then(|i| i.name.as_deref()) == Some(n)
-                    }),
-                    None => c.next(),
-                }
-                .or_else(|| pt.operations.iter().find(|o| o.name == op.name))
+                let named = || pt.operations.iter().filter(|o| o.name == op.name);
+                in_name
+                    .and_then(|n| {
+                        named()
+                            .find(|o| o.input.as_ref().and_then(|i| i.name.as_deref()) == Some(n))
+                    })
+                    .or_else(|| named().next())
             });
             let mut invalid: Option<String> = None;
             if pt.is_some() && aop.is_none() {
