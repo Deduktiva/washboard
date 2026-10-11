@@ -51,7 +51,20 @@ must likewise skip its build when cross-checking for macOS from another host (se
   operations are shown as unsupported, never silently dropped and never an error.
 - **Encodings:** every XML input goes through `xml::decode` before a Rust parser sees it
   (BOMs and UTF-16 occur in real WSDLs). libxml2 gets the decoded text as UTF-8, too.
-- **Positions:** `diag::TextPos` is 1-based line and char column, BOM not counted.
+- **Positions:** `diag::TextPos` is 1-based line and char column, BOM not counted. Between
+  `washboard-ui-model` and a front end, text positions are UTF-16 offsets, converted with
+  `xml::utf16`.
+- **Layering:** what the app *does* lives in `washboard-ui-model`; `washboard-app` only draws its
+  state and forwards input. No toolkit types cross that boundary (`architecture.md`).
+- **Undo:** the text widget owns undo. Programmatic edits (format, templates, completion,
+  restore) are applied through the widget so they land on its undo stack; the model never keeps
+  its own.
+- **Threads:** no `tokio` or other async runtime; threads and channels. `washboard-ui-model`
+  state is main-thread only and deliberately not `Send`; workers get immutable `Arc` snapshots,
+  never project state.
+- **libxml2 validation:** when libxml2 objects to something SOAP allows, remove it from the
+  parsed tree before validating (`CompiledSchema::validate_text_stripping`); never filter its
+  errors afterwards (`validation.md`).
 - **Errors:** per-module error enums with `thiserror`. No `unwrap`/`expect` on user input or
   file contents outside tests; malformed WSDLs are normal input.
 - **Unsafe:** only in `libxml2-sys`, the libxml2 wrapper in `validate`, and `washboard-app`.
