@@ -205,8 +205,7 @@ impl App {
 
     /// File ▸ Open Project…: asks the front end for a folder, then opens it.
     pub fn choose_and_open_project(&mut self) {
-        let id = DialogId(self.next());
-        self.dialogs.insert(id, PendingDialog::OpenProject);
+        let id = self.pend_dialog(PendingDialog::OpenProject);
         self.front.dialogs.choose_project_folder(id);
     }
 
@@ -489,6 +488,14 @@ impl App {
     pub(crate) fn next(&mut self) -> u64 {
         self.next_id += 1;
         self.next_id
+    }
+
+    /// Remembers what a dialog is for, so its answer can be routed in
+    /// [`dialog_answered`](Self::dialog_answered).
+    pub(crate) fn pend_dialog(&mut self, pending: PendingDialog) -> DialogId {
+        let id = DialogId(self.next());
+        self.dialogs.insert(id, pending);
+        id
     }
 }
 

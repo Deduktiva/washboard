@@ -30,7 +30,7 @@ use washboard_core::project::REQUESTS_DIR;
 use crate::app::{App, PendingDialog, ProjectKey};
 use crate::editor::fingerprint;
 use crate::event::Event;
-use crate::front_end::{Confirm, DialogAnswer, DialogId};
+use crate::front_end::{Confirm, DialogAnswer};
 use crate::timers::TimerKind;
 
 /// How long the folder must be quiet before it is re-read.
@@ -236,14 +236,10 @@ impl App {
             .map(|r| r.name.clone())
             .unwrap_or_default();
         self.stop_timer(key, TimerKind::Autosave);
-        let id = DialogId(self.next());
-        self.dialogs.insert(
-            id,
-            PendingDialog::ReloadRequest {
-                project: key,
-                request,
-            },
-        );
+        let id = self.pend_dialog(PendingDialog::ReloadRequest {
+            project: key,
+            request,
+        });
         self.front.dialogs.confirm(
             id,
             Confirm {
