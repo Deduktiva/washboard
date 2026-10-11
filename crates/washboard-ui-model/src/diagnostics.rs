@@ -30,18 +30,25 @@ pub struct Issue {
     /// matches").
     pub line: Option<u32>,
     /// What to underline, in UTF-16 units of the editor's text. Empty when only a position is
-    /// known.
+    /// known, which includes a span that is reversed or not in the text: parsers and libxml2
+    /// report spans that are not checked, and a reversed range would break the text widget.
     pub range: Option<Range<usize>>,
 }
 
 impl Issue {
     pub(crate) fn new(text: &str, lines: &LineIndex<'_>, d: Diagnostic) -> Issue {
-        let utf16 = |pos| lines.byte(pos).map(|b| byte_to_utf16(text, b));
-        let range = match (d.span, d.pos) {
-            (Some(span), _) => utf16(span.start).zip(utf16(span.end)).map(|(s, e)| s..e),
-            (None, Some(pos)) => utf16(pos).map(|at| at..at),
-            (None, None) => None,
+        let utf16 = |b| byte_to_utf16(text, b);
+        let point = || {
+            d.pos
+                .and_then(|pos| lines.byte(pos))
+                .map(utf16)
+                .map(|at| at..at)
         };
+        let range = d
+            .span
+            .and_then(|span| lines.range(span))
+            .map(|r| utf16(r.start)..utf16(r.end))
+            .or_else(point);
         Issue {
             severity: d.severity,
             source: d.source,

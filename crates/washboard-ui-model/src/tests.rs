@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use washboard_core::diag::DiagSource;
+use washboard_core::diag::{DiagSource, Diagnostic, TextPos, TextSpan};
 use washboard_core::model::{Auth, RequestId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
 use washboard_core::wsdl::Protocol;
@@ -1108,6 +1108,19 @@ fn well_formedness_is_checked_150_ms_after_the_last_edit() {
     let at = issues[0].range.clone().expect("range").start;
     assert!(at >= 10, "{at} is past `<!--😀-->\\n` (10 units)");
     assert!(invalid_marker(&app, key, first));
+}
+
+#[test]
+fn a_reversed_span_marks_its_position_instead() {
+    let text = "<a>\n  <b/>\n</a>";
+    let pos = |line, column| TextPos { line, column };
+    let span = TextSpan {
+        start: pos(2, 5),
+        end: pos(2, 3),
+    };
+    let d = Diagnostic::error(DiagSource::Schema, Some(pos(2, 3)), "bad").with_span(span);
+    let issues = Issue::all(text, vec![d]);
+    assert_eq!(issues[0].range, Some(6..6), "the `<` of `<b/>`");
 }
 
 fn well_formedness(app: &App, key: ProjectKey) -> WellFormedness {
