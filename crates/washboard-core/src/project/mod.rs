@@ -373,6 +373,24 @@ impl Project {
         self.root.join(WSDL_DIR)
     }
 
+    /// The files in `wsdl/`, as `/`-separated paths relative to it: the entry first, then the
+    /// rest sorted. Hidden names are skipped (they are Washboard's, e.g. `.previous`), and so
+    /// are symlinked folders, which could loop.
+    pub fn wsdl_files(&self) -> Result<Vec<String>> {
+        let mut files = Vec::new();
+        walk_wsdl_dir(&self.wsdl_dir(), "", &mut files)?;
+        files.sort();
+        let entry = self.wsdl_path()?;
+        let entry = entry
+            .strip_prefix(&format!("{WSDL_DIR}/"))
+            .unwrap_or(&entry);
+        if let Some(i) = files.iter().position(|f| f == entry) {
+            let first = files.remove(i);
+            files.insert(0, first);
+        }
+        Ok(files)
+    }
+
     pub fn wsdl_imported_at(&self) -> Result<SystemTime> {
         let s: String = self
             .conn
@@ -587,6 +605,25 @@ fn validate_wsdl_set(set: &WsdlSet) -> Result<()> {
     }
     if !set.files.iter().any(|f| f.dest == set.entry) {
         return bad(format!("entry {:?} is not among the files", set.entry));
+    }
+    Ok(())
+}
+
+fn walk_wsdl_dir(dir: &Path, rel: &str, files: &mut Vec<String>) -> Result<()> {
+    for entry in fs::read_dir(dir).at(dir)? {
+        let entry = entry.at(dir)?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = names::join(rel, &name);
+        if entry.file_type().at(&entry.path())?.is_dir() {
+            walk_wsdl_dir(&entry.path(), &path, files)?;
+        } else if entry.path().is_file() {
+            files.push(path);
+        }
     }
     Ok(())
 }

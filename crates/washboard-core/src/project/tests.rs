@@ -1264,6 +1264,26 @@ fn failed_replace_leaves_wsdl_untouched() {
     assert!(dir_names(&folder).iter().all(|n| !n.starts_with(".wb-")));
 }
 
+#[test]
+fn wsdl_files_lists_entry_first_and_skips_hidden() {
+    let (_tmp, folder, mut p) = new_project();
+    fs::write(folder.join(WSDL_DIR).join(".DS_Store"), "x").expect("write");
+    assert_eq!(
+        p.wsdl_files().expect("files"),
+        [
+            "CustomerService.wsdl",
+            "CustomerBinding.wsdl",
+            "xsd/common/party-ids.xsd",
+            "xsd/common/party.xsd",
+            "xsd/customer.xsd",
+            "xsd/ext/audit.xsd",
+        ]
+    );
+    // `.previous` holds the old set and is not listed.
+    p.replace_wsdl(&legacy_set()).expect("replace");
+    assert_eq!(p.wsdl_files().expect("files"), ["Legacy.wsdl"]);
+}
+
 // ---- ui_state ----------------------------------------------------------------------------
 
 #[test]
