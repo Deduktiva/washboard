@@ -148,10 +148,7 @@ define_class!(
         fn window_did_resign_key(&self, _notification: &NSNotification) {
             // Leaving the window saves its edits (PLAN §4 "Save / autosave").
             let key = self.key();
-            with_delegate(self.mtm(), |d| {
-                d.update(|app| app.window_resigned_key(key));
-                d.sync();
-            });
+            self.apply(|app| app.window_resigned_key(key));
         }
     }
 
@@ -518,10 +515,7 @@ impl ProjectWindowController {
                 }
             }
             Err(e) => {
-                with_delegate(self.mtm(), |d| {
-                    d.update(|app| app.alert_error("Could not format the request", &e));
-                    d.sync();
-                });
+                self.apply(|app| app.alert_error("Could not format the request", &e));
             }
         }
     }
@@ -716,10 +710,7 @@ impl ProjectWindowController {
 
     fn cancel_send(&self) {
         let key = self.key();
-        with_delegate(self.mtm(), |d| {
-            d.update(|app| app.cancel_send(key));
-            d.sync();
-        });
+        self.apply(|app| app.cancel_send(key));
     }
 
     fn has_editor(&self) -> bool {
@@ -796,11 +787,8 @@ impl ProjectWindowController {
         *self.ivars().replace.borrow_mut() = Some(sheet.clone());
         *self.ivars().replace_parent.borrow_mut() = Some(Weak::from_retained(&parent.retain()));
         sheet.present(parent);
-        with_delegate(self.mtm(), |d| {
-            d.update(|app| app.begin_import(target));
-            // Shows the model's sheet through `ImportChanged`.
-            d.sync();
-        });
+        // Shows the model's sheet through `ImportChanged`.
+        self.apply(|app| app.begin_import(target));
         Some(sheet)
     }
 
