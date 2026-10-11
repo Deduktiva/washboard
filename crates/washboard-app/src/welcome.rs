@@ -8,12 +8,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSButton, NSColor, NSControl,
-    NSControlTextEditingDelegate, NSEvent, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode,
-    NSMenu, NSMenuDelegate, NSMenuItem, NSResponder, NSScrollView, NSStackView, NSTableCellView,
-    NSTableColumn, NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle,
-    NSTextField, NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask,
-    NSWindowTabbingMode, NSWindowTitleVisibility, NSWorkspace,
+    NSApplication, NSAutoresizingMaskOptions, NSColor, NSControl, NSControlTextEditingDelegate,
+    NSEvent, NSFont, NSImageView, NSLayoutAttribute, NSLineBreakMode, NSMenu, NSMenuDelegate,
+    NSMenuItem, NSResponder, NSScrollView, NSStackView, NSTableCellView, NSTableColumn,
+    NSTableView, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
+    NSUserInterfaceLayoutOrientation, NSView, NSWindow, NSWindowStyleMask, NSWindowTabbingMode,
+    NSWindowTitleVisibility, NSWorkspace,
 };
 use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -353,16 +353,8 @@ fn left_pane(mtm: MainThreadMarker) -> Retained<NSView> {
         ("New Project…", sel!(newProject:)),
         ("Open Project…", sel!(openProject:)),
     ] {
-        // SAFETY: no target: the action goes up the responder chain to the app delegate,
-        // whose handlers take the sender as their only argument.
-        let button = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str(title),
-                None,
-                Some(action),
-                mtm,
-            )
-        };
+        // No target: the app delegate handles these from the responder chain.
+        let button = layout::responder_button(title, action, mtm);
         button
             .widthAnchor()
             .constraintEqualToConstant(BUTTON_WIDTH)
