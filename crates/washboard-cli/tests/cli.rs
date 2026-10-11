@@ -2,16 +2,15 @@
 //! network traffic goes to a plain-HTTP server thread on 127.0.0.1 started by the test.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
-use std::thread;
 
 use serde_json::Value;
 use tempfile::TempDir;
 use washboard_core::project::Project;
+
+#[path = "../../washboard-ui-model/tests/support/server.rs"]
+mod server;
 
 const BIN: &str = env!("CARGO_BIN_EXE_washboard");
 
@@ -594,60 +593,6 @@ fn password_stdin_is_refused_without_a_secret_store() {
     assert!(!ok(wb(&e, &["server", "list"])).contains("Auth"));
 }
 
-/// What the test server saw of one request.
-struct Seen {
-    head: String,
-    body: String,
-}
-
-/// Serves `responses` in order, one per connection, then stops.
-fn serve(responses: Vec<(u16, &'static str)>) -> (String, mpsc::Receiver<Seen>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    let url = format!(
-        "http://{}/ws/customer",
-        listener.local_addr().expect("addr")
-    );
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        for (status, body) in responses {
-            let (stream, _) = listener.accept().expect("accept");
-            let mut reader = BufReader::new(stream);
-            let mut head = String::new();
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).expect("read") == 0 || line == "\r\n" {
-                    break;
-                }
-                head.push_str(&line);
-            }
-            let len = head
-                .lines()
-                .find_map(|l| {
-                    let (k, v) = l.split_once(':')?;
-                    k.eq_ignore_ascii_case("content-length")
-                        .then(|| v.trim().parse::<usize>().ok())?
-                })
-                .unwrap_or(0);
-            let mut req_body = vec![0; len];
-            reader.read_exact(&mut req_body).expect("body");
-            let reason = if status == 200 { "OK" } else { "Error" };
-            let mut stream = reader.into_inner();
-            write!(
-                stream,
-                "HTTP/1.1 {status} {reason}\r\nContent-Type: text/xml; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .expect("write");
-            let _ = tx.send(Seen {
-                head,
-                body: String::from_utf8_lossy(&req_body).into_owned(),
-            });
-        }
-    });
-    (url, rx)
-}
-
 const OK_RESPONSE: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><m:GetCustomerResponse xmlns:m="urn:example:customer:messages"/></soapenv:Body></soapenv:Envelope>
 "#;
 
@@ -657,11 +602,11 @@ const FAULT_RESPONSE: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.
 #[test]
 fn send_records_history_and_last_server() {
     let e = customer();
-    let (url, seen) = serve(vec![
-        (200, OK_RESPONSE),
-        (500, FAULT_RESPONSE),
-        (500, FAULT_RESPONSE),
-        (200, OK_RESPONSE),
+    let (url, seen) = server::serve(vec![
+        ("200 OK", OK_RESPONSE),
+        ("500 Internal Server Error", FAULT_RESPONSE),
+        ("500 Internal Server Error", FAULT_RESPONSE),
+        ("200 OK", OK_RESPONSE),
     ]);
     ok(wb(&e, &["server", "add", "Local", &url]));
     ok(wb(&e, &["server", "add", "Other", "http://127.0.0.1:9/"]));
@@ -679,11 +624,7 @@ fn send_records_history_and_last_server() {
     assert_eq!(ok(o.clone_output()), OK_RESPONSE);
     assert!(stderr(&o).contains("HTTP/1.1 200 OK"), "{}", stderr(&o));
     let s = seen.recv().expect("request seen");
-    assert!(
-        s.head.starts_with("POST /ws/customer HTTP/1.1"),
-        "{}",
-        s.head
-    );
+    assert!(s.head.starts_with("POST /soap HTTP/1.1"), "{}", s.head);
     assert!(
         s.head
             .to_ascii_lowercase()
@@ -739,7 +680,7 @@ fn send_records_history_and_last_server() {
 #[test]
 fn basic_auth_password_comes_from_the_environment() {
     let e = customer();
-    let (url, seen) = serve(vec![(200, OK_RESPONSE)]);
+    let (url, seen) = server::serve(vec![("200 OK", OK_RESPONSE)]);
     ok(wb(
         &e,
         &["server", "add", "Local", &url, "--username", "alice"],
@@ -787,7 +728,7 @@ fn basic_auth_password_comes_from_the_environment() {
 #[test]
 fn skip_validation_sends_broken_requests_anyway() {
     let e = customer();
-    let (url, seen) = serve(vec![(500, FAULT_RESPONSE)]);
+    let (url, seen) = server::serve(vec![("500 Internal Server Error", FAULT_RESPONSE)]);
     ok(wb(&e, &["server", "add", "Local", &url]));
     ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
     let req = "GetCustomer 1";

@@ -52,10 +52,12 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
+#[path = "../../washboard-ui-model/tests/support/server.rs"]
+mod server;
+
+#[cfg(target_os = "macos")]
 mod checks {
     use std::cell::RefCell;
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
     use std::rc::Rc;
@@ -96,6 +98,8 @@ mod checks {
         Alert, Confirm, DialogAnswer, DialogId, Dialogs, FormatSettings, ImportTarget, ProjectKey,
         SchemaState,
     };
+
+    use crate::server::serve_once;
 
     const DEFAULTS_SUITE: &str = "at.deduktiva.washboard.appkit-checks";
 
@@ -2033,72 +2037,11 @@ mod checks {
         <tns:LookupResponse xmlns:tns=\"urn:example:legacy\"><result><street>Main St 1</street>\
         <city>Vienna</city></result></tns:LookupResponse></soapenv:Body></soapenv:Envelope>";
 
-    /// Reads one HTTP request: its head and, with a `Content-Length`, its body.
-    fn read_request(stream: &mut TcpStream) -> String {
-        let mut data = Vec::new();
-        let mut buf = [0; 4096];
-        loop {
-            let n = stream.read(&mut buf).expect("read the request");
-            if n == 0 {
-                break;
-            }
-            data.extend_from_slice(&buf[..n]);
-            let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") else {
-                continue;
-            };
-            let head = String::from_utf8_lossy(&data[..end]).into_owned();
-            let length = head
-                .lines()
-                .filter_map(|l| l.split_once(':'))
-                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-                .unwrap_or(0);
-            if data.len() >= end + 4 + length {
-                break;
-            }
-        }
-        String::from_utf8_lossy(&data).into_owned()
-    }
-
-    /// A SOAP server on this machine that answers one request with `body` and returns what
-    /// it received.
-    fn serve_once(body: &'static str) -> (u16, std::thread::JoinHandle<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-        let port = listener.local_addr().expect("local address").port();
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .expect("read timeout");
-            let request = read_request(&mut stream);
-            let reply = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/xml; charset=utf-8\r\n\
-                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(reply.as_bytes()).expect("reply");
-            request
-        });
-        (port, handle)
-    }
-
-    /// A server that accepts a connection and never answers.
-    fn serve_nothing() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-        let port = listener.local_addr().expect("local address").port();
-        std::thread::spawn(move || {
-            let connection = listener.accept();
-            std::thread::sleep(Duration::from_secs(20));
-            drop(connection);
-        });
-        port
-    }
-
-    fn local_server(id: ServerId, port: u16) -> Server {
+    fn local_server(id: ServerId, url: &str) -> Server {
         Server {
             id,
             name: "Local".into(),
-            url: format!("http://127.0.0.1:{port}/legacy"),
+            url: url.to_owned(),
             ignore_tls_errors: false,
             auth: Auth::Basic {
                 username: "alice".into(),
@@ -2134,12 +2077,12 @@ mod checks {
 
         // A server on this machine, with Basic auth so the log has an `Authorization` header.
         let key = project.key();
-        let (port, server) = serve_once(LOOKUP_RESPONSE);
+        let (url, server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::ZERO);
         let id = ctx
             .delegate
             .command("add a server", |app| {
                 let id = app.add_server(key)?;
-                app.update_server(key, &local_server(id, port), Some("secret"))?;
+                app.update_server(key, &local_server(id, &url), Some("secret"))?;
                 Ok(id)
             })
             .expect("server added");
@@ -2249,10 +2192,10 @@ mod checks {
         assert!(!ctx.delegate.http_log().table().rows().is_empty(), "logged");
 
         // A second send makes the first an older exchange.
-        let (port, server) = serve_once(LOOKUP_RESPONSE);
+        let (url, server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::ZERO);
         ctx.delegate
             .command("point the server at a new port", |app| {
-                app.update_server(key, &local_server(id, port), None)
+                app.update_server(key, &local_server(id, &url), None)
             })
             .expect("server updated");
         replace(start, date.len(), "2031-12-31");
@@ -2347,11 +2290,11 @@ mod checks {
             "⌘Z brings the edit back"
         );
 
-        // Cancel stops waiting for a server that never answers.
-        let port = serve_nothing();
+        // Cancel stops waiting for a server that does not answer in time.
+        let (url, _server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::from_secs(20));
         ctx.delegate
             .command("point the server elsewhere", |app| {
-                app.update_server(key, &local_server(id, port), None)
+                app.update_server(key, &local_server(id, &url), None)
             })
             .expect("server updated");
         action("sendRequest:");

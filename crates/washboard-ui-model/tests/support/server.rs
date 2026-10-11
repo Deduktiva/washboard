@@ -1,64 +1,106 @@
-//! A one-shot HTTP server on 127.0.0.1 for the model's send tests.
+//! A local HTTP server on 127.0.0.1 for the send tests of the UI model, the CLI and the app.
 //!
 //! It lives under `tests/` because only `washboard_core::http` may use sockets in shipped code
-//! (PLAN §6, enforced by `washboard-core/tests/network_boundary.rs`); the unit tests include
-//! it with `#[path]`, so it is compiled for tests only.
+//! (PLAN §6, enforced by `washboard-core/tests/network_boundary.rs`). The UI model's unit tests
+//! include it with `#[path]`; the CLI's and the app's integration tests include it the same way,
+//! so it is compiled for tests only. Core's own HTTP tests keep their server, which also speaks
+//! TLS and answers with scripted raw bytes.
+
+#![allow(dead_code, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-/// Accepts one connection on 127.0.0.1, waits `delay`, answers with `status` and `body`.
-/// The handle yields the raw request.
+/// What the server saw of one request.
+#[derive(Debug)]
+pub struct Seen {
+    /// The request line and headers, each line ending in CRLF, without the blank line.
+    pub head: String,
+    pub body: String,
+}
+
+/// Accepts one connection, waits `delay`, answers with `status` (`"200 OK"`) and `body`. The
+/// handle yields the raw request.
 pub fn serve_once(
     status: &'static str,
     body: &'static str,
     delay: Duration,
 ) -> (String, JoinHandle<String>) {
+    let (listener, url) = bind();
+    let handle = std::thread::spawn(move || {
+        let (tcp, _) = listener.accept().expect("accept");
+        let seen = exchange(tcp, status, body, delay);
+        format!("{}\r\n{}", seen.head, seen.body)
+    });
+    (url, handle)
+}
+
+/// Answers `responses` in order, one per connection, then stops. The receiver gets each
+/// request as it is answered.
+pub fn serve(responses: Vec<(&'static str, &'static str)>) -> (String, mpsc::Receiver<Seen>) {
+    let (listener, url) = bind();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for (status, body) in responses {
+            let (tcp, _) = listener.accept().expect("accept");
+            let _ = tx.send(exchange(tcp, status, body, Duration::ZERO));
+        }
+    });
+    (url, rx)
+}
+
+/// A URL on a port nobody listens on any more.
+pub fn closed_port_url() -> String {
+    bind().1
+}
+
+fn bind() -> (TcpListener, String) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let url = format!(
         "http://127.0.0.1:{}/soap",
         listener.local_addr().expect("addr").port()
     );
-    let handle = std::thread::spawn(move || {
-        let (mut tcp, _) = listener.accept().expect("accept");
-        tcp.set_read_timeout(Some(Duration::from_secs(10)))
-            .expect("timeout");
-        let mut reader = BufReader::new(tcp.try_clone().expect("clone"));
-        let mut head = String::new();
-        let mut length = 0;
-        loop {
-            let mut line = String::new();
-            reader.read_line(&mut line).expect("read");
-            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                length = v.trim().parse().expect("length");
-            }
-            head.push_str(&line);
-            if line == "\r\n" || line.is_empty() {
-                break;
-            }
-        }
-        let mut request_body = vec![0; length];
-        reader.read_exact(&mut request_body).expect("body");
-        std::thread::sleep(delay);
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: text/xml\r\nContent-Length: {}\r\n\
-             Connection: close\r\n\r\n{body}",
-            body.len()
-        );
-        // The client may have given up already.
-        let _ = tcp.write_all(response.as_bytes());
-        head + &String::from_utf8_lossy(&request_body)
-    });
-    (url, handle)
+    (listener, url)
 }
 
-/// A URL on a port nobody listens on any more.
-pub fn closed_port_url() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-    format!(
-        "http://127.0.0.1:{}/",
-        listener.local_addr().expect("addr").port()
-    )
+/// Reads one request (its head and, with a `Content-Length`, its body), waits `delay` and
+/// answers. The client may have given up by then, also before sending all of it; what arrived
+/// is returned.
+fn exchange(tcp: TcpStream, status: &str, body: &str, delay: Duration) -> Seen {
+    tcp.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("timeout");
+    let mut reader = BufReader::new(tcp);
+    let mut head = String::new();
+    let mut length = 0;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            length = value.trim().parse().expect("length");
+        }
+        head.push_str(&line);
+    }
+    let mut request_body = Vec::with_capacity(length);
+    let _ = reader
+        .by_ref()
+        .take(length as u64)
+        .read_to_end(&mut request_body);
+    std::thread::sleep(delay);
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/xml; charset=utf-8\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = reader.get_mut().write_all(response.as_bytes());
+    Seen {
+        head,
+        body: String::from_utf8_lossy(&request_body).into_owned(),
+    }
 }
