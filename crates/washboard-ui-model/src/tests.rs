@@ -778,9 +778,11 @@ fn a_server_is_deleted_after_confirmation() {
 fn added_and_saved_servers_follow_the_projects_rules() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    // Not printing the result on failure: CodeQL counts it as logging the server's password.
     let refused = |r: Result<(), ModelError>| match r {
         Err(ModelError::Project(ProjectError::InvalidServer(e))) => e,
-        other => panic!("{other:?}"),
+        Ok(()) => panic!("accepted"),
+        Err(_) => panic!("refused for another reason"),
     };
 
     // Add Server…'s Save with no URL adds nothing; the alert says why.
