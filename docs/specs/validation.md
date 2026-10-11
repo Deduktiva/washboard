@@ -25,7 +25,7 @@ When it runs (live, ⌘B, before send): [editor](editor.md), "Checking".
    the SOAP namespace stay errors.
 
 Where libxml2 must not complain about something the protocol allows, remove it from the parsed
-tree before validating (`CompiledSchema::validate_text_stripping`, used for the SOAP
+tree before validating (`CompiledSchema::validate` with `strip`, used for the SOAP
 header-block attributes) rather than filtering errors afterwards.
 
 ## Errors

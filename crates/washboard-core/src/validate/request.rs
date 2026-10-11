@@ -234,7 +234,7 @@ pub fn validate_request(
     // `HEADER_BLOCK_ATTRIBUTES`) and checked here instead.
     let mut schema_diags = schema
         .schema
-        .validate_text_stripping(text, &STRIP_HEADER_BLOCK_ATTRIBUTES);
+        .validate(text, Some(&STRIP_HEADER_BLOCK_ATTRIBUTES));
     if let Some(model) = &schema.model {
         for d in &mut schema_diags {
             explain_abstract(model, &doc, text, d);
