@@ -229,6 +229,8 @@ impl AppDelegate {
             .unwrap_or_else(NSUserDefaults::standardUserDefaults);
         let mut model = App::new(options.state_dir, front);
         model.set_format_settings(app_settings::load(&defaults));
+        // FSEvents: requests edited outside the app show up (PLAN M5).
+        model.watch_request_files();
         *this.ivars().model.borrow_mut() = Some(model);
         let _ = this.ivars().defaults.set(defaults);
         this
