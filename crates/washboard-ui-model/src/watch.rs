@@ -25,7 +25,6 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
 use washboard_core::model::RequestId;
-use washboard_core::project::REQUESTS_DIR;
 
 use crate::app::{App, PendingDialog, ProjectKey};
 use crate::editor::fingerprint;
@@ -154,7 +153,7 @@ impl App {
         let Some(window) = self.window_mut(key) else {
             return;
         };
-        let dir = window.project.root().join(REQUESTS_DIR);
+        let dir = window.project.requests_dir();
         window.watcher = backend::watch(&dir, move || {
             // The app is gone if the send fails; nothing is left to tell.
             if tx.send(key).is_ok() {
