@@ -1,6 +1,6 @@
 # Work packages
 
-How the work in `docs/PLAN.md` is split so several agents can work in parallel without
+How the work in `docs/PLAN.md` and `docs/specs/` is split so several agents can work in parallel without
 stepping on each other. Each package owns a set of paths. Shared contracts are listed
 separately and change only additively unless coordinated.
 
@@ -40,7 +40,7 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
   `KeychainSecretStore` so far; it is type-checked on Linux).
 - Typing stays responsive in a 1 MB request; completion and hover appear where expected.
 - Layout and light/dark appearance against `docs/gui-draft.html`. Findings become app fixes.
-- macOS numbers for PLAN §5.1: `cargo test --release --test validate_perf --test schema_perf
+- macOS numbers for `docs/specs/performance.md`: `cargo test --release --test validate_perf --test schema_perf
   -- --nocapture` (CI runs debug tests with captured output, so it shows none).
 
 ### Coding packages
@@ -52,73 +52,15 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-REQUEST-FOLDERS | — | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
 
-### WP-REQUEST-FOLDERS in detail
+### WP-REQUEST-FOLDERS tests
+Behaviour: `docs/specs/request-folders.md`. Tests (Linux): reconciliation of nested files, a move
+in Finder keeping history, the duplicate-name case; placement with one and with several
+supported ports (both fixtures and a synthetic two-port WSDL), the folder reused across case, a
+selected folder winning; folder rename, move and delete with history; the CLI's paths and
+ambiguity error.
 
-The sidebar's OPERATIONS list goes (WP-REQUEST-FOLDERS-APP); creating a request is the
-operation picker's job, and grouping requests becomes the user's, with folders. Folders are
-created when they are first needed, not for every operation up front: a WSDL with 200
-operations would get 200 empty folders, git does not keep empty directories, and Replace WSDL
-would leave folders for removed operations behind.
-
-- **On disk.** A folder is a subdirectory of `requests/`, nested to any depth, so the project
-  stays browsable in Finder and git (PLAN §3). Folder names follow the request name rules
-  (`names::validate_request_name`). Folders and files starting with `.` are ignored. The disk is
-  the truth for folders: they are not in the database, and an empty folder stays until it is
-  deleted.
-- **Database.** `request.file_name` already holds a path relative to `requests/`; it now may
-  contain `/` (always `/`, whatever the platform). No migration. `RequestMeta` gains
-  `folder: String` (`""` for the top level), additively.
-- **Names stay unique across the project** (case-insensitive, as now), not per folder, so
-  `<Operation> <n>` numbering and the CLI's `<name>` arguments keep working. Rename, Duplicate
-  and New Request check against every folder. Two files with the same name in different folders
-  can still arrive from Finder or git; reconciliation accepts both, the app shows both, and the
-  CLI asks for the path (below).
-- **Reconciliation** walks `requests/` recursively. A row whose file is gone is matched to a new
-  file with the same name elsewhere, when exactly one such file appeared, and treated as a move:
-  same id, same history. That covers a move in Finder; anything else stays as today (removed and
-  added).
-- **New Request placement.** The model's `new_request` takes the target folder. The app passes
-  the folder selected in the sidebar when a folder row is selected; otherwise the request goes
-  into its operation's folder, created if missing. That folder is named after the operation
-  (`GetCustomer`), or `Port/GetCustomer` when the project has more than one supported port, so
-  a typical WSDL with one SOAP 1.1 port gets one level. Only supported ports count, so a SOAP
-  1.1 port next to a SOAP 1.2 or rpc/encoded one still gives the flat layout. An existing folder
-  is matched case-insensitively; if the user renamed the operation's folder, a new one is
-  created. Duplicate puts the copy beside the original.
-- **Commands** (core, model): create folder, rename folder, delete folder (with every request in
-  it and their history; the model reports the count for the confirmation), move a request to a
-  folder, move a folder (refused into itself or its descendants, and when the move would put two
-  rows of the same name in one folder). All are renames on disk, atomic like other writes.
-  Collapsed folders are kept per project in `ui_state`.
-- **Sidebar model.** `Sidebar` gains the folder tree next to today's flat `requests`, sorted
-  folders first, then requests, each in Finder order (`window::finder_order`).
-  `Sidebar::services` stays: the picker uses it.
-- **CLI.** `request list` prints paths (`GetCustomer/GetCustomer 1`). Every `<name>` argument
-  also takes a path; a bare name that matches two requests fails and lists their paths.
-  `request mv <name> <folder>` moves a request (creating the folder; `/` for the top level).
-  `request new` places like New Request.
-- **Tests** (Linux): reconciliation of nested files, a move in Finder keeping history, the
-  duplicate-name case; placement with one and with several supported ports (both fixtures and a
-  synthetic two-port WSDL), the folder reused across case, a selected folder winning; folder
-  rename, move and delete with history; the CLI's paths and ambiguity error.
-
-### WP-REQUEST-FOLDERS-APP in detail
-
-- **Sidebar.** One section, REQUESTS: the folder tree, folders with a folder icon and a
-  disclosure triangle, requests as today. The OPERATIONS section is removed, and with it an
-  operation row's New Request and double-click; unsupported operations are still shown in the
-  picker (PLAN §1).
-- **Context menus.** A folder: New Request…, New Folder, Rename, Delete. A request: as today.
-  The REQUESTS header: New Request…, New Folder. File ▸ New Folder (⌥⌘N) creates one in the
-  selected folder, or the selected request's folder, and starts inline rename.
-- **Rename** by Return or double-click on a request or folder (PLAN §4); a double-click on a
-  folder's triangle still only toggles it.
-- **Delete** of a folder confirms with what goes: "Delete “GetCustomer” and its 3 requests?
-  Their history is deleted too." An empty folder goes without asking.
-- **Drag and drop** moves requests and folders between folders and to the top level (an
-  internal pasteboard type, `NSDragOperation::Move` only). Drops the model refuses do not
-  highlight.
-- **Tests** (`tests/appkit.rs`): no OPERATIONS rows; New Request from the picker lands in the
-  operation's folder and starts rename; New Folder, rename, delete with the confirmation; a
-  move by the model's command shows in the tree; collapsed folders survive reopening the
-  project.
+### WP-REQUEST-FOLDERS-APP tests
+Behaviour: `docs/specs/sidebar.md`. Tests (`tests/appkit.rs`): no OPERATIONS rows; New Request
+from the picker lands in the operation's folder and starts rename; New Folder, rename, delete
+with the confirmation; a move by the model's command shows in the tree; collapsed folders
+survive reopening the project.
