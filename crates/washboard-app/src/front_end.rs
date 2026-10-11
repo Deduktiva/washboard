@@ -67,8 +67,11 @@ impl MainThread for Wake {
         }
         let pending = self.pending.clone();
         later(&self.delegate, move |delegate, _| {
-            // Cleared before pumping, so a result queued during the pump wakes again.
-            pending.store(false, Ordering::Release);
+            // Cleared before pumping, so a result queued during the pump wakes again. A swap,
+            // not a store: a worker that found the flag still set skipped its wake, and only
+            // this acquire makes its result visible to the pump below. With a plain store the
+            // pump may miss it (store-load reordering), and nothing wakes the main thread again.
+            pending.swap(false, Ordering::AcqRel);
             delegate.pump();
         });
     }
