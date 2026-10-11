@@ -43,7 +43,8 @@ pub use fault::{SoapFault, detect_fault};
 /// far smaller; this only protects the app from a misbehaving server.
 pub const MAX_RESPONSE_BODY: usize = 50 * 1024 * 1024;
 
-/// Used when a server's timeout is zero, so sending cannot block a worker forever.
+/// A new server's timeout until the user picks another, in the app and the CLI; also used
+/// when a server's timeout is zero, so sending cannot block a worker forever.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const USER_AGENT: &str = concat!("Washboard/", env!("CARGO_PKG_VERSION"));

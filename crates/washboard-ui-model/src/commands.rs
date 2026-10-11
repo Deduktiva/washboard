@@ -2,8 +2,7 @@
 //! straight to the project folder; the window's state is re-read from it so the sidebar always
 //! shows what is on disk.
 
-use std::time::Duration;
-
+use washboard_core::http::DEFAULT_TIMEOUT;
 use washboard_core::model::{Auth, OperationRef, RequestId, Server, ServerId};
 use washboard_core::project::names;
 use washboard_core::schema::TemplateOptions;
@@ -12,9 +11,6 @@ use crate::app::{App, ModelError, PendingDialog, ProjectKey};
 use crate::event::Event;
 use crate::front_end::Confirm;
 use crate::timers::TimerKind;
-
-/// A new server's timeout until the user changes it.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl App {
     /// Selects `request` (or nothing) and opens it in the editor. Remembered for the next
