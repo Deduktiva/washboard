@@ -1,5 +1,5 @@
-//! Send, the response pane, the request's history and the app's HTTP log (`docs/specs/send.md`,
-//! `docs/specs/response-pane.md`, `docs/specs/http-log.md`).
+//! Send, the response pane, the request's history and the app's HTTP log
+//! (`docs/specs/requests.md`, `docs/specs/response-pane.md`).
 
 use std::collections::VecDeque;
 use std::time::{Duration, SystemTime};

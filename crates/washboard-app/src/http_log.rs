@@ -1,5 +1,5 @@
 //! The HTTP log: one panel for the whole app listing the model's exchanges, with the selected
-//! request and response side by side (`docs/specs/http-log.md`). `Authorization` values are masked
+//! request and response side by side (`docs/specs/requests.md`). `Authorization` values are masked
 //! until the user reveals them, so a screen share or screenshot doesn't leak credentials. Above the
 //! two sides, a line says how TLS went, loudly when certificate verification was skipped.
 
