@@ -45,17 +45,19 @@ use crate::sheets::ImportSheetController;
 use crate::sidebar::SidebarController;
 use crate::text::replace_summary;
 
+const SERVER_ITEM: &str = "server";
+const SEND_ITEM: &str = "send";
+const HTTP_LOG_ITEM: &str = "httpLog";
 /// Toolbar items of our own, in order: identifier, label, SF Symbol, action.
 const TOOLBAR_ITEMS: &[(&str, &str, &str, &str)] = &[
-    ("send", "Send", "paperplane", "sendRequest:"),
+    (SEND_ITEM, "Send", "paperplane", "sendRequest:"),
     (
-        "httpLog",
+        HTTP_LOG_ITEM,
         "HTTP Log",
         "list.bullet.rectangle",
         "showHttpLog:",
     ),
 ];
-const SERVER_ITEM: &str = "server";
 
 /// The toolbar's identifiers in order; system items first, then ours.
 pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
@@ -74,9 +76,9 @@ pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
     vec![
         tracking.copy(),
         NSString::from_str(SERVER_ITEM),
-        NSString::from_str("send"),
+        NSString::from_str(SEND_ITEM),
         flexible.copy(),
-        NSString::from_str("httpLog"),
+        NSString::from_str(HTTP_LOG_ITEM),
     ]
 }
 
@@ -607,7 +609,7 @@ impl ProjectWindowController {
         if let Some(toolbar) = window.toolbar() {
             for item in toolbar.items().iter() {
                 let id = item.itemIdentifier().to_string();
-                if [SERVER_ITEM, "send", "httpLog"].contains(&id.as_str()) {
+                if [SERVER_ITEM, SEND_ITEM, HTTP_LOG_ITEM].contains(&id.as_str()) {
                     item.setHidden(shown);
                 }
             }
@@ -767,7 +769,7 @@ impl ProjectWindowController {
         toolbar
             .items()
             .iter()
-            .find(|i| i.itemIdentifier().to_string() == "send")
+            .find(|i| i.itemIdentifier().to_string() == SEND_ITEM)
     }
 
     /// Settings window on this project's Servers pane.
