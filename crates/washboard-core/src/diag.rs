@@ -198,6 +198,15 @@ impl<'a> LineIndex<'a> {
         Some(start + offset)
     }
 
+    /// The byte range of `span`, or `None` if either end is not in the text or the span ends
+    /// before it starts. Spans come from parsers and libxml2, so callers that slice or
+    /// underline with the result must not trust them to be ordered.
+    pub fn range(&self, span: TextSpan) -> Option<std::ops::Range<usize>> {
+        let start = self.byte(span.start)?;
+        let end = self.byte(span.end)?;
+        (start <= end).then_some(start..end)
+    }
+
     /// Like [`Self::byte`], but clamped instead of failing, for positions reported by tools
     /// that may point past the text: line or column 0 counts as 1, a column past the end of
     /// its line is that line's end, a line past the last is the end of the text.
@@ -246,6 +255,18 @@ mod tests {
         assert_eq!(at(2, 99), 7); // clamped to the end of line 2
         assert_eq!(at(9, 1), t.len());
         assert_eq!(at(0, 0), 0);
+    }
+
+    #[test]
+    fn range_rejects_reversed_and_outside_spans() {
+        let t = "ab\nüx\n";
+        let li = LineIndex::new(t);
+        let pos = |line, column| TextPos { line, column };
+        let span = |start, end| TextSpan { start, end };
+        assert_eq!(li.range(span(pos(1, 2), pos(2, 2))), Some(1..5));
+        assert_eq!(li.range(span(pos(2, 1), pos(2, 1))), Some(3..3));
+        assert_eq!(li.range(span(pos(2, 2), pos(1, 2))), None);
+        assert_eq!(li.range(span(pos(1, 1), pos(9, 1))), None);
     }
 
     #[test]

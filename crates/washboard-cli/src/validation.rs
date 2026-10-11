@@ -57,11 +57,7 @@ fn render(renderer: &Renderer, name: &str, text: &str, d: &Diagnostic) -> String
     let title = level.primary_title(d.message.as_str());
     let lines = LineIndex::new(text);
     let range = match (d.span, d.pos) {
-        (Some(span), _) => lines
-            .byte(span.start)
-            .zip(lines.byte(span.end))
-            .filter(|(start, end)| start <= end)
-            .map(|(start, end)| start..end),
+        (Some(span), _) => lines.range(span),
         (None, Some(pos)) => lines.byte(pos).map(|b| point(text, b)),
         (None, None) => None,
     };
