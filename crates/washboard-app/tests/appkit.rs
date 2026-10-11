@@ -3197,7 +3197,7 @@ mod checks {
         assert_eq!(server_names(ctx, key).len(), names.len());
         servers
             .name_field()
-            .setStringValue(&NSString::from_str("Local"));
+            .setStringValue(&NSString::from_str("Staging"));
         // No URL: refused with an alert, and the sheet stays open on the unsaved server.
         servers.save();
         let alerts = ctx.alerts();
@@ -3214,7 +3214,7 @@ mod checks {
         });
         let added = server_names(ctx, key);
         assert_eq!(added.len(), names.len() + 1);
-        assert_eq!(added.last().map(String::as_str), Some("Local"));
+        assert_eq!(added.last().map(String::as_str), Some("Staging"));
         servers.edit(names.len());
         assert!(!servers.delete_button().isHidden());
         servers.delete();
@@ -3224,7 +3224,7 @@ mod checks {
             .confirms
             .pop()
             .expect("Delete Server asks first");
-        assert_eq!(confirm.title, "Delete “Local”?");
+        assert_eq!(confirm.title, "Delete “Staging”?");
         assert_eq!(server_names(ctx, key).len(), names.len() + 1, "not yet");
         ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
         wait_until("the sheet to close", || {
