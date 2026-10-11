@@ -1082,9 +1082,15 @@ mod checks {
         );
         assert_eq!(selected_row(), Some(outline.selectedRow()));
         assert_eq!(selected_row(), Some(request_row(&project, "Lookup 1")));
+        let items: Vec<_> = context_menu(&project, request_row(&project, "Lookup 1"))
+            .into_iter()
+            .filter(|(title, _)| !title.is_empty())
+            .collect();
         assert_eq!(
-            context_menu(&project, request_row(&project, "Lookup 1")),
+            items,
             [
+                ("New Request…".to_string(), true),
+                ("New Folder".to_string(), true),
                 ("Rename".to_string(), true),
                 ("Duplicate".to_string(), true),
                 ("Validate".to_string(), true),

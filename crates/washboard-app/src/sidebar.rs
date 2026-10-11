@@ -257,6 +257,9 @@ pub struct SidebarIvars {
 /// A request's context menu. The File menu keeps the same commands for the selected
 /// request, with the same shortcuts.
 const REQUEST_MENU: &[Entry] = &[
+    item("New Request…", c"sidebarNewRequest:", "n", CMD),
+    item("New Folder", c"sidebarNewFolder:", "n", OPT_CMD),
+    Entry::Separator,
     item("Rename", c"sidebarRename:", "", NONE),
     item("Duplicate", c"sidebarDuplicateRequest:", "d", CMD),
     item("Validate", c"sidebarValidateRequest:", "b", CMD),
@@ -462,12 +465,19 @@ define_class!(
         #[unsafe(method(sidebarNewRequest:))]
         fn context_new_request(&self, sender: Option<&AnyObject>) {
             // The picker files the request into the selected folder, so a folder's item
-            // selects it first; the header's clears the selection for the top level.
+            // selects it first, a request's item selects the request's folder, and the
+            // header's (or a top-level request's) clears the selection for the default place.
             let Some(node) = menu_node(sender) else { return };
-            if node.kind() == NodeKind::Folder {
-                self.select_node(&node);
-            } else {
-                self.select_none();
+            let folder = match node.kind() {
+                NodeKind::Folder => Some(node),
+                NodeKind::Request => self.folder_node(node.containing_folder()),
+                NodeKind::Group => None,
+            };
+            match folder {
+                Some(folder) => {
+                    self.select_node(&folder);
+                }
+                None => self.select_none(),
             }
             let key = self.ivars().key;
             with_delegate(self.mtm(), |d| d.project(key)?.show_operation_picker());
@@ -475,8 +485,8 @@ define_class!(
 
         #[unsafe(method(sidebarNewFolder:))]
         fn context_new_folder(&self, sender: Option<&AnyObject>) {
-            if let Some(parent) = menu_node(sender).and_then(|n| n.folder().map(str::to_owned)) {
-                self.new_folder_in(&parent);
+            if let Some(node) = menu_node(sender) {
+                self.new_folder_in(node.containing_folder());
             }
         }
 
@@ -597,9 +607,9 @@ impl SidebarController {
         outline
     }
 
-    /// The context menu for `row`: Rename, Duplicate, Validate and Delete on a request; New
-    /// Request…, New Folder, Rename and Delete on a folder; New Request… and New Folder on the
-    /// REQUESTS header; nothing elsewhere, so no menu opens.
+    /// The context menu for `row`: New Request… and New Folder, creating in the row's folder,
+    /// then Rename, Duplicate, Validate and Delete on a request, or Rename and Delete on a
+    /// folder; only the two on the REQUESTS header; nothing elsewhere, so no menu opens.
     pub fn fill_context_menu(&self, menu: &NSMenu, row: NSInteger) {
         let clicked = self.outline().and_then(|o| o.itemAtRow(row));
         let node = clicked.as_deref().map(node);
@@ -859,6 +869,16 @@ impl SidebarController {
     fn row_where(&self, f: impl Fn(&SidebarNode) -> bool) -> Option<NSInteger> {
         let outline = self.outline()?;
         (0..outline.numberOfRows()).find(|&row| outline.itemAtRow(row).is_some_and(|i| f(node(&i))))
+    }
+
+    /// The row node of the folder at `path`; `None` for the top level, which has no row.
+    fn folder_node(&self, path: &str) -> Option<Retained<SidebarNode>> {
+        let outline = self.outline()?;
+        let row = self.row_where(|n| {
+            n.kind() == NodeKind::Folder && !path.is_empty() && n.folder() == Some(path)
+        })?;
+        let item = outline.itemAtRow(row)?;
+        item.downcast::<SidebarNode>().ok()
     }
 
     fn row_of(&self, target: &SidebarNode) -> Option<NSInteger> {
