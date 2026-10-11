@@ -2999,11 +2999,10 @@ mod checks {
                 })
                 .unwrap_or(false)
         });
-        // The pane lists the new set, the entry WSDL first, and not the previous set kept in
-        // `wsdl/.previous`.
+        // The pane shows the new set; which files and in what order is `Project::wsdl_files`'s,
+        // tested in core.
         let files = settings.wsdl_files_shown().expect("the General pane");
         assert_eq!(files[0], "CustomerService.wsdl", "{files:?}");
-        assert!(files.iter().all(|f| !f.starts_with('.')), "{files:?}");
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }
