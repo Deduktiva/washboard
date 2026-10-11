@@ -36,6 +36,7 @@ use crate::diag::{DiagSource, Diagnostic};
 use crate::model::{OperationRef, QName, SchemaBundle};
 use crate::xml::Encoding;
 
+pub(crate) use bundle::SchemaWriter;
 pub use bundle::{FILE_URI_PREFIX, ROOT_NS, ROOT_URI, SplitNamespace, file_uri};
 pub use defs::{
     AbstractOperation, Binding, Definitions, Direction, HeaderPart, Message, MessageRef, Operation,
