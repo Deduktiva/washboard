@@ -10,6 +10,10 @@ publish.workspace = true
 thiserror = "2.0.21"
 washboard-core.workspace = true
 
+# FSEvents; see `watch.rs` for why not elsewhere.
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = "8.2.0"
+
 [dev-dependencies]
 tempfile = "3.27.0"
 

@@ -15,6 +15,8 @@ pub(crate) enum TimerKind {
     WellFormed,
     /// Full validation after the last edit.
     Validate,
+    /// Re-reads the request files after the watcher saw them change (`watch.rs`).
+    Rescan,
 }
 
 impl App {
@@ -35,6 +37,12 @@ impl App {
         self.stop_timers_where(|k, _| k == key);
     }
 
+    /// Stops the timers about the editor's text, when it shows another text. A rescan is
+    /// about the folder and still due.
+    pub(crate) fn stop_editor_timers(&mut self, key: ProjectKey) {
+        self.stop_timers_where(|k, t| k == key && t != TimerKind::Rescan);
+    }
+
     fn stop_timers_where(&mut self, matches: impl Fn(ProjectKey, TimerKind) -> bool) {
         for (id, _) in self.timers.extract_if(|_, (k, t)| matches(*k, *t)) {
             self.front.timers.cancel(id);
@@ -53,6 +61,7 @@ impl App {
             }
             TimerKind::WellFormed => self.start_check(key, Check::WellFormed),
             TimerKind::Validate => self.start_check(key, Check::Full),
+            TimerKind::Rescan => self.rescan(key),
         }
     }
 }

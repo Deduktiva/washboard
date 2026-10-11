@@ -111,6 +111,7 @@ impl App {
                           undone."
                     .into(),
                 action: "Delete".into(),
+                cancel: None,
             },
         );
         Ok(())
@@ -236,6 +237,7 @@ impl App {
                           removed from the Keychain."
                     .into(),
                 action: "Delete".into(),
+                cancel: None,
             },
         );
         Ok(())

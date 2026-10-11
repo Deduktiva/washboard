@@ -28,6 +28,7 @@ fn main() {
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
         ("format_xml", checks::format_xml),
+        ("file_watching", checks::file_watching),
         ("dark_mode", checks::dark_mode),
         ("diagnostics", checks::diagnostics),
         ("send", checks::send),
@@ -1393,6 +1394,62 @@ mod checks {
             std::fs::read_to_string(&file).is_ok_and(|t| t == saved)
         });
 
+        autoreleasepool(|_| project.project_window().performClose(None));
+    }
+
+    /// A request file changed by another app: reloaded while it has no unsaved edits; with
+    /// edits the app asks first, and Reload shows the file's text.
+    pub fn file_watching(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        if project.selected_request().is_none() {
+            new_request(&project);
+        }
+        let text_view = project.editor().text_view();
+        let window = project.project_window();
+        window.makeFirstResponder(Some(text_view));
+        let file = selected_file(ctx, &project);
+        wait_until("no unsaved edits", || !window.isDocumentEdited());
+        // Put back at the end: later checks expect the generated request.
+        let original = std::fs::read_to_string(&file).expect("request file");
+
+        let outside = format!("{original}<!-- outside -->\n");
+        std::fs::write(&file, &outside).expect("write the request file");
+        wait_until("the reload", || text_view.string().to_string() == outside);
+        assert!(!window.isDocumentEdited(), "reloaded, not edited");
+        assert!(ctx.dialogs.borrow().confirms.is_empty(), "nothing asked");
+
+        let end = text_view.string().length();
+        // SAFETY: inserting a string at an empty range at the end of the text.
+        unsafe {
+            text_view.insertText_replacementRange(
+                &NSString::from_str("<!-- mine -->"),
+                NSRange::new(end, 0),
+            )
+        };
+        assert!(window.isDocumentEdited(), "edited");
+        let theirs = format!("{original}<!-- theirs -->\n");
+        std::fs::write(&file, &theirs).expect("write the request file");
+        wait_until("the question", || !ctx.dialogs.borrow().confirms.is_empty());
+        let (id, confirm) = ctx.dialogs.borrow_mut().confirms.pop().expect("a question");
+        assert_eq!(
+            (confirm.action.as_str(), confirm.cancel.as_deref()),
+            ("Reload", Some("Keep Edits")),
+            "{confirm:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("request file"),
+            theirs,
+            "not overwritten while asking"
+        );
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(text_view.string().to_string(), theirs, "reloaded");
+        assert!(!window.isDocumentEdited(), "edits dropped");
+
+        std::fs::write(&file, &original).expect("write the request file");
+        wait_until("the reload of the original", || {
+            text_view.string().to_string() == original
+        });
         autoreleasepool(|_| project.project_window().performClose(None));
     }
 

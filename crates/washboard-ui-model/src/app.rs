@@ -18,6 +18,7 @@ use crate::front_end::{Alert, DialogAnswer, DialogId, FrontEnd, TimerId};
 use crate::import::Imports;
 use crate::send::LogEntry;
 use crate::timers::TimerKind;
+use crate::watch::Watching;
 use crate::window::{ProjectSchema, ProjectWindow, SchemaState, Sidebar, operation_tree};
 
 #[derive(Debug, Error)]
@@ -56,6 +57,10 @@ pub enum ModelError {
     /// Editing needs a selected request whose text could be read.
     #[error("no request is open in the editor")]
     NoRequestSelected,
+    /// The open request's file was changed by another app while it had unsaved edits; it is
+    /// not saved until the user chose to reload it or keep the edits (`watch.rs`).
+    #[error("the request was changed by another app; reload it or keep your edits first")]
+    ChangedOnDisk,
     /// Format XML leaves a request that is not well-formed alone.
     #[error("the request is not well-formed XML: {0}")]
     NotWellFormed(String),
@@ -77,6 +82,11 @@ pub(crate) enum PendingDialog {
     DeleteServer {
         project: ProjectKey,
         server: ServerId,
+    },
+    /// Reload or Keep Edits, for a request changed on disk.
+    ReloadRequest {
+        project: ProjectKey,
+        request: RequestId,
     },
 }
 
@@ -101,6 +111,7 @@ pub struct App {
     pub(crate) log: VecDeque<LogEntry>,
     pub(crate) imports: Imports,
     pub(crate) format: FormatSettings,
+    pub(crate) watching: Watching,
 }
 
 impl fmt::Debug for App {
@@ -132,6 +143,7 @@ impl App {
             log: VecDeque::new(),
             imports: Imports::new(),
             format: FormatSettings::default(),
+            watching: Watching::new(),
         }
     }
 
@@ -291,6 +303,7 @@ impl App {
             self.jobs -= 1;
             completion(self);
         }
+        self.note_watched_changes();
     }
 
     /// Workers whose results have not been applied yet, e.g. for a progress indicator.
@@ -323,6 +336,9 @@ impl App {
                     Err(e) => self.alert_error("Could not delete the server", &e),
                 }
             }
+            (PendingDialog::ReloadRequest { project, request }, answer) => {
+                self.reload_answered(project, request, answer);
+            }
             (_, DialogAnswer::Cancelled) => {}
             // An answer that doesn't fit the question; the front end has a bug, ignore it.
             (_, DialogAnswer::Folder(_) | DialogAnswer::Confirmed) => {}
@@ -354,6 +370,7 @@ impl App {
             older: None,
             sending: None,
             replace_outcome: None,
+            watcher: None,
         };
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
@@ -363,6 +380,7 @@ impl App {
         }
         self.projects.push((key, window));
         self.events.push(Event::ProjectOpened { project: key });
+        self.start_watcher(key);
         self.load_editor(key);
 
         match entry {
@@ -445,7 +463,11 @@ impl App {
 
     /// Shows `error` as an alert through the front end's [`Dialogs`](crate::Dialogs). For
     /// errors a command returned to the front end, so they look like the model's own.
+    /// [`ModelError::ChangedOnDisk`] is not alerted: the question it waits for is already up.
     pub fn alert_error(&self, title: &str, error: &ModelError) {
+        if matches!(error, ModelError::ChangedOnDisk) {
+            return;
+        }
         self.front.dialogs.alert(Alert {
             title: title.into(),
             message: error.to_string(),
