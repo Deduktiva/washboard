@@ -47,17 +47,6 @@ use crate::text::replace_summary;
 const SERVER_ITEM: &str = "server";
 const SEND_ITEM: &str = "send";
 
-/// The toolbar's identifiers in order; system items first, then ours.
-pub fn toolbar_identifiers() -> Vec<Retained<NSString>> {
-    // SAFETY: AppKit's identifier constants are immutable statics.
-    let tracking = unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier };
-    vec![
-        tracking.copy(),
-        NSString::from_str(SERVER_ITEM),
-        NSString::from_str(SEND_ITEM),
-    ]
-}
-
 #[derive(Debug)]
 pub struct ProjectIvars {
     key: ProjectKey,
@@ -66,6 +55,7 @@ pub struct ProjectIvars {
     closing: Cell<bool>,
     sidebar: Retained<SidebarController>,
     /// The toolbar's server popup; its items are `server_ids`, in order.
+    toolbar_identifiers: Retained<NSArray<NSString>>,
     servers: Retained<NSPopUpButton>,
     server_ids: RefCell<Vec<ServerId>>,
     request_bar: RequestBar,
@@ -135,13 +125,13 @@ define_class!(
         // SAFETY: the signature matches `toolbarDefaultItemIdentifiers:`.
         #[unsafe(method_id(toolbarDefaultItemIdentifiers:))]
         fn default_items(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
-            NSArray::from_retained_slice(&toolbar_identifiers())
+            self.ivars().toolbar_identifiers.clone()
         }
 
         // SAFETY: the signature matches `toolbarAllowedItemIdentifiers:`.
         #[unsafe(method_id(toolbarAllowedItemIdentifiers:))]
         fn allowed_items(&self, _toolbar: &NSToolbar) -> Retained<NSArray<NSString>> {
-            NSArray::from_retained_slice(&toolbar_identifiers())
+            self.ivars().toolbar_identifiers.clone()
         }
 
         // SAFETY: the signature matches
@@ -281,11 +271,22 @@ impl ProjectWindowController {
     ) -> Retained<Self> {
         let window = window(name, mtm);
         window.setRepresentedFilename(&NSString::from_str(&folder.display().to_string()));
+
+        // The toolbar's identifiers in order; system items first, then ours.
+        // SAFETY: AppKit's identifier constants are immutable statics.
+        let tracking = unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier };
+        let toolbar_identifiers = NSArray::from_retained_slice(&[
+            tracking.copy(),
+            NSString::from_str(SERVER_ITEM),
+            NSString::from_str(SEND_ITEM),
+        ]);
+
         let this = Self::alloc(mtm).set_ivars(ProjectIvars {
             key,
             name: name.to_owned(),
             closing: Cell::new(false),
             sidebar: SidebarController::new(key, mtm),
+            toolbar_identifiers,
             servers: server_popup(mtm),
             server_ids: RefCell::new(Vec::new()),
             request_bar: RequestBar::new(mtm),
@@ -427,7 +428,7 @@ impl ProjectWindowController {
         color: Retained<NSColor>,
     ) -> Option<Retained<NSImage>> {
         let mut img =
-            NSImage::imageWithSystemSymbolName_accessibilityDescription(symbol_name, Some(&label));
+            NSImage::imageWithSystemSymbolName_accessibilityDescription(symbol_name, Some(label));
         if img.is_some() {
             let palette = NSArray::from_retained_slice(&[color]);
             let sym_config = NSImageSymbolConfiguration::configurationWithPaletteColors(&palette);

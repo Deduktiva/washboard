@@ -59,7 +59,7 @@ pub use operation_picker::OperationPicker;
 #[cfg(target_os = "macos")]
 pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, project_tabbing_id, toolbar_identifiers};
+pub use project_window::{ProjectWindowController, project_tabbing_id};
 #[cfg(target_os = "macos")]
 pub use servers_pane::ServersPane;
 #[cfg(target_os = "macos")]

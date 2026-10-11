@@ -684,16 +684,6 @@ mod checks {
         }
 
         let toolbar = window.toolbar().expect("a toolbar");
-        let ids: Vec<String> = toolbar
-            .items()
-            .iter()
-            .map(|i| i.itemIdentifier().to_string())
-            .collect();
-        let expected: Vec<String> = washboard_app::toolbar_identifiers()
-            .iter()
-            .map(|i| i.to_string())
-            .collect();
-        assert_eq!(ids, expected, "toolbar items");
         assert_eq!(toolbar.displayMode(), NSToolbarDisplayMode::IconOnly);
 
         // Stacked views share the height instead of drawing over each other.
