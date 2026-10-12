@@ -4,6 +4,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use super::*;
@@ -105,7 +106,7 @@ fn dump_bundles_when_requested() {
         for (i, d) in w.bundle.docs.iter().enumerate() {
             let file = format!("{i}.xsd");
             std::fs::write(out.join(&file), &d.text).unwrap();
-            manifest.push_str(&format!("{}\t{}\t{file}\n", d.uri, d.target_ns));
+            writeln!(manifest, "{}\t{}\t{file}", d.uri, d.target_ns).expect("write failed");
         }
         std::fs::write(out.join("manifest.tsv"), manifest).unwrap();
     }

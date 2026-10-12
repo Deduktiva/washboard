@@ -1,6 +1,7 @@
 //! Send, the response pane and the request's history
 //! (`docs/specs/requests.md`, `docs/specs/response-pane.md`).
 
+use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
 
 use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
@@ -132,7 +133,7 @@ impl ResponseView {
 
 fn push_headers(text: &mut String, headers: &[(String, String)]) {
     for (name, value) in headers {
-        text.push_str(&format!("{name}: {value}\n"));
+        writeln!(text, "{name}: {value}").expect("write failed");
     }
 }
 

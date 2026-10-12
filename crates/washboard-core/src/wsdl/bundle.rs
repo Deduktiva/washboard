@@ -390,8 +390,10 @@ fn extract_inline(
             continue;
         }
         match ns.name() {
-            Some(p) => decls.push_str(&format!(" xmlns:{p}=\"{}\"", escape_attr(ns.uri()))),
-            None => decls.push_str(&format!(" xmlns=\"{}\"", escape_attr(ns.uri()))),
+            Some(p) => {
+                write!(decls, " xmlns:{p}=\"{}\"", escape_attr(ns.uri())).expect("write failed")
+            }
+            None => write!(decls, " xmlns=\"{}\"", escape_attr(ns.uri())).expect("write failed"),
         }
     }
     if !decls.is_empty() {
@@ -566,24 +568,22 @@ impl SchemaWriter {
             match content {
                 PartContent::Type(t) => {
                     let r = self.qref(t, canonical, diags);
-                    s.push_str(&format!(
-                        "        <xs:element name=\"{}\" type=\"{}\"/>\n",
+                    writeln!(
+                        s,
+                        "        <xs:element name=\"{}\" type=\"{}\"/>",
                         escape_attr(name),
                         escape_attr(&r)
-                    ));
+                    )
+                    .expect("write failed");
                 }
                 PartContent::Element(e) => {
                     let r = self.qref(e, canonical, diags);
-                    s.push_str(&format!(
-                        "        <xs:element ref=\"{}\"/>\n",
-                        escape_attr(&r)
-                    ));
+                    writeln!(s, "        <xs:element ref=\"{}\"/>", escape_attr(&r))
+                        .expect("write failed");
                 }
                 PartContent::Missing => {
-                    s.push_str(&format!(
-                        "        <xs:element name=\"{}\"/>\n",
-                        escape_attr(name)
-                    ));
+                    writeln!(s, "        <xs:element name=\"{}\"/>", escape_attr(name))
+                        .expect("write failed");
                 }
             }
         }

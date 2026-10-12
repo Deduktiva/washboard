@@ -2,6 +2,7 @@
 //! `SchemaModel`. Both run on the main thread: they scan the text once up to the cursor and ask the
 //! model a few questions, which is cheap next to a keystroke's redraw.
 
+use std::fmt::Write as _;
 use std::ops::Range;
 
 use washboard_core::model::QName;
@@ -245,7 +246,7 @@ fn element_detail(
         out = format!("{}, {out}", t.local);
     }
     if let SuggestionSource::Substitution { head } = source {
-        out.push_str(&format!(", for {}", head.local));
+        write!(out, ", for {}", head.local).expect("write failed");
     }
     out
 }
