@@ -174,17 +174,13 @@ fn assemble(
 /// the operation (and its `SOAPAction`) at send time; validation reports the details.
 pub fn body_elements(text: &str) -> Option<Vec<QName>> {
     let doc = roxmltree::Document::parse(text).ok()?;
-    let env = doc.root_element();
-    let in_env = |n: &roxmltree::Node<'_, '_>, local: &str| {
-        n.tag_name().namespace() == Some(SOAP11_ENV_NS) && n.tag_name().name() == local
-    };
-    if !in_env(&env, "Envelope") {
+    let envelope = doc.root_element();
+    if !envelope.has_tag_name((SOAP11_ENV_NS, "Envelope")) {
         return None;
     }
-    let body = env
+    let body = envelope
         .children()
-        .filter(|n| n.is_element())
-        .find(|n| in_env(n, "Body"))?;
+        .find(|n| n.has_tag_name((SOAP11_ENV_NS, "Body")))?;
     Some(
         body.children()
             .filter(|n| n.is_element())
