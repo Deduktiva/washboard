@@ -1,5 +1,6 @@
 //! Tests for the editor-side XML utilities, mostly against `fixtures/`.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -960,7 +961,8 @@ fn large_document(target: usize) -> String {
     let mut i = 0u32;
     while s.len() < target {
         i += 1;
-        s.push_str(&format!(
+        write!(
+            s,
             "      <cus:Customer id=\"c-{i}\" status=\"ACTIVE\">\n\
              \x20       <!-- customer {i} -->\n\
              \x20       <cus:party xsi:type=\"com:Company\">\n\
@@ -970,7 +972,8 @@ fn large_document(target: usize) -> String {
              \x20       </cus:party>\n\
              \x20       <cus:line sku=\"A-{i}\" qty=\"3\"/>\n\
              \x20     </cus:Customer>\n"
-        ));
+        )
+        .expect("write failed");
     }
     s.push_str("    </cus:Batch>\n  </soapenv:Body>\n</soapenv:Envelope>\n");
     s

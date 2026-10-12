@@ -53,6 +53,7 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod checks {
     use std::cell::RefCell;
+    use std::fmt::Write as _;
     use std::path::{Path, PathBuf};
     use std::ptr::NonNull;
     use std::rc::Rc;
@@ -1759,9 +1760,11 @@ mod checks {
         let mut text = String::from("<cus:list xmlns:cus=\"urn:example:customer\">\n");
         let mut n = 0;
         while text.len() < 1 << 20 {
-            text.push_str(&format!(
-                "  <cus:item id=\"{n}\"><cus:name>Customer {n}</cus:name></cus:item>\n"
-            ));
+            writeln!(
+                text,
+                "  <cus:item id=\"{n}\"><cus:name>Customer {n}</cus:name></cus:item>"
+            )
+            .expect("write failed");
             n += 1;
         }
         text.push_str("</cus:list>\n");

@@ -1,7 +1,7 @@
 //! SOAP 1.1 specifics: envelope namespace, fault parsing, envelope construction for templates.
 
 use std::collections::HashMap;
-
+use std::fmt::Write as _;
 use thiserror::Error;
 
 use crate::model::{OperationRef, QName};
@@ -141,11 +141,11 @@ fn assemble(
     // Align further declarations under the first, as hand-written envelopes do.
     let pad = " ".repeat(p.len() + "<:Envelope ".len());
     for (prefix, ns) in namespaces {
-        s.push_str(&format!("\n{pad}xmlns:{prefix}=\"{}\"", escape_attr(ns)));
+        write!(s, "\n{pad}xmlns:{prefix}=\"{}\"", escape_attr(ns)).expect("write failed");
     }
     s.push_str(">\n");
     let section = |s: &mut String, name: &str, items: &[String]| {
-        s.push_str(&format!("{indent}<{p}:{name}>\n"));
+        writeln!(s, "{indent}<{p}:{name}>").expect("write failed");
         for item in items {
             for line in item.lines() {
                 if line.is_empty() {
@@ -158,13 +158,13 @@ fn assemble(
                 }
             }
         }
-        s.push_str(&format!("{indent}</{p}:{name}>\n"));
+        writeln!(s, "{indent}</{p}:{name}>").expect("write failed");
     };
     if !headers.is_empty() {
         section(&mut s, "Header", headers);
     }
     section(&mut s, "Body", body);
-    s.push_str(&format!("</{p}:Envelope>\n"));
+    writeln!(s, "</{p}:Envelope>").expect("write failed");
     s
 }
 

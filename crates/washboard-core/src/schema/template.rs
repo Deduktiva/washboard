@@ -5,6 +5,7 @@
 //! types' facets cannot satisfy (patterns), the result should validate.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 
 use crate::model::QName;
 use crate::soap::XSI_NS;
@@ -376,7 +377,7 @@ impl Gen<'_> {
                     .map(|&id| self.m.elem(id).name.clone())
                     .collect();
                 let more = if known.len() > 5 { ", …" } else { "" };
-                s.push_str(&format!("; known: {}{more}", self.list(names)));
+                write!(s, "; known: {}{more}", self.list(names)).expect("write failed");
             }
         }
         s
@@ -485,7 +486,7 @@ fn write_node(n: &Node, level: usize, indent: &str, decls: &[(String, String)], 
     let pad = indent.repeat(level);
     match n {
         Node::Comment(t) => {
-            out.push_str(&format!("{pad}<!-- {} -->\n", comment_text(t)));
+            writeln!(out, "{pad}<!-- {} -->", comment_text(t)).expect("write failed");
         }
         Node::Elem {
             name,
@@ -497,20 +498,22 @@ fn write_node(n: &Node, level: usize, indent: &str, decls: &[(String, String)], 
             out.push('<');
             out.push_str(name);
             for (p, ns) in decls {
-                out.push_str(&format!(" xmlns:{p}=\"{}\"", escape_attr(ns)));
+                write!(out, " xmlns:{p}=\"{}\"", escape_attr(ns)).expect("write failed");
             }
             for (a, v) in attrs {
-                out.push_str(&format!(" {a}=\"{}\"", escape_attr(v)));
+                write!(out, " {a}=\"{}\"", escape_attr(v)).expect("write failed");
             }
             match (text, children.is_empty()) {
-                (Some(t), true) => out.push_str(&format!(">{}</{name}>\n", escape_text(t))),
+                (Some(t), true) => {
+                    writeln!(out, ">{}</{name}>", escape_text(t)).expect("write failed")
+                }
                 (None, true) => out.push_str("/>\n"),
                 _ => {
                     out.push_str(">\n");
                     for c in children {
                         write_node(c, level + 1, indent, &[], out);
                     }
-                    out.push_str(&format!("{pad}</{name}>\n"));
+                    writeln!(out, "{pad}</{name}>").expect("write failed");
                 }
             }
         }

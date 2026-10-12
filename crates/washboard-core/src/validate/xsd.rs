@@ -62,6 +62,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::{self, NonNull};
 use std::sync::Once;
 
+#[cfg(test)]
+use std::fmt::Write;
+
 use libxml2_sys as ffi;
 
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
@@ -1174,9 +1177,11 @@ mod tests {
         let mut text =
             format!("<xs:schema xmlns:xs=\"{XS}\" targetNamespace=\"urn:washboard:root\">\n");
         for (ns, loc) in imports {
-            text.push_str(&format!(
-                "  <xs:import namespace=\"{ns}\" schemaLocation=\"{loc}\"/>\n"
-            ));
+            writeln!(
+                text,
+                "  <xs:import namespace=\"{ns}\" schemaLocation=\"{loc}\"/>"
+            )
+            .expect("write failed");
         }
         text.push_str("</xs:schema>\n");
         doc(

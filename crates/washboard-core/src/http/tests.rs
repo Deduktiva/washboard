@@ -3,6 +3,7 @@
 //! Server is a `TcpListener` so it can hand back the raw request bytes,
 //! which is what proves that the log matches the wire.
 
+use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::Arc;
@@ -109,7 +110,7 @@ fn exchange<S: Read + Write>(stream: S, response: &[u8], delay: Duration) -> Vec
 fn wire_from_log(m: &RawMessage) -> Vec<u8> {
     let mut out = format!("{}\r\n", m.start_line);
     for (n, v) in &m.headers {
-        out.push_str(&format!("{n}: {v}\r\n"));
+        write!(out, "{n}: {v}\r\n").expect("write failed");
     }
     out.push_str("\r\n");
     let mut out = out.into_bytes();
