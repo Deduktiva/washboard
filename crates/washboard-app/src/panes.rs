@@ -27,10 +27,11 @@ use washboard_ui_model::{
 
 use crate::app::ModelAccess;
 use crate::colors;
-use crate::editor::{EditorController, read_only_text, set_text, text_of};
+use crate::editor::EditorController;
 use crate::layout;
 use crate::table::TextTable;
 use crate::text::{count, operation_chip, well_formedness_text};
+use crate::views::{read_only_text, read_only_text_get_text, read_only_text_set_text};
 
 /// The bar above the editor (`docs/gui-draft.html`): the request's name, a chip with its
 /// operation, and the live well-formedness state. Plain views with no actions, so no
@@ -623,7 +624,7 @@ impl ResponsePane {
 
     /// The Headers tab's text.
     pub fn headers(&self) -> String {
-        text_of(&self.ivars().headers)
+        read_only_text_get_text(&self.ivars().headers)
     }
 
     pub fn history(&self) -> &TextTable {
@@ -758,7 +759,7 @@ impl ResponsePane {
             .unwrap_or_default();
         self.ivars().body.set_text(&body);
         let headers = response.as_ref().map(ResponseView::headers_text);
-        set_text(&self.ivars().headers, &headers.unwrap_or_default());
+        read_only_text_set_text(&self.ivars().headers, &headers.unwrap_or_default());
     }
 
     /// Lists the selected request's history, with the shown exchange selected and ringed
