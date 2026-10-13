@@ -4,21 +4,6 @@ LLM-written FFI to the parts of libxml2 that `washboard_core::validate` uses: th
 XML Schema compilation and validation, structured errors and resource loaders. The safe
 wrapper is `crates/washboard-core/src/validate/xsd.rs`.
 
-## Why vendored
-
-The system library on current macOS is 2.9.13 (Feb 2022), built with HTTP and FTP support.
-Reasons to vendor a pinned current release instead:
-- Several years of XSD validator fixes and security fixes are missing from 2.9.13, and we cannot
-  control when or whether Apple updates it.
-- A build with HTTP/FTP compiled out makes "no network from the schema loader" a property of the
-  binary, not only of our entity loader and `XML_PARSE_NONET`.
-- Newer releases have per-context resource loaders; with them (plus the thread-local global
-  loader, below) schema compiles need no global lock.
-- Same version in CI (Linux) and in the app, so test results carry over.
-
-Cost: a C build in `build.rs` and tracking upstream security releases (MIT license, static
-linking is fine).
-
 ## Pinned version: libxml2 v2.15.4
 
 `vendor/libxml2` is a git submodule of <https://github.com/GNOME/libxml2> (a mirror of

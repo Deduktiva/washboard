@@ -1,8 +1,7 @@
 # Schema bundle
 
 Two representations of the project's schemas, deliberately:
-- **libxml2** compiles the schemas for **validation** (authoritative). Why it is vendored and
-  which version: `crates/libxml2-sys/README.md`.
+- **libxml2** compiles the schemas for **validation** (authoritative). See `crates/libxml2-sys/README.md`.
 - **Our Rust XSD model** (`schema/`) drives **completion and templates**
   ([schema model](schema-model.md)). It can be incomplete in exotic corners without causing
   wrong validation results — the worst case is a missing completion.
