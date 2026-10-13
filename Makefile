@@ -13,5 +13,5 @@ fmt:
 	cargo fmt
 
 check: app
-	cargo clippy --workspace
+	cargo clippy --workspace --all-targets
 	RUST_BACKTRACE=1 cargo test --workspace
