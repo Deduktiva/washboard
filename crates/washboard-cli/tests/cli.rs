@@ -654,10 +654,11 @@ fn send_records_history_and_last_server() {
     // A SOAP fault is a normal response unless --fail-on-fault.
     let o = wb(&e, &["request", "send", req]);
     assert_eq!(ok(o.clone()), FAULT_RESPONSE);
+    let err = stderr(&o).clone();
     assert!(
-        stderr(&o).contains("SOAP fault: soapenv:Server: customer locked"),
+        err.contains("SOAP fault: soapenv:Server: customer locked"),
         "{}",
-        stderr(&o)
+        err
     );
     let o = wb(&e, &["request", "send", req, "--fail-on-fault"]);
     fails(&o, 1, "customer locked");
