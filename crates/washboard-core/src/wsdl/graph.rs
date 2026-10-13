@@ -8,7 +8,7 @@ use std::ops::Range;
 
 use crate::diag::{DiagSource, Diagnostic, TextPos};
 use crate::soap::{WSDL_NS, XSD_NS};
-use crate::xml::{self, Encoding};
+use crate::xml::{self, Encoding, XML_NS};
 
 use super::source::{FileIndex, Location, Match, MatchedBy, SourceFile, classify};
 use crate::diag::LineIndex;
@@ -18,7 +18,6 @@ use crate::xml::start_tag_at;
 pub(crate) const WSDL20_NS: &str = "http://www.w3.org/ns/wsdl";
 /// XSD 1.1 versioning namespace (`vc:minVersion` …).
 pub(crate) const VC_NS: &str = "http://www.w3.org/2007/XMLSchema-versioning";
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// The kind of reference element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

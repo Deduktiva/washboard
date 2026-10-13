@@ -11,6 +11,7 @@ use washboard_core::diag;
 use washboard_core::http::{self, SendRequest};
 use washboard_core::model::{Auth, RequestMeta, Server};
 use washboard_core::project::Project;
+use washboard_core::soap;
 use washboard_core::validate::Validation;
 use washboard_core::wsdl::Wsdl;
 
@@ -66,7 +67,7 @@ pub fn run(
     let fault = exchange
         .response
         .as_ref()
-        .and_then(|r| http::detect_fault(&r.body));
+        .and_then(|r| soap::detect_fault(&r.body));
     project.record_exchange(request.id, &server, &exchange, fault.is_some())?;
 
     let Some(response) = &exchange.response else {

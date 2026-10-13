@@ -27,12 +27,11 @@ use objc2::{
     AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
 };
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSEvent, NSFont, NSFontAttributeName, NSFontWeightRegular,
+    NSAutoresizingMaskOptions, NSColor, NSEvent, NSFontAttributeName,
     NSForegroundColorAttributeName, NSLayoutManager, NSMenu, NSMenuItem, NSResponder,
     NSRulerOrientation, NSRulerView, NSScrollView, NSStringDrawing, NSText, NSTextDelegate,
-    NSTextInputTraitType, NSTextView, NSTextViewDelegate, NSToolTipTag, NSTrackingArea,
-    NSTrackingAreaOptions, NSUnderlineColorAttributeName, NSUnderlineStyle,
-    NSUnderlineStyleAttributeName, NSView, NSWritingToolsBehavior,
+    NSTextView, NSTextViewDelegate, NSToolTipTag, NSTrackingArea, NSTrackingAreaOptions,
+    NSUnderlineColorAttributeName, NSUnderlineStyle, NSUnderlineStyleAttributeName, NSView,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSInteger, NSNotFound, NSNotification, NSNumber, NSObject,
@@ -43,10 +42,9 @@ use washboard_core::xml::{TokenBuffer, TokenKind};
 use washboard_ui_model::{Completions, Issue, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
-use crate::colors;
 use crate::text::{LineMarker, completion_kinds, hover_text, line_markers, text_tool_tip};
+use crate::{colors, views};
 
-const FONT_SIZE: f64 = 12.0;
 const RULER_WIDTH: f64 = 44.0;
 
 /// Every token kind with a colour of its own, for checking the palette's contrast in both
@@ -237,10 +235,7 @@ impl LineNumberRuler {
         let starts = self.ivars().line_starts.borrow();
         let markers = self.ivars().markers.borrow();
         let mut tips = Vec::new();
-        let font = NSFont::monospacedDigitSystemFontOfSize_weight(FONT_SIZE - 2.0, unsafe {
-            // SAFETY: an immutable AppKit constant.
-            NSFontWeightRegular
-        });
+        let font = views::code_font_for_ruler();
         let origin_y = text_view.textContainerOrigin().y;
         let text_len = text_view.string().length();
         for line in lines {
@@ -928,74 +923,14 @@ fn text_view(mtm: MainThreadMarker) -> Retained<NSTextView> {
         container.setContainerSize(NSSize::new(f64::MAX, f64::MAX));
         container.setWidthTracksTextView(false);
     }
-    text_view.setFont(Some(&code_font()));
-    text_view.setRichText(false);
     // Set rather than left to the defaults: these are the colours the highlighting palette is
     // checked against, in both appearances.
     text_view.setTextColor(Some(&NSColor::textColor()));
     text_view.setBackgroundColor(&NSColor::textBackgroundColor());
     text_view.setAllowsUndo(true);
     text_view.setUsesFindBar(true);
-    code_text(&text_view);
+    views::configure_text_view_for_code(&text_view);
     text_view
-}
-
-/// The editor's font, also used wherever XML or headers are shown as text.
-fn code_font() -> Retained<NSFont> {
-    // SAFETY: an immutable AppKit constant.
-    let weight = unsafe { NSFontWeightRegular };
-    NSFont::monospacedSystemFontOfSize_weight(FONT_SIZE, weight)
-}
-
-/// Turns off everything meant for prose in a text view that shows XML: substitutions,
-/// spelling and grammar checking, link and data detection, inline predictions and Writing
-/// Tools. Each of them would change or flag markup, and Writing Tools offers to rewrite it.
-pub(crate) fn code_text(text_view: &NSTextView) {
-    text_view.setAutomaticQuoteSubstitutionEnabled(false);
-    text_view.setAutomaticDashSubstitutionEnabled(false);
-    text_view.setAutomaticTextReplacementEnabled(false);
-    text_view.setAutomaticSpellingCorrectionEnabled(false);
-    text_view.setContinuousSpellCheckingEnabled(false);
-    text_view.setGrammarCheckingEnabled(false);
-    text_view.setAutomaticLinkDetectionEnabled(false);
-    text_view.setAutomaticDataDetectionEnabled(false);
-    text_view.setSmartInsertDeleteEnabled(false);
-    text_view.setInlinePredictionType(NSTextInputTraitType::No);
-    text_view.setWritingToolsBehavior(NSWritingToolsBehavior::None);
-}
-
-/// A scrolling, read-only code text view without highlighting, for messages as they went
-/// over the wire.
-pub(crate) fn read_only_text(mtm: MainThreadMarker) -> Retained<NSScrollView> {
-    let scroll = NSTextView::scrollableTextView(mtm);
-    scroll.setAutohidesScrollers(true);
-    if let Some(text) = scroll_text_view(&scroll) {
-        text.setEditable(false);
-        // `scrollableTextView` starts as rich text in the proportional system font; plain
-        // text keeps the font for every `setString`.
-        text.setRichText(false);
-        text.setFont(Some(&code_font()));
-        code_text(&text);
-    }
-    scroll
-}
-
-fn scroll_text_view(scroll: &NSScrollView) -> Option<Retained<NSTextView>> {
-    scroll.documentView()?.downcast::<NSTextView>().ok()
-}
-
-/// Replaces the text of a [`read_only_text`] view.
-pub(crate) fn set_text(scroll: &NSScrollView, text: &str) {
-    if let Some(view) = scroll_text_view(scroll) {
-        view.setString(&NSString::from_str(text));
-    }
-}
-
-/// The text of a [`read_only_text`] view.
-pub(crate) fn text_of(scroll: &NSScrollView) -> String {
-    scroll_text_view(scroll)
-        .map(|v| v.string().to_string())
-        .unwrap_or_default()
 }
 
 /// Context menu actions whose submenus are for prose: Spelling and Grammar, Substitutions,

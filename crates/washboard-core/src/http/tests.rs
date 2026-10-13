@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use super::*;
 use crate::model::{Server, ServerId};
+use crate::soap;
 
 const ENVELOPE: &str = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><a xmlns="urn:a">ä</a></soapenv:Body></soapenv:Envelope>"#;
 
@@ -411,7 +412,7 @@ fn fault_response_is_a_response_and_detectable() {
     let resp = ex.response.expect("response");
     // The reason phrase is not exposed by ureq; the canonical one is used.
     assert_eq!(resp.start_line, "HTTP/1.1 500 Internal Server Error");
-    let f = detect_fault(&resp.body).expect("fault");
+    let f = soap::detect_fault(&resp.body).expect("fault");
     assert_eq!(f.string, "boom");
     assert_eq!(
         f.code_qname,

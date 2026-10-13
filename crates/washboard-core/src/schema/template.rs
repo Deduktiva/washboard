@@ -9,13 +9,11 @@ use std::fmt::Write as _;
 
 use crate::model::QName;
 use crate::soap::XSI_NS;
-use crate::xml::{escape_attr, escape_text};
+use crate::xml::{XML_NS, escape_attr, escape_text};
 
 use super::builtin::ANY_TYPE;
 use super::component::{ElemId, NamespaceConstraint, Particle, ProcessContents, Term, Wildcard};
 use super::{MAX_CHAIN, SchemaError, SchemaModel, TypeKey};
-
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateOptions {

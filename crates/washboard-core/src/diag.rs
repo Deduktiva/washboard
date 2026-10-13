@@ -121,11 +121,6 @@ impl Diagnostic {
         self
     }
 
-    pub fn with_detail(mut self, detail: DiagDetail) -> Self {
-        self.detail = Some(Box::new(detail));
-        self
-    }
-
     /// Errors block (sending, project creation); warnings never do.
     pub fn is_error(&self) -> bool {
         self.severity == Severity::Error

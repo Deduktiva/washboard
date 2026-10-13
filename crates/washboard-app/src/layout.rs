@@ -259,18 +259,37 @@ pub fn default_button(
 }
 
 /// The one place that builds a push button, so its safety argument is made once.
+/// Callers should use button or similar, not this fn directly.
 fn push_button(
     title: &str,
-    target: Option<&NSObject>,
+    target: Option<&AnyObject>,
     action: Sel,
     mtm: MainThreadMarker,
 ) -> Retained<NSButton> {
-    let target: Option<&AnyObject> = target.map(|t| t as &AnyObject);
     // SAFETY: a target owns the button (see `button`), so it outlives the button's weak
     // target reference; without one the action goes up the responder chain. Action methods
     // take the sender as their only argument.
     unsafe {
         NSButton::buttonWithTitle_target_action(
+            &NSString::from_str(title),
+            target,
+            Some(action),
+            mtm,
+        )
+    }
+}
+
+pub fn radio_button(
+    title: &str,
+    target: Option<&AnyObject>,
+    action: Sel,
+    mtm: MainThreadMarker,
+) -> Retained<NSButton> {
+    // SAFETY: a target owns the radio button (see `button`), so it outlives the button's weak
+    // target reference; without one the action goes up the responder chain. Action methods
+    // take the sender as their only argument.
+    unsafe {
+        NSButton::radioButtonWithTitle_target_action(
             &NSString::from_str(title),
             target,
             Some(action),

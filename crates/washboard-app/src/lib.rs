@@ -41,6 +41,8 @@ mod sidebar;
 #[cfg(target_os = "macos")]
 mod table;
 #[cfg(target_os = "macos")]
+mod views;
+#[cfg(target_os = "macos")]
 mod welcome;
 // Used by the views; built everywhere so its tests run on Linux.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

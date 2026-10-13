@@ -522,7 +522,7 @@ impl ServersPane {
         let name = text("New Server");
         let url = text("https://");
         let user = text("User");
-        let timeout = text("60");
+        let timeout = text(DEFAULT_TIMEOUT.as_secs().to_string().as_str());
         let password = NSSecureTextField::new(mtm);
         // Whole seconds, at least one; the field refuses anything else.
         let seconds = NSNumberFormatter::new();
@@ -530,25 +530,9 @@ impl ServersPane {
         seconds.setMinimum(Some(&NSNumber::new_u64(1)));
         timeout.setFormatter(Some(&seconds));
         let ignore_tls = NSSwitch::new(mtm);
-        let target: &AnyObject = self;
-        // SAFETY: the pane owns the sheet and its controls, so it outlives their weak target
-        // references; `authChanged:` takes the sender.
-        let (auth_none, auth_basic) = unsafe {
-            (
-                NSButton::radioButtonWithTitle_target_action(
-                    ns_string!("None"),
-                    Some(target),
-                    Some(sel!(authChanged:)),
-                    mtm,
-                ),
-                NSButton::radioButtonWithTitle_target_action(
-                    ns_string!("Basic"),
-                    Some(target),
-                    Some(sel!(authChanged:)),
-                    mtm,
-                ),
-            )
-        };
+        let target: &NSObject = self;
+        let auth_none = layout::radio_button("None", Some(target), sel!(authChanged:), mtm);
+        let auth_basic = layout::radio_button("Basic", Some(target), sel!(authChanged:), mtm);
         form::set_width(&timeout, TIMEOUT_WIDTH, NSLayoutPriorityRequired);
         let auth = form::hstack(vec![view(auth_none.clone()), view(auth_basic.clone())], mtm);
         let timeout_row = form::hstack(
