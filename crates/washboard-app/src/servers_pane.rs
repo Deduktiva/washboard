@@ -522,7 +522,7 @@ impl ServersPane {
         let name = text("New Server");
         let url = text("https://");
         let user = text("User");
-        let timeout = text("60");
+        let timeout = text(DEFAULT_TIMEOUT.as_secs().to_string().as_str());
         let password = NSSecureTextField::new(mtm);
         // Whole seconds, at least one; the field refuses anything else.
         let seconds = NSNumberFormatter::new();
