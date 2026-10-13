@@ -338,7 +338,10 @@ fn scan(w: &mut Walk, f: usize, name: &str) {
                             name,
                         ),
                         "types" => {
-                            for s in child.children().filter(|n| is_xs(n, "schema")) {
+                            for s in child
+                                .children()
+                                .filter(|n| n.has_tag_name((XSD_NS, "schema")))
+                            {
                                 let id = w.inline.len();
                                 w.inline.push(InlineSchema {
                                     file: f,
@@ -359,10 +362,6 @@ fn scan(w: &mut Walk, f: usize, name: &str) {
         }
     }
     w.files[f].text = Some(text);
-}
-
-fn is_xs(n: &roxmltree::Node<'_, '_>, local: &str) -> bool {
-    n.is_element() && n.tag_name().namespace() == Some(XSD_NS) && n.tag_name().name() == local
 }
 
 fn scan_schema(

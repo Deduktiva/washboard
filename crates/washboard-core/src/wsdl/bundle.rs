@@ -420,11 +420,7 @@ fn global_elements(text: &str) -> Vec<String> {
     };
     doc.root_element()
         .children()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().namespace() == Some(XSD_NS)
-                && n.tag_name().name() == "element"
-        })
+        .filter(|n| n.has_tag_name((XSD_NS, "element")))
         .filter_map(|n| n.attribute("name").map(str::to_owned))
         .collect()
 }

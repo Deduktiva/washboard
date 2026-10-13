@@ -39,6 +39,11 @@ pub enum EnvelopeError {
     Schema(#[from] SchemaError),
 }
 
+/// True if the given Node is a soap:Envelope.
+pub fn is_soap11_envelope(element: roxmltree::Node) -> bool {
+    element.has_tag_name((SOAP11_ENV_NS, "Envelope"))
+}
+
 /// A complete SOAP 1.1 request envelope for an operation's input (`docs/specs/schema-model.md`,
 /// "Templates"): the declared `soap:header` blocks in a `Header` (omitted when there are none) and
 /// the body element(s) expanded from the schema.
@@ -168,36 +173,6 @@ fn assemble(
     s
 }
 
-/// QNames of the element children of a SOAP 1.1 `Envelope`'s `Body`, in document order.
-///
-/// `None` when `text` is not well-formed or not a SOAP 1.1 envelope with a `Body`. Used to pick
-/// the operation (and its `SOAPAction`) at send time; validation reports the details.
-pub fn body_elements(text: &str) -> Option<Vec<QName>> {
-    let doc = roxmltree::Document::parse(text).ok()?;
-    let env = doc.root_element();
-    let in_env = |n: &roxmltree::Node<'_, '_>, local: &str| {
-        n.tag_name().namespace() == Some(SOAP11_ENV_NS) && n.tag_name().name() == local
-    };
-    if !in_env(&env, "Envelope") {
-        return None;
-    }
-    let body = env
-        .children()
-        .filter(|n| n.is_element())
-        .find(|n| in_env(n, "Body"))?;
-    Some(
-        body.children()
-            .filter(|n| n.is_element())
-            .map(|n| {
-                QName::new(
-                    n.tag_name().namespace().unwrap_or_default(),
-                    n.tag_name().name(),
-                )
-            })
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,14 +205,8 @@ mod tests {
         assert!(env.contains("<soapenv:Header>"), "{env}");
         assert!(env.contains("RequestContext"), "{env}");
         assert!(env.contains("GetCustomer"), "{env}");
-        assert_eq!(
-            body_elements(&env),
-            Some(vec![QName::new(
-                "urn:example:customer:messages",
-                "GetCustomer"
-            )])
-        );
-        roxmltree::Document::parse(&env).expect("well-formed");
+        let doc = roxmltree::Document::parse(&env).expect("well-formed");
+        assert!(is_soap11_envelope(doc.root_element()));
 
         let err = request_envelope(
             &w,
@@ -282,18 +251,5 @@ mod tests {
         )
         .expect("envelope");
         assert!(!env.contains("Header"), "{env}");
-        assert_eq!(
-            body_elements(&env),
-            Some(vec![QName::new("urn:example:legacy", "Lookup")])
-        );
-    }
-
-    #[test]
-    fn body_elements_rejects_non_envelopes() {
-        assert_eq!(body_elements("<a/>"), None);
-        assert_eq!(body_elements("<a"), None);
-        let soap12 =
-            format!(r#"<s:Envelope xmlns:s="{SOAP12_ENV_NS}"><s:Body><x/></s:Body></s:Envelope>"#);
-        assert_eq!(body_elements(&soap12), None);
     }
 }

@@ -4,11 +4,10 @@
 //! soapAction, style). Operations we cannot handle are kept and marked with a [`Support`] reason so
 //! the UI can list them greyed out (`docs/specs/wsdl.md`).
 
-use std::collections::{HashMap, HashSet};
-
 use crate::diag::{DiagSource, Diagnostic, TextPos};
 use crate::model::{OperationRef, QName};
 use crate::soap::{WSDL_NS, WSDL_SOAP11_NS, WSDL_SOAP12_NS};
+use std::collections::{HashMap, HashSet};
 
 use crate::diag::LineIndex;
 
@@ -364,10 +363,6 @@ fn qattr(
     q
 }
 
-fn is_wsdl(n: &roxmltree::Node<'_, '_>, local: &str) -> bool {
-    n.is_element() && n.tag_name().namespace() == Some(WSDL_NS) && n.tag_name().name() == local
-}
-
 fn parse_use(n: roxmltree::Node<'_, '_>) -> Use {
     match n.attribute("use").map(str::trim) {
         Some("encoded") => Use::Encoded,
@@ -436,7 +431,7 @@ fn parse_file(
                 name,
                 parts: el
                     .children()
-                    .filter(|n| is_wsdl(n, "part"))
+                    .filter(|n| n.has_tag_name((WSDL_NS, "part")))
                     .map(|p| parse_part(p, ctx, lines))
                     .collect(),
             }),
@@ -444,7 +439,7 @@ fn parse_file(
                 name,
                 operations: el
                     .children()
-                    .filter(|n| is_wsdl(n, "operation"))
+                    .filter(|n| n.has_tag_name((WSDL_NS, "operation")))
                     .map(|op| {
                         let mref = |n: roxmltree::Node<'_, '_>, ctx: &mut Ctx<'_>| MessageRef {
                             name: n.attribute("name").map(str::to_owned),
@@ -454,15 +449,15 @@ fn parse_file(
                             name: op.attribute("name").unwrap_or("").to_owned(),
                             input: op
                                 .children()
-                                .find(|n| is_wsdl(n, "input"))
+                                .find(|n| n.has_tag_name((WSDL_NS, "input")))
                                 .map(|n| mref(n, ctx)),
                             output: op
                                 .children()
-                                .find(|n| is_wsdl(n, "output"))
+                                .find(|n| n.has_tag_name((WSDL_NS, "output")))
                                 .map(|n| mref(n, ctx)),
                             faults: op
                                 .children()
-                                .filter(|n| is_wsdl(n, "fault"))
+                                .filter(|n| n.has_tag_name((WSDL_NS, "fault")))
                                 .map(|n| mref(n, ctx))
                                 .collect(),
                         }
@@ -477,7 +472,7 @@ fn parse_file(
                 name,
                 ports: el
                     .children()
-                    .filter(|n| is_wsdl(n, "port"))
+                    .filter(|n| n.has_tag_name((WSDL_NS, "port")))
                     .filter_map(|p| {
                         let binding = qattr(p, "binding", ctx, lines)?;
                         let address = p
@@ -523,6 +518,9 @@ fn parse_binding(
     lines: &LineIndex<'_>,
     ctx: &mut Ctx<'_>,
 ) -> RawBinding {
+    /* TODO: this looks like if no ext is found, or ext is not one of the known SOAP versions,
+     * TODO: the rest of the function also does mostly nothing and could be simplified.
+     */
     let ext = el
         .children()
         .find(|n| n.is_element() && n.tag_name().namespace() != Some(WSDL_NS));
@@ -537,10 +535,9 @@ fn parse_binding(
         ),
     };
     let is_soap = |n: &roxmltree::Node<'_, '_>, local: &str| {
-        n.is_element() && soap_ns.is_some() && n.tag_name().namespace() == soap_ns && {
-            n.tag_name().name() == local
-        }
+        soap_ns.map_or_default(|ns: &str| n.has_tag_name((ns, local)))
     };
+
     let sb = el.children().find(|n| is_soap(n, "binding"));
     let style = parse_style(sb.and_then(|b| b.attribute("style"))).unwrap_or(Style::Document);
     let transport = sb.and_then(|b| b.attribute("transport")).map(str::to_owned);
@@ -568,7 +565,7 @@ fn parse_binding(
     };
     let ops = el
         .children()
-        .filter(|n| is_wsdl(n, "operation"))
+        .filter(|n| n.has_tag_name((WSDL_NS, "operation")))
         .map(|op| {
             let so = op.children().find(|n| is_soap(n, "operation"));
             RawOp {
@@ -580,15 +577,15 @@ fn parse_binding(
                 style: parse_style(so.and_then(|s| s.attribute("style"))),
                 input: op
                     .children()
-                    .find(|n| is_wsdl(n, "input"))
+                    .find(|n| n.has_tag_name((WSDL_NS, "input")))
                     .map(|n| io(n, ctx)),
                 output: op
                     .children()
-                    .find(|n| is_wsdl(n, "output"))
+                    .find(|n| n.has_tag_name((WSDL_NS, "output")))
                     .map(|n| io(n, ctx)),
                 faults: op
                     .children()
-                    .filter(|n| is_wsdl(n, "fault"))
+                    .filter(|n| n.has_tag_name((WSDL_NS, "fault")))
                     .filter_map(|n| n.attribute("name").map(str::to_owned))
                     .collect(),
                 pos: lines.pos(op.range().start),
