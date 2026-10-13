@@ -42,8 +42,6 @@ pub use wellformed::{WellFormednessError, check_well_formed, well_formedness_err
 
 /// Namespace bound to the `xml` prefix by definition.
 pub const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-/// Namespace of `xmlns` attributes; it may not be bound to any prefix.
-pub const XMLNS_NS: &str = "http://www.w3.org/2000/xmlns/";
 
 #[cfg(test)]
 mod tests;
