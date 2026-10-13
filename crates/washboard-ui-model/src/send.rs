@@ -4,9 +4,10 @@
 use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
 
-use washboard_core::http::{self, Exchange, RawMessage, SendRequest, SoapFault, detect_fault};
+use washboard_core::http::{self, Exchange, RawMessage, SendRequest};
 use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
 use washboard_core::project::{HistoryRecord, RequestHead};
+use washboard_core::soap::{SoapFault, detect_fault};
 use washboard_core::validate::validate_request;
 use washboard_core::xml;
 

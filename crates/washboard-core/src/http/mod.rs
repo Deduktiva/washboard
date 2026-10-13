@@ -24,7 +24,6 @@
 //! [`MAX_RESPONSE_BODY`].
 
 pub mod exchange;
-mod fault;
 
 use std::io::Read;
 use std::time::{Duration, Instant, SystemTime};
@@ -37,7 +36,6 @@ use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
 use ureq::{Agent, Timeout};
 
 pub use exchange::{Exchange, RawMessage, SendRequest};
-pub use fault::{SoapFault, detect_fault};
 
 /// Response bodies beyond this are truncated and reported as an error. Real SOAP responses are
 /// far smaller; this only protects the app from a misbehaving server.
