@@ -107,7 +107,7 @@ fn xs_children<'a, 'i>(n: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
 }
 
 fn xs_child<'a, 'i>(n: Node<'a, 'i>, local: &str) -> Option<Node<'a, 'i>> {
-    xs_children(n).find(|c| c.tag_name().name() == local)
+    n.children().find(|c| c.has_tag_name((XSD_NS, local)))
 }
 
 fn is_true(v: Option<&str>) -> bool {
@@ -150,11 +150,11 @@ fn documentation(n: Node<'_, '_>) -> Option<String> {
     let mut blocks = Vec::new();
     for ann in n
         .children()
-        .filter(|c| is_xs(*c) && c.tag_name().name() == "annotation")
+        .filter(|c| c.has_tag_name((XSD_NS, "annotation")))
     {
         for d in ann
             .children()
-            .filter(|c| is_xs(*c) && c.tag_name().name() == "documentation")
+            .filter(|c| c.has_tag_name((XSD_NS, "documentation")))
         {
             let text: String = d
                 .descendants()
@@ -206,7 +206,7 @@ impl Builder {
             block_default: DerivationSet::parse(root.attribute("blockDefault").unwrap_or("")),
             final_default: DerivationSet::parse(root.attribute("finalDefault").unwrap_or("")),
         };
-        if !is_xs(root) || root.tag_name().name() != "schema" {
+        if !root.has_tag_name((XSD_NS, "schema")) {
             self.warn(
                 &ctx,
                 root,

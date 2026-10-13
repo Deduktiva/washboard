@@ -7,7 +7,7 @@
 use roxmltree::{Document, Node};
 
 use crate::model::QName;
-use crate::soap::SOAP11_ENV_NS;
+use crate::soap;
 use crate::xml;
 
 /// A SOAP 1.1 `Fault` (`soapenv:Body/soapenv:Fault`).
@@ -34,22 +34,21 @@ pub fn detect_fault(body: &[u8]) -> Option<SoapFault> {
     let decoded = xml::decode(body).ok()?;
     let doc = Document::parse(&decoded.text).ok()?;
     let envelope = doc.root_element();
-    if !is_env(envelope, "Envelope") {
+    if !soap::is_soap11_envelope(envelope) {
         return None;
     }
-    let soap_body = envelope.children().find(|n| is_env(*n, "Body"))?;
+    let soap_body = envelope.children().find(|n| has_envelope_tag(*n, "Body"))?;
     let fault = soap_body
         .children()
-        .find(|n| n.is_element())
-        .filter(|n| is_env(*n, "Fault"))?;
+        .find(|n| has_envelope_tag(*n, "Fault"))?;
 
     // The spec makes these children unqualified; some toolkits qualify them anyway.
     let child = |name: &str| {
-        fault.children().find(|n| {
-            n.is_element()
-                && n.tag_name().name() == name
-                && matches!(n.tag_name().namespace(), None | Some(SOAP11_ENV_NS))
-        })
+        let name_q = roxmltree::ExpandedName::from((soap::SOAP11_ENV_NS, name));
+        let name_bare = roxmltree::ExpandedName::from(name);
+        fault
+            .children()
+            .find(|n| [name_q, name_bare].contains(&n.tag_name()))
     };
     let text = |n: Node| n.text().unwrap_or_default().trim().to_owned();
 
@@ -65,10 +64,8 @@ pub fn detect_fault(body: &[u8]) -> Option<SoapFault> {
     })
 }
 
-fn is_env(n: Node, local: &str) -> bool {
-    n.is_element()
-        && n.tag_name().name() == local
-        && n.tag_name().namespace() == Some(SOAP11_ENV_NS)
+fn has_envelope_tag(n: Node, local: &str) -> bool {
+    n.has_tag_name((soap::SOAP11_ENV_NS, local))
 }
 
 fn resolve_qname(scope: Node, value: &str) -> Option<QName> {
@@ -106,13 +103,25 @@ mod tests {
     fn detects_fault_fields() {
         let f = detect_fault(FAULT.as_bytes()).expect("fault");
         assert_eq!(f.code, "soapenv:Client");
-        assert_eq!(f.code_qname, Some(QName::new(SOAP11_ENV_NS, "Client")));
+        assert_eq!(
+            f.code_qname,
+            Some(QName::new(soap::SOAP11_ENV_NS, "Client"))
+        );
         assert_eq!(f.string, "Customer 42 not found");
         assert_eq!(f.actor.as_deref(), Some("urn:svc"));
         assert_eq!(
             f.detail.as_deref(),
             Some(r#"<detail><e:Err xmlns:e="urn:e">42</e:Err></detail>"#)
         );
+    }
+
+    #[test]
+    fn cli_fault_example() {
+        let response = r#"<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"><soapenv:Body><soapenv:Fault><faultcode>soapenv:Server</faultcode><faultstring>customer locked</faultstring></soapenv:Fault></soapenv:Body></soapenv:Envelope>
+"#;
+        let fault = detect_fault(response.as_bytes()).expect("fault");
+        assert_eq!(fault.code, "soapenv:Server");
+        assert_eq!(fault.string, "customer locked");
     }
 
     #[test]

@@ -177,7 +177,7 @@ pub fn validate_request(
         ));
         return out;
     }
-    if name.ns != SOAP11_ENV_NS || name.local != "Envelope" {
+    if !env.has_tag_name((SOAP11_ENV_NS, "Envelope")) {
         out.diagnostics.push(Diagnostic::error(
             DiagSource::Soap,
             pos,
@@ -191,8 +191,7 @@ pub fn validate_request(
     // missing `Body` is left to the schema pass.
     let body = env
         .children()
-        .filter(Node::is_element)
-        .find(|n| in_env(n, "Body"));
+        .find(|n| n.has_tag_name((SOAP11_ENV_NS, "Body")));
     if let Some(body) = body {
         for child in body.children().filter(Node::is_element) {
             let name = qname(child);
@@ -271,7 +270,7 @@ const STRIP_HEADER_BLOCK_ATTRIBUTES: StripAttributes<'static> = StripAttributes 
 /// Element children of the envelope's `Header`s.
 fn header_blocks<'a, 'i>(env: Node<'a, 'i>) -> impl Iterator<Item = Node<'a, 'i>> {
     env.children()
-        .filter(|n| in_env(n, "Header"))
+        .filter(|n| n.has_tag_name((SOAP11_ENV_NS, "Header")))
         .flat_map(|h| h.children().filter(Node::is_element))
 }
 
@@ -357,10 +356,6 @@ fn explain_abstract(
     if !names.is_empty() {
         d.message = format!("{} {lead}: {}.", d.message, names.join(", "));
     }
-}
-
-fn in_env(n: &Node<'_, '_>, local: &str) -> bool {
-    n.tag_name().namespace() == Some(SOAP11_ENV_NS) && n.tag_name().name() == local
 }
 
 fn qname(n: Node<'_, '_>) -> QName {
