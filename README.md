@@ -27,9 +27,6 @@ HTTP/1.1 200 OK  221 ms  494 bytes
 </soapenv:Envelope>
 ```
 
-`send` validates first and refuses a request with errors; `--skip-validation` sends it anyway,
-to see how the server handles broken XML.
-
 ## history example
 
 ```
