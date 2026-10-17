@@ -579,7 +579,9 @@ impl ParametersPane {
         let was = self.ivars().applying.replace(true);
         // A cell still being edited would lose its column under the field editor.
         table.abortEditing();
-        for column in table.tableColumns().iter() {
+        // `tableColumns` is the table's own array, which removing changes: copy it first.
+        let old: Vec<Retained<NSTableColumn>> = table.tableColumns().to_vec();
+        for column in old {
             table.removeTableColumn(&column);
         }
         let mut columns = vec![(SET_COLUMN.to_owned(), "Set".to_owned(), SET_COLUMN_WIDTH)];
