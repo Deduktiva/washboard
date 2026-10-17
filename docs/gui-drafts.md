@@ -39,6 +39,24 @@ An older history entry selected (drawer open):
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
 ```
 
+## WSDL viewer window
+```
+┌────────────────────────────────────────────────────────────────────────────────┐
+│ ● ● ●  types.xsd — Customer API                                                │
+│ [‹] [›]  [xsd/common/types.xsd ▾]                         line 42, column 21   │
+├────┬───────────────────────────────────────────────────────────────────────────┤
+│  40│  <xs:complexType name="Party" abstract="true">                            │
+│  41│    <xs:sequence>                                                          │
+│  42│      <xs:element name="customerId" type="tns:CustomerId"/>                │
+│    │                    ‾‾‾‾‾‾‾‾‾‾ selected, flashed by the find indicator     │
+│  43│      <xs:element name="name" type="xs:string" minOccurs="0"/>             │
+│  44│    </xs:sequence>                                                         │
+│  45│  </xs:complexType>                                                        │
+│   …│                                                                           │
+└────┴───────────────────────────────────────────────────────────────────────────┘
+   reached by ⌘-clicking <cus:customerId> in a request; ⌘-click tns:CustomerId goes on
+```
+
 ## New project window
 ```
 ┌ New Project ─────────────────────────────────────────────┐

@@ -65,6 +65,7 @@ is the reference for the details they leave out.
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
 | [response pane](specs/response-pane.md) | response, history drawer, older exchanges |
+| [WSDL viewer](specs/wsdl-viewer.md) | the read-only WSDL/XSD viewer, Jump to Definition |
 | [settings](specs/settings.md) | the Settings window, servers |
 | [parameter sets](specs/parameters.md) | `${name}` placeholders, sets, project-wide selection and pins (planned) |
 | [WSDL](specs/wsdl.md) | WSDL details, `rpc/literal` |

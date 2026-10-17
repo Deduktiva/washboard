@@ -51,6 +51,9 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 | WP-A11Y | — | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
 | WP-REQUEST-FOLDERS | — | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
 | WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
+| WP-DEFINITIONS | — | source locations in `crates/washboard-core/src/{schema,wsdl}/**`, `SchemaDoc`'s file and offset map (additive), `request definition` in `crates/washboard-cli` | Every schema component and WSDL definition knows where it is in the original file; the model answers declaration and type-definition queries for a request path; QName references in a file resolve to their targets. Below. |
+| WP-WSDL-VIEWER | WP-DEFINITIONS | the viewer state, `App::definition` and the viewer commands in `crates/washboard-ui-model` | The viewer's files, selection and jump history per project window, jumps from the editor, the sent request and the response, `ui_state`. Below. |
+| WP-WSDL-VIEWER-APP | WP-WSDL-VIEWER | a new `crates/washboard-app/src/wsdl_viewer.rs`, ⌘-tracking in `editor.rs`, the items in `menu.rs`, viewer tests in `tests/appkit.rs` | The viewer window and ⌘-click in the three text views. Below. |
 
 ### WP-REQUEST-FOLDERS tests
 Behaviour: `docs/specs/disk-layout.md`, `docs/specs/requests.md`. Tests (Linux): reconciliation
@@ -64,3 +67,25 @@ Behaviour: `docs/specs/sidebar.md`. Tests (`tests/appkit.rs`): no OPERATIONS row
 from the picker lands in the operation's folder and starts rename; New Folder, rename, delete
 with the confirmation; a move by the model's command shows in the tree; collapsed folders
 survive reopening the project.
+
+### WP-DEFINITIONS tests
+Behaviour: `docs/specs/wsdl-viewer.md`, "Positions" and "What a name jumps to". Tests (Linux,
+both fixtures): for every global and local component, the text at its location in the original
+file is its name; inline schemas, a file with a BOM and a UTF-16 file; a declaration on a line
+whose `schemaLocation` the bundle rewrote, and one after the namespace declarations added to an
+extracted `xs:schema` (synthetic WSDLs); a chameleon include; `xsi:type`, substitution group
+members, a lax wildcard match and a `skip` one (no location); rpc wrapper and part to the
+binding operation and the part; a fault detail element; reference resolution for each attribute
+the spec lists; the CLI's output and exit code.
+
+### WP-WSDL-VIEWER tests
+Behaviour: `docs/specs/wsdl-viewer.md`. Tests (fake front end): a jump from the editor, from an
+older exchange's sent request and from the response emits the file and UTF-16 range; no jump
+before the schema is ready or for envelope elements; back and forward, the 50-entry cap, a new
+jump dropping forward entries; viewer state surviving a reopen; Replace WSDL resetting it.
+
+### WP-WSDL-VIEWER-APP tests
+Behaviour: `docs/specs/wsdl-viewer.md`. Tests (`tests/appkit.rs`): a synthesized ⌘-click on an
+element name opens the viewer with the declaration selected and the project window still key;
+⌃⌘J at the insertion point; ⌘[ after a second jump returns to the first; the file popup lists
+the main WSDL first. The underline and cursor while ⌘ is held are a manual check on a Mac.
