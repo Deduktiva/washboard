@@ -51,5 +51,12 @@ MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release -p washboard-app \
 binaries-dir = "../../target/packager/bin"
 binaries = [{ path = "Washboard", main = true }]
 out-dir = "../../target/packager"
-icons = ["icons/icon.png"]
+icons = [
+    "icons/16x16.png",
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/256x256.png",
+    "icons/512x512.png",
+    "icons/512x512@2x.png",
+]
 macos = { minimum-system-version = "26.0" }
