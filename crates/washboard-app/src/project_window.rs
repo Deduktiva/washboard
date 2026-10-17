@@ -16,14 +16,15 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAlert, NSBeep, NSBox, NSBoxType, NSColor, NSImage, NSImageSymbolConfiguration,
-    NSLayoutAttribute, NSLineBreakMode, NSMenuItem, NSMenuItemValidation, NSPopUpButton,
-    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
-    NSSplitViewItem, NSStackView, NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
+    NSAlert, NSBeep, NSBox, NSBoxType, NSButton, NSCellImagePosition, NSColor, NSImage,
+    NSImageSymbolConfiguration, NSLayoutAttribute, NSLineBreakMode, NSMenuItem,
+    NSMenuItemValidation, NSPopUpButton, NSResponder, NSScrollView, NSSplitView,
+    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSView, NSViewController,
-    NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode,
-    NSWindowToolbarStyle,
+    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
+    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -49,9 +50,7 @@ const SERVER_ITEM: &str = "server";
 const PARAMETER_SET_ITEM: &str = "parameterSet";
 const SEND_ITEM: &str = "send";
 
-/// The tag of the toolbar popups' "Pin to This Request" item. A server or set item's tag is its
-/// index in the popup's list.
-pub const PIN_ITEM_TAG: NSInteger = -1;
+/// A server or set item's tag is its index in the popup's list.
 /// The tag of the set popup's "No Parameter Set" item.
 pub const NO_SET_ITEM_TAG: NSInteger = -2;
 /// The tag of the server popup's "No Servers", which stands for nothing.
@@ -68,11 +67,14 @@ pub struct ProjectIvars {
     closing: Cell<bool>,
     sidebar: Retained<SidebarController>,
     toolbar_identifiers: Retained<NSArray<NSString>>,
-    /// The toolbar's server popup; its items are `server_ids`, in order, then the pin item.
+    /// The toolbar's server popup; its items are `server_ids`, in order.
     servers: Retained<NSPopUpButton>,
     server_ids: RefCell<Vec<ServerId>>,
-    /// The toolbar's parameter set popup: "No Parameter Set", `parameter_set_ids` in order,
-    /// then the pin item. Its toolbar item is hidden while the project has no sets.
+    /// Before each popup, pins its choice to the selected request or unpins it.
+    server_pin: Retained<NSButton>,
+    parameter_set_pin: Retained<NSButton>,
+    /// The toolbar's parameter set popup: "No Parameter Set", then `parameter_set_ids` in
+    /// order. Its toolbar item is hidden while the project has no sets.
     parameter_sets: Retained<NSPopUpButton>,
     parameter_set_ids: RefCell<Vec<ParameterSetId>>,
     parameter_set_item: OnceCell<Retained<NSToolbarItem>>,
@@ -221,46 +223,50 @@ define_class!(
         fn choose_server(&self, _sender: Option<&AnyObject>) {
             let tag = self.ivars().servers.selectedTag();
             let key = self.key();
-            if tag == PIN_ITEM_TAG {
-                let pinned = self.read_project(key, |w| w.selection().server_pinned);
-                if let Some(pinned) = pinned {
-                    self.command("Could not pin the server", |app| {
-                        app.set_server_pinned(key, !pinned)
-                    });
-                }
-            } else {
-                let index = usize::try_from(tag).ok();
-                let server = index.and_then(|i| self.ivars().server_ids.borrow().get(i).copied());
-                if let Some(server) = server {
-                    self.command("Could not choose the server", |app| {
-                        app.choose_server(key, server)
-                    });
-                }
+            let index = usize::try_from(tag).ok();
+            let server = index.and_then(|i| self.ivars().server_ids.borrow().get(i).copied());
+            if let Some(server) = server {
+                self.command("Could not choose the server", |app| {
+                    app.choose_server(key, server)
+                });
             }
             // The popup shows what the model chose, also when it refused.
             self.show_server_selection();
+        }
+
+        #[unsafe(method(toggleServerPin:))]
+        fn toggle_server_pin(&self, _sender: Option<&AnyObject>) {
+            let key = self.key();
+            if let Some(pinned) = self.read_project(key, |w| w.selection().server_pinned) {
+                self.command("Could not pin the server", |app| {
+                    app.set_server_pinned(key, !pinned)
+                });
+            }
+            self.show_server_selection();
+        }
+
+        #[unsafe(method(toggleParameterSetPin:))]
+        fn toggle_parameter_set_pin(&self, _sender: Option<&AnyObject>) {
+            let key = self.key();
+            if let Some(pinned) = self.read_project(key, |w| w.selection().parameter_set_pinned) {
+                self.command("Could not pin the parameter set", |app| {
+                    app.set_parameter_set_pinned(key, !pinned)
+                });
+            }
+            self.show_parameter_set_selection();
         }
 
         #[unsafe(method(chooseParameterSet:))]
         fn choose_parameter_set(&self, _sender: Option<&AnyObject>) {
             let tag = self.ivars().parameter_sets.selectedTag();
             let key = self.key();
-            if tag == PIN_ITEM_TAG {
-                let pinned = self.read_project(key, |w| w.selection().parameter_set_pinned);
-                if let Some(pinned) = pinned {
-                    self.command("Could not pin the parameter set", |app| {
-                        app.set_parameter_set_pinned(key, !pinned)
-                    });
-                }
-            } else {
-                let set = usize::try_from(tag)
-                    .ok()
-                    .and_then(|i| self.ivars().parameter_set_ids.borrow().get(i).copied());
-                if set.is_some() || tag == NO_SET_ITEM_TAG {
-                    self.command("Could not choose the parameter set", |app| {
-                        app.choose_parameter_set(key, set)
-                    });
-                }
+            let set = usize::try_from(tag)
+                .ok()
+                .and_then(|i| self.ivars().parameter_set_ids.borrow().get(i).copied());
+            if set.is_some() || tag == NO_SET_ITEM_TAG {
+                self.command("Could not choose the parameter set", |app| {
+                    app.choose_parameter_set(key, set)
+                });
             }
             self.show_parameter_set_selection();
         }
@@ -342,6 +348,8 @@ impl ProjectWindowController {
             toolbar_identifiers,
             servers: toolbar_popup(mtm),
             server_ids: RefCell::new(Vec::new()),
+            server_pin: pin_button(mtm),
+            parameter_set_pin: pin_button(mtm),
             parameter_sets: toolbar_popup(mtm),
             parameter_set_ids: RefCell::new(Vec::new()),
             parameter_set_item: OnceCell::new(),
@@ -371,6 +379,20 @@ impl ProjectWindowController {
             unsafe {
                 popup.setTarget(Some(&this));
                 popup.setAction(Some(action));
+            }
+        }
+        let pins = [
+            (&this.ivars().server_pin, sel!(toggleServerPin:)),
+            (
+                &this.ivars().parameter_set_pin,
+                sel!(toggleParameterSetPin:),
+            ),
+        ];
+        for (button, action) in pins {
+            // SAFETY: as for the popups.
+            unsafe {
+                button.setTarget(Some(&this));
+                button.setAction(Some(action));
             }
         }
 
@@ -443,6 +465,16 @@ impl ProjectWindowController {
         &self.ivars().parameter_sets
     }
 
+    /// The pin button before the server popup.
+    pub fn server_pin_button(&self) -> &NSButton {
+        &self.ivars().server_pin
+    }
+
+    /// The pin button before the parameter set popup.
+    pub fn parameter_set_pin_button(&self) -> &NSButton {
+        &self.ivars().parameter_set_pin
+    }
+
     /// Whether the toolbar shows the parameter set popup: only while the project has sets.
     pub fn shows_parameter_sets(&self) -> bool {
         self.ivars()
@@ -468,8 +500,6 @@ impl ProjectWindowController {
         add_items(popup, &names);
         if servers.is_empty() {
             add_item(popup, "No Servers", NO_SERVERS_TAG);
-        } else {
-            add_pin_item(popup);
         }
         popup.setEnabled(!servers.is_empty());
         *self.ivars().server_ids.borrow_mut() = servers.into_iter().map(|(id, _)| id).collect();
@@ -501,7 +531,7 @@ impl ProjectWindowController {
         if let Some(index) = index.and_then(|i| NSInteger::try_from(i).ok()) {
             popup.selectItemWithTag(index);
         }
-        show_pin(popup, pinned, request, "server");
+        show_pin(&self.ivars().server_pin, pinned, request, "server");
     }
 
     /// Fills the parameter set popup from the model, and shows it only while the project has
@@ -522,7 +552,6 @@ impl ProjectWindowController {
         add_separator(popup);
         let names: Vec<&str> = sets.iter().map(|(_, name)| name.as_str()).collect();
         add_items(popup, &names);
-        add_pin_item(popup);
         if let Some(item) = self.ivars().parameter_set_item.get() {
             item.setHidden(sets.is_empty());
         }
@@ -557,7 +586,12 @@ impl ProjectWindowController {
         let popup = &self.ivars().parameter_sets;
         popup.selectItemWithTag(tag);
         // Without a set there is nothing to pin.
-        show_pin(popup, pinned, request && index.is_some(), "parameter set");
+        show_pin(
+            &self.ivars().parameter_set_pin,
+            pinned,
+            request && index.is_some(),
+            "parameter set",
+        );
     }
 
     fn toolbar_image(
@@ -608,11 +642,19 @@ impl ProjectWindowController {
             Some(item)
         } else if identifier.to_string() == SERVER_ITEM {
             item.setLabel(ns_string!("Server"));
-            item.setView(Some(&self.ivars().servers));
+            item.setView(Some(&pinned_popup(
+                &self.ivars().server_pin,
+                &self.ivars().servers,
+                self.mtm(),
+            )));
             Some(item)
         } else if identifier.to_string() == PARAMETER_SET_ITEM {
             item.setLabel(ns_string!("Parameter Set"));
-            item.setView(Some(&self.ivars().parameter_sets));
+            item.setView(Some(&pinned_popup(
+                &self.ivars().parameter_set_pin,
+                &self.ivars().parameter_sets,
+                self.mtm(),
+            )));
             item.setHidden(self.ivars().parameter_set_ids.borrow().is_empty());
             let _ = self.ivars().parameter_set_item.set(item.clone());
             Some(item)
@@ -1159,12 +1201,6 @@ fn add_item(popup: &NSPopUpButton, title: &str, tag: NSInteger) {
     menu.addItem(&item);
 }
 
-/// A separator and "Pin to This Request", at the end of the popup.
-fn add_pin_item(popup: &NSPopUpButton) {
-    add_separator(popup);
-    add_item(popup, "Pin to This Request", PIN_ITEM_TAG);
-}
-
 fn add_separator(popup: &NSPopUpButton) {
     if let Some(menu) = popup.menu() {
         let separator = NSMenuItem::separatorItem(popup.mtm());
@@ -1173,33 +1209,51 @@ fn add_separator(popup: &NSPopUpButton) {
     }
 }
 
-/// A pinned popup is hard to miss (`docs/specs/parameters.md`, "Selection"): its shown item
-/// carries `pin.fill` and its bezel is tinted with the warning colour. The pin item is checked
-/// while pinned, and enabled only when there is a request (and a `what`) to pin.
-fn show_pin(popup: &NSPopUpButton, pinned: bool, can_pin: bool, what: &str) {
-    let pin = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-        ns_string!("pin.fill"),
-        Some(ns_string!("Pinned")),
-    );
-    for item in popup.itemArray().iter() {
-        let shown = pinned
-            && popup
-                .selectedItem()
-                .is_some_and(|s| std::ptr::eq(&*s, &*item));
-        item.setImage(if shown { pin.as_deref() } else { None });
-        if item.tag() == PIN_ITEM_TAG {
-            item.setState(crate::settings_window::state(pinned));
-            item.setEnabled(pinned || can_pin);
-        }
-    }
-    let tint = pinned.then(colors::warning);
-    popup.setBezelColor(tint.as_deref());
-    let tip = if pinned {
-        format!("This request is pinned to this {what}.")
+/// A borderless button showing whether the popup after it is pinned to the request.
+fn pin_button(mtm: MainThreadMarker) -> Retained<NSButton> {
+    let button = NSButton::new(mtm);
+    button.setBordered(false);
+    button.setImagePosition(NSCellImagePosition::ImageOnly);
+    button
+}
+
+/// The pin button and its popup side by side, as one toolbar item's view.
+fn pinned_popup(
+    pin: &NSButton,
+    popup: &NSPopUpButton,
+    mtm: MainThreadMarker,
+) -> Retained<NSStackView> {
+    let views = [layout::view(pin.retain()), layout::view(popup.retain())];
+    let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
+    stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    stack.setSpacing(4.0);
+    stack
+}
+
+/// The pin is always visible and clickable (`docs/specs/parameters.md`, "Selection"): an
+/// outline pin while the request follows the project, a filled one in the warning colour while
+/// it is pinned. It is enabled only when there is a request (and a `what`) to pin.
+fn show_pin(button: &NSButton, pinned: bool, can_pin: bool, what: &str) {
+    let (symbol, label, tint, tip) = if pinned {
+        (
+            ns_string!("pin.fill"),
+            ns_string!("Pinned"),
+            colors::warning(),
+            format!("Pinned to this request. Click to use the project's {what}."),
+        )
     } else {
-        format!("The project's {what}. Pin one to this request from this menu.")
+        (
+            ns_string!("pin"),
+            ns_string!("Not pinned"),
+            NSColor::secondaryLabelColor(),
+            format!("The project's {what}. Click to pin it to this request."),
+        )
     };
-    popup.setToolTip(Some(&NSString::from_str(&tip)));
+    let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(symbol, Some(label));
+    button.setImage(image.as_deref());
+    button.setContentTintColor(Some(&tint));
+    button.setEnabled(pinned || can_pin);
+    button.setToolTip(Some(&NSString::from_str(&tip)));
 }
 
 const POPUP_MIN_WIDTH: f64 = 120.0;

@@ -85,9 +85,8 @@ mod checks {
         ProjectWindowController, SidebarNode, TextTable,
     };
     use washboard_app::{
-        EMPTY_PLACEHOLDER, GROUP_ID, HEADER_ID, MAX_WIDTH, NO_SET_ITEM_TAG, PAGE_MARGIN,
-        PIN_ITEM_TAG, Pane, ROW_INSET, ServersPane, SettingsWindowController, TEXT_ID,
-        UNSET_PLACEHOLDER,
+        EMPTY_PLACEHOLDER, GROUP_ID, HEADER_ID, MAX_WIDTH, NO_SET_ITEM_TAG, PAGE_MARGIN, Pane,
+        ROW_INSET, ServersPane, SettingsWindowController, TEXT_ID, UNSET_PLACEHOLDER,
     };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
@@ -897,11 +896,9 @@ mod checks {
         let popup = project.server_popup();
         assert!(popup.isEnabled());
         assert_eq!(choices(popup), ["Staging", "Production"]);
-        let pin = popup
-            .itemWithTitle(ns_string!("Pin to This Request"))
-            .expect("pin item");
-        assert_eq!(pin.tag(), PIN_ITEM_TAG);
+        let pin = project.server_pin_button();
         assert!(!pin.isEnabled(), "no request to pin to");
+        assert!(!pinned_shown(pin));
         // A long server name widens the picker only so far; the title truncates.
         popup.addItemWithTitle(&NSString::from_str(
             "Production cluster behind the second load balancer in Frankfurt",
@@ -1026,17 +1023,12 @@ mod checks {
         send("chooseServer:");
         assert_eq!(popup.indexOfSelectedItem(), 1);
         assert!(
-            popup.bezelColor().is_none(),
-            "the project's server, not pinned"
+            pin.isEnabled() && !pinned_shown(pin),
+            "the project's server"
         );
-        choose_pin(popup);
-        send("chooseServer:");
+        click(pin);
         assert_eq!(popup.indexOfSelectedItem(), 1, "pinned to what it showed");
-        assert!(popup.bezelColor().is_some(), "a pinned popup is tinted");
-        assert!(
-            popup.selectedItem().and_then(|i| i.image()).is_some(),
-            "and shows the pin"
-        );
+        assert!(pinned_shown(pin), "the pin shows it");
         send("duplicateRequest:");
         assert_eq!(
             request_names(&project),
@@ -1051,7 +1043,7 @@ mod checks {
             Some(outline.selectedRow()),
             "the copy is selected"
         );
-        assert!(popup.bezelColor().is_some(), "the copy is pinned too");
+        assert!(pinned_shown(pin), "the copy is pinned too");
         // Pinned, choosing a server changes the pin.
         popup.selectItemAtIndex(0);
         send("chooseServer:");
@@ -1085,10 +1077,9 @@ mod checks {
         );
         assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's pin");
         // Unpinning returns the copy to the project's server.
-        choose_pin(popup);
-        send("chooseServer:");
+        click(pin);
         assert_eq!(popup.indexOfSelectedItem(), 1, "the project's server");
-        assert!(popup.bezelColor().is_none());
+        assert!(!pinned_shown(pin));
         assert!(ctx.alerts().is_empty());
 
         // The context menu acts on the clicked row. A folder's New Request… creates in that
@@ -2621,12 +2612,18 @@ mod checks {
             .collect()
     }
 
-    /// Selects a toolbar popup's "Pin to This Request", as the user does before its action.
-    fn choose_pin(popup: &NSPopUpButton) {
-        assert!(
-            popup.selectItemWithTag(PIN_ITEM_TAG),
-            "the popup has a pin item"
-        );
+    /// Clicks a toolbar pin button.
+    fn click(button: &NSButton) {
+        assert!(button.isEnabled(), "the pin can be clicked");
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { button.performClick(None) };
+    }
+
+    /// Whether a toolbar pin button shows its popup as pinned.
+    fn pinned_shown(button: &NSButton) -> bool {
+        button
+            .toolTip()
+            .is_some_and(|t| t.to_string().starts_with("Pinned"))
     }
 
     /// The shown Settings pane keeps `form.rs`'s rules: groups inside the page margins, centred
@@ -3564,14 +3561,13 @@ mod checks {
             .iter()
             .filter(|i| i.isSeparatorItem())
             .count();
-        assert_eq!(separators, 2, "around the sets");
+        assert_eq!(separators, 1, "after No Parameter Set");
         if project.selected_request().is_some() {
-            choose_pin(popup);
-            action(c"chooseParameterSet:");
-            assert!(popup.bezelColor().is_some(), "a pinned set tints its popup");
-            choose_pin(popup);
-            action(c"chooseParameterSet:");
-            assert!(popup.bezelColor().is_none());
+            let pin = project.parameter_set_pin_button();
+            click(pin);
+            assert!(pinned_shown(pin), "the set is pinned");
+            click(pin);
+            assert!(!pinned_shown(pin));
         }
 
         // Deleting the set asks first, as it has a value; the popup goes with the last set.
