@@ -91,8 +91,8 @@ mod checks {
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
     use washboard_core::secrets::MemorySecretStore;
     use washboard_ui_model::{
-        Alert, Confirm, DialogAnswer, DialogId, Dialogs, FormatSettings, ImportTarget, ProjectKey,
-        SchemaState,
+        Alert, Confirm, DialogAnswer, DialogId, Dialogs, FormatSettings, HistoryDrawer,
+        ImportTarget, ProjectKey, SchemaState,
     };
 
     use washboard_test_support::fixtures;
@@ -734,23 +734,26 @@ mod checks {
         assert!(!response.drawer_open(), "closed at first");
         response.set_drawer_open(true);
         let history = || in_window(response.history().view());
-        for _ in 0..40 {
-            if history().size.height > 40.0 {
-                break;
+        let wait_for_rows = || {
+            for _ in 0..40 {
+                if history().size.height > 120.0 {
+                    break;
+                }
+                NSRunLoop::currentRunLoop()
+                    .runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
             }
-            NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
-        }
-        // TODO: these checks fail on a mac
-        // let history = history();
-        // let body = in_window(response.tabs());
-        // assert!(
-        //     history.size.height > 40.0 && history.size.width > 300.0,
-        //     "the history list has room: {history:?}, response {response_pane:?}"
-        // );
-        // assert!(
-        //     history.origin.y + history.size.height <= body.origin.y + 0.5,
-        //     "the history sits under the response body: {history:?} vs {body:?}"
-        // );
+        };
+        wait_for_rows();
+        let body = in_window(response.tabs());
+        let opened = history();
+        assert!(
+            opened.size.height > 120.0 && opened.size.width > 300.0,
+            "the history list has room for several rows: {opened:?}, response {response_pane:?}"
+        );
+        assert!(
+            opened.origin.y + opened.size.height <= body.origin.y + 0.5,
+            "the history sits under the response body: {opened:?} vs {body:?}"
+        );
         let key = project.key();
         let drawer = ctx
             .delegate
@@ -760,6 +763,35 @@ mod checks {
         assert!(drawer.open, "remembered for the project");
         response.set_drawer_open(false);
         assert!(!response.drawer_open());
+        // Reopened at the height it closed with.
+        response.set_drawer_open(true);
+        wait_for_rows();
+        assert!(
+            (history().size.height - opened.size.height).abs() < 1.0,
+            "reopened at {:?}, closed at {opened:?}",
+            history()
+        );
+        response.set_drawer_open(false);
+        // The one-row height earlier versions saved is not kept.
+        ctx.delegate
+            .command("save a one-row drawer", |app| {
+                app.set_history_drawer(
+                    key,
+                    HistoryDrawer {
+                        open: false,
+                        height: Some(60.0),
+                    },
+                )
+            })
+            .expect("saved");
+        response.set_drawer_open(true);
+        wait_for_rows();
+        assert!(
+            history().size.height > 120.0,
+            "a saved one-row height opens with room: {:?}",
+            history()
+        );
+        response.set_drawer_open(false);
 
         let split = project.split_view();
         let items = split.splitViewItems();
