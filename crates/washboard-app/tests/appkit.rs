@@ -3551,6 +3551,20 @@ mod checks {
         popup.selectItemWithTag(0);
         action(c"chooseParameterSet:");
         assert_eq!(popup.selectedTag(), 0);
+        assert_eq!(
+            popup
+                .titleOfSelectedItem()
+                .map(|t| t.to_string())
+                .as_deref(),
+            Some("Alice"),
+            "the popup shows the chosen set's name"
+        );
+        let separators = popup
+            .itemArray()
+            .iter()
+            .filter(|i| i.isSeparatorItem())
+            .count();
+        assert_eq!(separators, 2, "around the sets");
         if project.selected_request().is_some() {
             choose_pin(popup);
             action(c"chooseParameterSet:");
