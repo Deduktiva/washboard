@@ -1,12 +1,12 @@
 //! A project's Parameters pane in the Settings window (`docs/specs/parameters.md`): one grid
-//! with a row per parameter set and a column per parameter, edited in place.
+//! with a row per parameter and a column per parameter set, edited in place.
 //!
-//! The first column is the set's name; every other cell is that set's value for the column's
-//! parameter. A value is stored when its cell's editing ends. An unset cell reads "Not set"
-//! and an empty value "Empty", both as placeholders; clearing a cell unsets it, and the context
-//! menu's Set Empty Value stores the empty string. Parameters are reordered by dragging their
-//! column headers, sets with Move Up and Move Down. Adding or renaming a parameter goes through
-//! a sheet with one field, as its name is checked before anything changes.
+//! The first column is the parameter's name, renamed in place; every other cell is the column's
+//! set's value for the row's parameter. A value is stored when its cell's editing ends. An unset
+//! cell reads "Not set" and an empty value "Empty", both as placeholders; clearing a cell unsets
+//! it, and the context menu's Set Empty Value stores the empty string. Sets are reordered by
+//! dragging their column headers, parameters with Move Up and Move Down. Adding a parameter and
+//! naming a set go through a sheet with one field, as a header cannot be edited in place.
 
 use std::cell::{Cell, OnceCell, RefCell};
 
@@ -30,9 +30,9 @@ use crate::form;
 use crate::layout::{self, view};
 use crate::settings_window::project_note;
 
-/// The set name column's identifier; not a valid parameter name, so it never clashes with one.
-const SET_COLUMN: &str = "#set";
-const SET_COLUMN_WIDTH: f64 = 150.0;
+/// The parameter name column's identifier; the others are their sets' ids.
+const NAME_COLUMN: &str = "#parameter";
+const NAME_COLUMN_WIDTH: f64 = 150.0;
 const VALUE_COLUMN_WIDTH: f64 = 120.0;
 const GRID_HEIGHT: f64 = 220.0;
 const SHEET_WIDTH: f64 = 420.0;
@@ -43,14 +43,14 @@ pub const EMPTY_PLACEHOLDER: &str = "Empty";
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NameEdit {
     AddParameter,
-    RenameParameter(String),
+    RenameSet(ParameterSetId),
 }
 
 #[derive(Debug)]
 pub struct ParametersIvars {
     key: ProjectKey,
-    /// The model's parameters and sets as last shown: the grid's columns after the first, and
-    /// its rows.
+    /// The model's parameters and sets as last shown: the grid's rows, and its columns after
+    /// the first.
     parameters: RefCell<Vec<String>>,
     sets: RefCell<Vec<ParameterSet>>,
     view: OnceCell<Retained<NSView>>,
@@ -85,7 +85,7 @@ define_class!(
         // SAFETY: the signature matches `numberOfRowsInTableView:`.
         #[unsafe(method(numberOfRowsInTableView:))]
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
-            self.ivars().sets.borrow().len() as NSInteger
+            self.ivars().parameters.borrow().len() as NSInteger
         }
     }
 
@@ -126,7 +126,7 @@ define_class!(
         // SAFETY: the signature matches `tableView:shouldReorderColumn:toColumn:`.
         #[unsafe(method(tableView:shouldReorderColumn:toColumn:))]
         fn should_reorder(&self, _table: &NSTableView, column: NSInteger, to: NSInteger) -> bool {
-            // The set names stay first; -1 is asked when a drag starts.
+            // The parameter names stay first; -1 is asked when a drag starts.
             column != 0 && to != 0
         }
 
@@ -183,42 +183,44 @@ define_class!(
 
         #[unsafe(method(renameParameterSet:))]
         fn rename_set_action(&self, _sender: Option<&AnyObject>) {
-            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
-                self.begin_rename_set(row);
-            }
-        }
-
-        #[unsafe(method(moveParameterSetUp:))]
-        fn move_up_action(&self, _sender: Option<&AnyObject>) {
-            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
-                self.move_set(row, -1);
-            }
-        }
-
-        #[unsafe(method(moveParameterSetDown:))]
-        fn move_down_action(&self, _sender: Option<&AnyObject>) {
-            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
-                self.move_set(row, 1);
+            if let Some(index) = self.menu_set() {
+                self.begin_rename_set(index);
             }
         }
 
         #[unsafe(method(deleteParameterSet:))]
         fn delete_set_action(&self, _sender: Option<&AnyObject>) {
-            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
-                self.delete_set(row);
+            if let Some(index) = self.menu_set() {
+                self.delete_set(index);
             }
         }
 
         #[unsafe(method(renameParameter:))]
         fn rename_parameter_action(&self, _sender: Option<&AnyObject>) {
-            if let Some(name) = self.menu_parameter() {
-                self.begin_rename_parameter(&name);
+            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
+                self.begin_rename_parameter(row);
+            }
+        }
+
+        #[unsafe(method(moveParameterUp:))]
+        fn move_up_action(&self, _sender: Option<&AnyObject>) {
+            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
+                self.move_parameter(row, -1);
+            }
+        }
+
+        #[unsafe(method(moveParameterDown:))]
+        fn move_down_action(&self, _sender: Option<&AnyObject>) {
+            if let Ok(row) = usize::try_from(self.ivars().menu_cell.get().0) {
+                self.move_parameter(row, 1);
             }
         }
 
         #[unsafe(method(deleteParameter:))]
         fn delete_parameter_action(&self, _sender: Option<&AnyObject>) {
-            if let Some(name) = self.menu_parameter() {
+            let row = usize::try_from(self.ivars().menu_cell.get().0).ok();
+            let name = row.and_then(|r| self.ivars().parameters.borrow().get(r).cloned());
+            if let Some(name) = name {
                 self.delete_parameter(&name);
             }
         }
@@ -281,7 +283,7 @@ impl ParametersPane {
                         "Requests use a parameter as ${name}; the toolbar's parameter set \
                          decides its value when the request is checked and sent. Clear a cell \
                          to unset it; Set Empty Value in its menu stores an empty value. Drag a \
-                         column to reorder the parameters.",
+                         set's column to reorder the sets.",
                     )
                     .build(),
             ],
@@ -309,7 +311,8 @@ impl ParametersPane {
         self.ivars().table.get().expect("set in new()")
     }
 
-    /// The name sheet, attached to the Settings window while a parameter is added or renamed.
+    /// The name sheet, attached to the Settings window while a parameter is added or a set
+    /// named.
     pub fn sheet(&self) -> &NSWindow {
         self.ivars().sheet.get().expect("set in new()")
     }
@@ -328,7 +331,7 @@ impl ParametersPane {
         self.ivars().editing.borrow().is_some()
     }
 
-    /// The grid's column titles, in the order shown: "Set", then the parameters.
+    /// The grid's column titles, in the order shown: "Parameter", then the sets.
     pub fn column_titles(&self) -> Vec<String> {
         self.table()
             .tableColumns()
@@ -337,16 +340,17 @@ impl ParametersPane {
             .collect()
     }
 
-    /// The grid's rows as shown: the set's name, then each value, `None` where unset.
+    /// The grid's rows as shown: the parameter's name, then its value in each set, `None`
+    /// where unset.
     pub fn rows(&self) -> Vec<Vec<Option<String>>> {
-        let parameters = self.ivars().parameters.borrow();
+        let sets = self.ivars().sets.borrow();
         self.ivars()
-            .sets
+            .parameters
             .borrow()
             .iter()
-            .map(|set| {
-                let mut row = vec![Some(set.name.clone())];
-                row.extend(parameters.iter().map(|p| set.values.get(p).cloned()));
+            .map(|p| {
+                let mut row = vec![Some(p.clone())];
+                row.extend(sets.iter().map(|set| set.values.get(p).cloned()));
                 row
             })
             .collect()
@@ -361,16 +365,17 @@ impl ParametersPane {
             })
             .unwrap_or_default();
         // Compared with the table's columns, not the last list: the first reload builds the
-        // set column even when there are no parameters.
-        let shown: Vec<String> = self
+        // name column even when there are no sets, and a renamed set retitles its column.
+        let shown: Vec<(String, String)> = self
             .table()
             .tableColumns()
             .iter()
-            .map(|c| c.identifier().to_string())
+            .map(|c| (c.identifier().to_string(), c.title().to_string()))
             .collect();
-        let wanted: Vec<String> = std::iter::once(SET_COLUMN.to_owned())
-            .chain(parameters.iter().cloned())
-            .collect();
+        let wanted: Vec<(String, String)> =
+            std::iter::once((NAME_COLUMN.to_owned(), "Parameter".to_owned()))
+                .chain(sets.iter().map(|s| (s.id.to_string(), s.name.clone())))
+                .collect();
         *self.ivars().parameters.borrow_mut() = parameters;
         *self.ivars().sets.borrow_mut() = sets;
         if shown != wanted {
@@ -379,9 +384,7 @@ impl ParametersPane {
         self.table().reloadData();
         // Renamed or deleted while its sheet was open.
         let gone = match &*self.ivars().editing.borrow() {
-            Some(NameEdit::RenameParameter(name)) => {
-                !self.ivars().parameters.borrow().contains(name)
-            }
+            Some(NameEdit::RenameSet(id)) => self.set_index(*id).is_none(),
             _ => false,
         };
         if gone {
@@ -389,17 +392,17 @@ impl ParametersPane {
         }
     }
 
-    /// The end of editing cell `row`, `column` with `text`: a set's new name, or a value.
-    /// Clearing a value unsets it; an empty or unset cell left empty stays as it was.
+    /// The end of editing cell `row`, `column` with `text`: a parameter's new name, or a
+    /// value. Clearing a value unsets it; an empty or unset cell left empty stays as it was.
     pub fn cell_edited(&self, row: usize, column: usize, text: &str) {
-        let Some(set) = self.ivars().sets.borrow().get(row).cloned() else {
+        let Some(name) = self.ivars().parameters.borrow().get(row).cloned() else {
             return;
         };
         let key = self.ivars().key;
         if column == 0 {
-            if text.trim() != set.name {
-                let renamed = self.command("Could not rename the parameter set", |app| {
-                    app.rename_parameter_set(key, set.id, text)
+            if text.trim() != name {
+                let renamed = self.command("Could not rename the parameter", |app| {
+                    app.rename_parameter(key, &name, text)
                 });
                 if renamed.is_none() {
                     // The cell still shows the refused name.
@@ -408,7 +411,7 @@ impl ParametersPane {
             }
             return;
         }
-        let Some(name) = self.ivars().parameters.borrow().get(column - 1).cloned() else {
+        let Some(set) = self.ivars().sets.borrow().get(column - 1).cloned() else {
             return;
         };
         let old = set.values.get(&name).map(String::as_str);
@@ -421,8 +424,8 @@ impl ParametersPane {
         self.set_value(row, column, new);
     }
 
-    /// Starts editing the name of the set in `row`.
-    pub fn begin_rename_set(&self, row: usize) {
+    /// Starts editing the name of the parameter in `row`.
+    pub fn begin_rename_parameter(&self, row: usize) {
         let table = self.table();
         // AppKit raises for a cell that does not exist, which aborts the app.
         if let Ok(row) = NSInteger::try_from(row)
@@ -433,22 +436,29 @@ impl ParametersPane {
         }
     }
 
-    /// Add Set: a set called “New Set”, its name ready to be typed over.
+    /// Add Set: a set called “New Set”, with the sheet open to name it.
     pub fn add_set(&self) {
         let key = self.ivars().key;
         let added = self.command("Could not add a parameter set", |app| {
             app.add_parameter_set(key)
         });
-        let row = added.and_then(|id| self.row_of(id));
-        if let Some(row) = row {
-            self.begin_rename_set(row);
+        if let Some(index) = added.and_then(|id| self.set_index(id)) {
+            self.begin_rename_set(index);
         }
     }
 
-    /// Moves the set in `row` one place up (`-1`) or down (`1`).
-    pub fn move_set(&self, row: usize, by: isize) {
-        let mut order: Vec<ParameterSetId> =
-            self.ivars().sets.borrow().iter().map(|s| s.id).collect();
+    /// Opens the name sheet on the set in column `index` (0 for the first set).
+    pub fn begin_rename_set(&self, index: usize) {
+        let Some(set) = self.ivars().sets.borrow().get(index).cloned() else {
+            return;
+        };
+        let title = format!("Rename “{}”", set.name);
+        self.open_sheet(NameEdit::RenameSet(set.id), &title, &set.name);
+    }
+
+    /// Moves the parameter in `row` one place up (`-1`) or down (`1`).
+    pub fn move_parameter(&self, row: usize, by: isize) {
+        let mut order = self.ivars().parameters.borrow().clone();
         let Some(to) = row.checked_add_signed(by).filter(|to| *to < order.len()) else {
             return;
         };
@@ -457,14 +467,14 @@ impl ParametersPane {
         }
         order.swap(row, to);
         let key = self.ivars().key;
-        self.command("Could not move the parameter set", |app| {
-            app.set_parameter_set_order(key, &order)
+        self.command("Could not move the parameter", |app| {
+            app.set_parameter_order(key, &order)
         });
     }
 
-    /// Asks before deleting the set in `row` when it has values.
-    pub fn delete_set(&self, row: usize) {
-        let Some(id) = self.ivars().sets.borrow().get(row).map(|s| s.id) else {
+    /// Asks before deleting the set in column `index` (0 for the first set) when it has values.
+    pub fn delete_set(&self, index: usize) {
+        let Some(id) = self.ivars().sets.borrow().get(index).map(|s| s.id) else {
             return;
         };
         let key = self.ivars().key;
@@ -486,12 +496,6 @@ impl ParametersPane {
         self.open_sheet(NameEdit::AddParameter, "Add Parameter", "");
     }
 
-    /// Opens the name sheet to rename `name` in every set.
-    pub fn begin_rename_parameter(&self, name: &str) {
-        let title = format!("Rename “{name}”");
-        self.open_sheet(NameEdit::RenameParameter(name.to_owned()), &title, name);
-    }
-
     /// The name sheet's Save: closes it once the model took the name, else alerts and stays
     /// open on it.
     pub fn save_name(&self) {
@@ -504,11 +508,9 @@ impl ParametersPane {
             NameEdit::AddParameter => self.command("Could not add the parameter", |app| {
                 app.add_parameter(key, &name)
             }),
-            NameEdit::RenameParameter(old) if old == name.trim() => Some(()),
-            NameEdit::RenameParameter(old) => self
-                .command("Could not rename the parameter", |app| {
-                    app.rename_parameter(key, &old, &name)
-                }),
+            NameEdit::RenameSet(id) => self.command("Could not rename the parameter set", |app| {
+                app.rename_parameter_set(key, id, &name)
+            }),
         };
         if saved.is_some() {
             self.close_sheet();
@@ -534,10 +536,10 @@ impl ParametersPane {
     }
 
     fn set_value(&self, row: usize, column: usize, value: Option<&str>) {
-        let set = self.ivars().sets.borrow().get(row).map(|s| s.id);
-        let name = column
+        let name = self.ivars().parameters.borrow().get(row).cloned();
+        let set = column
             .checked_sub(1)
-            .and_then(|i| self.ivars().parameters.borrow().get(i).cloned());
+            .and_then(|i| self.ivars().sets.borrow().get(i).map(|s| s.id));
         let (Some(set), Some(name)) = (set, name) else {
             return;
         };
@@ -550,21 +552,30 @@ impl ParametersPane {
         }
     }
 
-    /// The model's order for the columns after the user dragged one.
+    /// The model's order for the sets after the user dragged a column.
     fn columns_moved(&self) {
-        let order: Vec<String> = self
+        let ids: Vec<String> = self
             .table()
             .tableColumns()
             .iter()
             .map(|c| c.identifier().to_string())
-            .filter(|id| id != SET_COLUMN)
+            .filter(|id| id != NAME_COLUMN)
             .collect();
-        if order == *self.ivars().parameters.borrow() {
+        let order: Vec<ParameterSetId> = ids
+            .iter()
+            .filter_map(|id| {
+                let sets = self.ivars().sets.borrow();
+                sets.iter().find(|s| s.id.to_string() == *id).map(|s| s.id)
+            })
+            .collect();
+        let current: Vec<ParameterSetId> =
+            self.ivars().sets.borrow().iter().map(|s| s.id).collect();
+        if order == current {
             return;
         }
         let key = self.ivars().key;
-        let moved = self.command("Could not move the parameter", |app| {
-            app.set_parameter_order(key, &order)
+        let moved = self.command("Could not move the parameter set", |app| {
+            app.set_parameter_set_order(key, &order)
         });
         if moved.is_none() {
             self.rebuild_columns();
@@ -572,7 +583,7 @@ impl ParametersPane {
         }
     }
 
-    /// One column for the set names, then one per parameter, in the model's order.
+    /// One column for the parameter names, then one per set, in the model's order.
     fn rebuild_columns(&self) {
         let mtm = self.mtm();
         let table = self.table();
@@ -584,13 +595,17 @@ impl ParametersPane {
         for column in old {
             table.removeTableColumn(&column);
         }
-        let mut columns = vec![(SET_COLUMN.to_owned(), "Set".to_owned(), SET_COLUMN_WIDTH)];
+        let mut columns = vec![(
+            NAME_COLUMN.to_owned(),
+            "Parameter".to_owned(),
+            NAME_COLUMN_WIDTH,
+        )];
         columns.extend(
             self.ivars()
-                .parameters
+                .sets
                 .borrow()
                 .iter()
-                .map(|p| (p.clone(), p.clone(), VALUE_COLUMN_WIDTH)),
+                .map(|s| (s.id.to_string(), s.name.clone(), VALUE_COLUMN_WIDTH)),
         );
         for (id, title, width) in columns {
             let column = NSTableColumn::initWithIdentifier(
@@ -619,13 +634,12 @@ impl ParametersPane {
     /// An editable text field for cell `row`, `column`.
     fn cell_view(&self, row: usize, column: usize) -> Retained<NSView> {
         let mtm = self.mtm();
-        let sets = self.ivars().sets.borrow();
-        let set = sets.get(row);
+        let name = self.ivars().parameters.borrow().get(row).cloned();
         let (text, placeholder) = if column == 0 {
-            (set.map(|s| s.name.clone()).unwrap_or_default(), None)
+            (name.unwrap_or_default(), None)
         } else {
-            let name = self.ivars().parameters.borrow().get(column - 1).cloned();
-            match name.and_then(|n| set?.values.get(&n).cloned()) {
+            let sets = self.ivars().sets.borrow();
+            match name.and_then(|n| sets.get(column - 1)?.values.get(&n).cloned()) {
                 None => (String::new(), Some(UNSET_PLACEHOLDER)),
                 Some(v) if v.is_empty() => (v, Some(EMPTY_PLACEHOLDER)),
                 Some(v) => (v, None),
@@ -640,8 +654,7 @@ impl ParametersPane {
         view(layout::cell(&field, Some(&field), mtm))
     }
 
-    /// The table, in a scroll view that scrolls both ways: many parameters run wider than the
-    /// pane.
+    /// The table, in a scroll view that scrolls both ways: many sets run wider than the pane.
     fn grid(&self, mtm: MainThreadMarker) -> (Retained<NSTableView>, Retained<NSScrollView>) {
         let table = NSTableView::new(mtm);
         table.setAllowsColumnReordering(true);
@@ -687,33 +700,27 @@ impl ParametersPane {
         }
     }
 
-    /// Set items for a row, parameter items for a column, value items for a value cell.
+    /// Parameter items for a row, set items for a column, value items for a value cell.
     fn fill_menu(&self, menu: &NSMenu, (row, column): (NSInteger, NSInteger)) {
         self.ivars().menu_cell.set((row, column));
         menu.removeAllItems();
-        let sets = self.ivars().sets.borrow().len();
+        let parameters = self.ivars().parameters.borrow().clone();
         let mut groups: Vec<Vec<(String, Sel, bool)>> = Vec::new();
-        if let Ok(r) = usize::try_from(row)
-            && r < sets
-        {
-            groups.push(vec![
-                ("Rename Set".into(), sel!(renameParameterSet:), true),
-                ("Move Up".into(), sel!(moveParameterSetUp:), r > 0),
-                (
-                    "Move Down".into(),
-                    sel!(moveParameterSetDown:),
-                    r + 1 < sets,
-                ),
-                ("Delete Set…".into(), sel!(deleteParameterSet:), true),
-            ]);
-        }
-        let parameter = self.menu_parameter();
-        if let Some(name) = &parameter {
+        let parameter = usize::try_from(row)
+            .ok()
+            .and_then(|r| Some((r, parameters.get(r)?.clone())));
+        if let Some((r, name)) = &parameter {
             groups.push(vec![
                 (
-                    format!("Rename Parameter “{name}”…"),
+                    format!("Rename Parameter “{name}”"),
                     sel!(renameParameter:),
                     true,
+                ),
+                ("Move Up".into(), sel!(moveParameterUp:), *r > 0),
+                (
+                    "Move Down".into(),
+                    sel!(moveParameterDown:),
+                    r + 1 < parameters.len(),
                 ),
                 (
                     format!("Delete Parameter “{name}”…"),
@@ -722,13 +729,25 @@ impl ParametersPane {
                 ),
             ]);
         }
-        if let (Ok(r), Some(name)) = (usize::try_from(row), &parameter) {
-            let value = self
-                .ivars()
-                .sets
-                .borrow()
-                .get(r)
-                .and_then(|s| s.values.get(name).cloned());
+        let set = self
+            .menu_set()
+            .and_then(|i| self.ivars().sets.borrow().get(i).cloned());
+        if let Some(set) = &set {
+            groups.push(vec![
+                (
+                    format!("Rename Set “{}”…", set.name),
+                    sel!(renameParameterSet:),
+                    true,
+                ),
+                (
+                    format!("Delete Set “{}”…", set.name),
+                    sel!(deleteParameterSet:),
+                    true,
+                ),
+            ]);
+        }
+        if let (Some((_, name)), Some(set)) = (&parameter, &set) {
+            let value = set.values.get(name);
             groups.push(vec![
                 (
                     "Unset Value".into(),
@@ -738,7 +757,7 @@ impl ParametersPane {
                 (
                     "Set Empty Value".into(),
                     sel!(setEmptyParameterValue:),
-                    value.as_deref() != Some(""),
+                    value.map(String::as_str) != Some(""),
                 ),
             ]);
         }
@@ -766,15 +785,19 @@ impl ParametersPane {
         }
     }
 
-    /// The parameter of the column the context menu was opened on.
-    fn menu_parameter(&self) -> Option<String> {
+    /// The index of the set whose column the context menu was opened on.
+    fn menu_set(&self) -> Option<usize> {
         let column = usize::try_from(self.ivars().menu_cell.get().1).ok()?;
         let id = self.table().tableColumns().iter().nth(column)?.identifier();
         let id = id.to_string();
-        (id != SET_COLUMN).then_some(id)
+        self.ivars()
+            .sets
+            .borrow()
+            .iter()
+            .position(|s| s.id.to_string() == id)
     }
 
-    fn row_of(&self, id: ParameterSetId) -> Option<usize> {
+    fn set_index(&self, id: ParameterSetId) -> Option<usize> {
         self.ivars().sets.borrow().iter().position(|s| s.id == id)
     }
 
@@ -811,7 +834,7 @@ impl ParametersPane {
         Retained<NSTextField>,
     ) {
         let name = NSTextField::textFieldWithString(ns_string!(""), mtm);
-        name.setPlaceholderString(Some(ns_string!("customer_id")));
+        name.setPlaceholderString(Some(ns_string!("Name")));
         let group = form::group(vec![form::field_row("Name", &name, mtm)], mtm);
         let title = form::header("", mtm);
         let cancel = layout::cancel_button("Cancel", self, sel!(cancelName:), mtm);
@@ -822,8 +845,8 @@ impl ParametersPane {
                     .header(&title)
                     .group(&group)
                     .text(
-                        "Letters, digits and _, not starting with a digit. Renaming changes \
-                         the name in every set, not in the requests that use it.",
+                        "A parameter's name has letters, digits and _, and does not start with \
+                         a digit. Renaming a parameter does not change the requests that use it.",
                     )
                     .build(),
             ],
