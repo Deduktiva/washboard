@@ -811,6 +811,9 @@ fn the_parameter_grid_asks_before_losing_values() {
     assert_eq!(project(&app, key).parameters(), ["b", "a"]);
     app.set_parameter_set_order(key, &[second]).expect("order");
     assert_eq!(names(&app), ["New Set 2", "New Set"]);
+    let copy = app.duplicate_parameter_set(key, second).expect("copy");
+    assert_eq!(names(&app), ["New Set 2", "New Set 2 copy", "New Set"]);
+    app.delete_parameter_set(key, copy).expect("delete");
 
     // Without values, nothing is lost and nothing is asked.
     app.ask_delete_parameter(key, "b").expect("ask");

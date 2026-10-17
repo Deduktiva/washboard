@@ -1402,6 +1402,30 @@ fn parameters_and_sets() {
         .collect();
     assert_eq!(names, ["Customer B", "First"]);
 
+    // A duplicate copies the values and sits right after its original.
+    let copy = p.duplicate_parameter_set(b.id).expect("duplicate");
+    assert_eq!(copy.name, "Customer B copy");
+    assert_eq!(copy.values, p.parameter_set(b.id).expect("b").values);
+    let again = p.duplicate_parameter_set(b.id).expect("duplicate");
+    assert_eq!(again.name, "Customer B copy 2");
+    let names: Vec<String> = p
+        .parameter_sets()
+        .expect("sets")
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Customer B",
+            "Customer B copy 2",
+            "Customer B copy",
+            "First"
+        ]
+    );
+    p.delete_parameter_set(copy.id).expect("delete");
+    p.delete_parameter_set(again.id).expect("delete");
+
     p.delete_parameter("id").expect("delete");
     assert!(!p.parameter_set(b.id).expect("b").values.contains_key("id"));
     assert!(matches!(
