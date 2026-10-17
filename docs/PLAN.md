@@ -65,8 +65,8 @@ is the reference for the details they leave out.
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
 | [response pane](specs/response-pane.md) | response, history drawer, older exchanges |
-| [settings](specs/settings.md) | the Settings window, servers |
-| [parameter sets](specs/parameters.md) | `${name}` placeholders, sets, project-wide selection and pins (planned) |
+| [settings](specs/settings.md) | the Settings window, servers, parameters |
+| [parameter sets](specs/parameters.md) | `${name}` placeholders, sets, project-wide selection and pins |
 | [WSDL](specs/wsdl.md) | WSDL details, `rpc/literal` |
 | [schema bundle](specs/schema-bundle.md) | turning the WSDL's schemas into what libxml2 compiles |
 | [schema model](specs/schema-model.md) | the Rust XSD model: `xsi:type`, abstract, `xs:any`, templates |

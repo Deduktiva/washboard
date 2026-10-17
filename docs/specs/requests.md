@@ -12,14 +12,18 @@ what a send returns: [response pane](response-pane.md).
   The new row enters inline-rename immediately.
 - **Rename** (Return / double-click), **Duplicate** (⌘D → `GetCustomer 1 copy`, beside the
   original), **Delete** (⌘⌫, confirms; history deleted with it).
-- Each request remembers `last_server_id`; the toolbar server popup shows it. A new request
-  uses the most recently used server of the project.
+- The server and the parameter set are chosen for the whole project; a request can pin either
+  ([parameter sets](parameters.md), "Selection"). New requests have no pins; Duplicate copies
+  them.
 
 ## Send
-- Toolbar: server popup, Send (⌘↩). Sends to `server.url` with `Content-Type: text/xml;
-  charset=utf-8` and the `SOAPAction` header from the binding operation ([WSDL](wsdl.md)).
-- The request is validated first; **Send is blocked** while it has errors
-  ([validation](validation.md)). It is sent as written: Send never formats it.
+- Toolbar: server popup, parameter set popup (while the project has sets), Send (⌘↩). Sends to
+  `server.url` with `Content-Type: text/xml; charset=utf-8` and the `SOAPAction` header from the
+  binding operation ([WSDL](wsdl.md)).
+- Send fills in the `${name}` placeholders once, validates that text and sends exactly it
+  ([parameter sets](parameters.md)). **Send is blocked** while it has errors
+  ([validation](validation.md)), unresolvable placeholders included. Apart from the
+  placeholders it is sent as written: Send never formats it.
 - Basic auth: `Authorization` header built up front (preemptive, no 401 round-trip).
 - TLS: platform verification; if the server has "ignore TLS errors", certificate and hostname
   checks are disabled for that request only. The log records whether verification was skipped.
@@ -55,3 +59,7 @@ in one folder). All are renames on disk, atomic like other writes.
 path; a bare name that matches two requests fails and lists their paths.
 `request mv <name> <folder>` moves a request (creating the folder; `/` for the top level).
 `request new` places like New Request.
+`request send` and `request validate` take `--set <name>`, and `request send` `--server
+<name>`, for that run only; without them the request's pin, else the project's choice, is used.
+`request show --resolved` prints the text as it would be sent. `set …` and `param …` edit the
+sets and parameters ([parameter sets](parameters.md), "CLI").
