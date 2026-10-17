@@ -8,11 +8,12 @@ use std::process::ExitCode;
 use anyhow::Context;
 use serde::Serialize;
 use washboard_core::http;
+use washboard_core::interpolate;
 use washboard_core::model::OperationRef;
 use washboard_core::xml;
 
 use crate::commands::operation;
-use crate::support;
+use crate::{support, validation};
 
 #[derive(Debug, Serialize)]
 struct RequestRow {
@@ -25,6 +26,8 @@ struct RequestRow {
     /// `{ns}Binding#Operation` the request was created for; a hint that may be stale.
     operation: Option<String>,
     last_server: Option<String>,
+    pinned_server: Option<String>,
+    pinned_parameter_set: Option<String>,
 }
 
 /// Requests as recorded in the database. Read-only, so files added in Finder since the last
@@ -32,6 +35,7 @@ struct RequestRow {
 pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let servers = project.servers()?;
+    let sets = project.parameter_sets()?;
     let rows: Vec<RequestRow> = project
         .requests()?
         .into_iter()
@@ -42,6 +46,11 @@ pub fn list(dir: &Path, json: bool) -> anyhow::Result<ExitCode> {
             folder: r.folder,
             operation: r.operation.as_ref().map(OperationRef::to_string),
             last_server: http::server_name(&servers, r.last_server).map(str::to_owned),
+            pinned_server: http::server_name(&servers, r.pinned_server).map(str::to_owned),
+            pinned_parameter_set: r
+                .pinned_parameter_set
+                .and_then(|id| sets.iter().find(|s| s.id == id))
+                .map(|s| s.name.clone()),
         })
         .collect();
     if json {
@@ -130,10 +139,22 @@ pub fn delete(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn show(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
+/// Prints the request as stored, or with `resolved` as it would be sent: placeholders filled
+/// in from `set` (else the request's pin, else the project's set). Placeholders that cannot be
+/// filled in are reported and exit 1.
+pub fn show(dir: &Path, name: &str, resolved: bool, set: Option<&str>) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let r = support::find_request(&project, name)?;
-    let text = project.read_request(r.id)?;
+    let mut text = project.read_request(r.id)?;
+    if resolved {
+        let (_, values) = support::parameter_values(&project, &r, set)?;
+        let result = interpolate::resolve(&text, &values);
+        if result.has_errors() {
+            validation::print_diagnostics(&r.name, &text, &result.diagnostics);
+            return Ok(ExitCode::from(1));
+        }
+        text = result.text;
+    }
     let mut out = io::stdout().lock();
     out.write_all(text.as_bytes())?;
     if !text.ends_with('\n') {

@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use washboard_core::diag::{DiagSource, Diagnostic, LineIndex, Severity};
+use washboard_core::interpolate::Values;
 use washboard_core::model::{OperationRef, RequestId};
-use washboard_core::validate::validate_request;
+use washboard_core::validate::validate_with_parameters;
 use washboard_core::xml::utf16::byte_to_utf16;
 use washboard_core::xml::well_formedness_error;
 
@@ -98,7 +99,8 @@ pub(crate) enum Check {
 
 /// Which schema a full check can use.
 enum Against {
-    Schema(Arc<ProjectSchema>),
+    /// The schema, with the values the request's placeholders resolve to.
+    Schema(Arc<ProjectSchema>, Values),
     /// Only well-formedness, with this warning saying why.
     WellFormedOnly(String),
 }
@@ -148,7 +150,7 @@ impl App {
                 let against = match &window.schema {
                     SchemaState::Loading => return,
                     SchemaState::Ready(schema) if schema.compile_errors().is_empty() => {
-                        Against::Schema(schema.clone())
+                        Against::Schema(schema.clone(), window.parameter_values())
                     }
                     SchemaState::Ready(_) => Against::WellFormedOnly(
                         "The WSDL's schemas could not be compiled; only well-formedness is \
@@ -216,9 +218,11 @@ impl App {
 
 fn full_check(text: &str, against: &Against, hint: Option<&OperationRef>) -> Vec<Issue> {
     let diagnostics = match against {
-        Against::Schema(schema) => match schema.request_schema() {
+        Against::Schema(schema, values) => match schema.request_schema() {
             Some(request_schema) => {
-                validate_request(&schema.wsdl, &request_schema, text, hint).diagnostics
+                validate_with_parameters(&schema.wsdl, &request_schema, text, values, hint)
+                    .validation
+                    .diagnostics
             }
             None => Vec::new(),
         },

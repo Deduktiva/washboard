@@ -33,8 +33,13 @@ pub enum Event {
     BeginRenameFolder { project: ProjectKey, path: String },
     /// The server list or the WSDL's addresses changed; the popup and the Servers pane reload.
     ServersChanged { project: ProjectKey },
-    /// The server popup's selection changed.
+    /// The server popup's selection or its pin changed.
     ServerSelectionChanged { project: ProjectKey },
+    /// The project's variables or parameter sets changed; the set popup and the Parameters
+    /// pane reload.
+    ParametersChanged { project: ProjectKey },
+    /// The parameter set popup's selection or its pin changed.
+    ParameterSetSelectionChanged { project: ProjectKey },
     /// The editor shows a different request (or none), or its text was replaced by the model;
     /// reload its whole text, and the response pane and history with it.
     EditorReplaced { project: ProjectKey },
