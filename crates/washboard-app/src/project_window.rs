@@ -56,6 +56,9 @@ pub const PIN_ITEM_TAG: NSInteger = -1;
 pub const NO_SET_ITEM_TAG: NSInteger = -2;
 /// The tag of the server popup's "No Servers", which stands for nothing.
 const NO_SERVERS_TAG: NSInteger = -3;
+/// Separators get a tag of their own: the default, 0, is the first item's, and
+/// `selectItemWithTag` picks the first item that has it.
+const SEPARATOR_TAG: NSInteger = -4;
 
 #[derive(Debug)]
 pub struct ProjectIvars {
@@ -516,9 +519,7 @@ impl ProjectWindowController {
         let popup = &self.ivars().parameter_sets;
         popup.removeAllItems();
         add_item(popup, "No Parameter Set", NO_SET_ITEM_TAG);
-        if let Some(menu) = popup.menu() {
-            menu.addItem(&NSMenuItem::separatorItem(self.mtm()));
-        }
+        add_separator(popup);
         let names: Vec<&str> = sets.iter().map(|(_, name)| name.as_str()).collect();
         add_items(popup, &names);
         add_pin_item(popup);
@@ -1153,10 +1154,16 @@ fn add_item(popup: &NSPopUpButton, title: &str, tag: NSInteger) {
 
 /// A separator and "Pin to This Request", at the end of the popup.
 fn add_pin_item(popup: &NSPopUpButton) {
-    if let Some(menu) = popup.menu() {
-        menu.addItem(&NSMenuItem::separatorItem(popup.mtm()));
-    }
+    add_separator(popup);
     add_item(popup, "Pin to This Request", PIN_ITEM_TAG);
+}
+
+fn add_separator(popup: &NSPopUpButton) {
+    if let Some(menu) = popup.menu() {
+        let separator = NSMenuItem::separatorItem(popup.mtm());
+        separator.setTag(SEPARATOR_TAG);
+        menu.addItem(&separator);
+    }
 }
 
 /// A pinned popup is hard to miss (`docs/specs/parameters.md`, "Selection"): its shown item
