@@ -188,6 +188,13 @@ define_class!(
             }
         }
 
+        #[unsafe(method(duplicateParameterSet:))]
+        fn duplicate_set_action(&self, _sender: Option<&AnyObject>) {
+            if let Some(index) = self.menu_set() {
+                self.duplicate_set(index);
+            }
+        }
+
         #[unsafe(method(deleteParameterSet:))]
         fn delete_set_action(&self, _sender: Option<&AnyObject>) {
             if let Some(index) = self.menu_set() {
@@ -443,6 +450,21 @@ impl ParametersPane {
             app.add_parameter_set(key)
         });
         if let Some(index) = added.and_then(|id| self.set_index(id)) {
+            self.begin_rename_set(index);
+        }
+    }
+
+    /// Duplicate Set: a copy of the set in column `index` with its values, after it; the
+    /// sheet opens to name it, like Add Set.
+    pub fn duplicate_set(&self, index: usize) {
+        let Some(id) = self.ivars().sets.borrow().get(index).map(|s| s.id) else {
+            return;
+        };
+        let key = self.ivars().key;
+        let copy = self.command("Could not duplicate the parameter set", |app| {
+            app.duplicate_parameter_set(key, id)
+        });
+        if let Some(index) = copy.and_then(|id| self.set_index(id)) {
             self.begin_rename_set(index);
         }
     }
@@ -750,6 +772,11 @@ impl ParametersPane {
                 (
                     format!("Rename Set “{}”…", set.name),
                     sel!(renameParameterSet:),
+                    true,
+                ),
+                (
+                    format!("Duplicate Set “{}”", set.name),
+                    sel!(duplicateParameterSet:),
                     true,
                 ),
                 (

@@ -3633,6 +3633,7 @@ mod checks {
             header_menu,
             [
                 ("Rename Set “Alice”…".to_owned(), true),
+                ("Duplicate Set “Alice”".to_owned(), true),
                 ("Delete Set “Alice”…".to_owned(), true)
             ]
         );
@@ -3673,6 +3674,26 @@ mod checks {
             click(pin);
             assert!(!pinned_shown(pin));
         }
+
+        // Duplicate Set copies the values beside the original and opens the sheet to name it.
+        pane.duplicate_set(0);
+        wait_until("the copy's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Alice copy"]);
+        pane.name_field().setStringValue(ns_string!("Bob"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Bob"]);
+        assert_eq!(pane.rows()[0][2].as_deref(), Some(""));
+        ctx.delegate
+            .command("delete copy", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[1].id;
+                app.delete_parameter_set(key, set)
+            })
+            .expect("deleted");
 
         // Deleting the set asks first, as it has a value; the popup goes with the last set.
         pane.delete_set(0);

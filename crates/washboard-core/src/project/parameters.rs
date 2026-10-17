@@ -175,6 +175,31 @@ impl Project {
         Ok(())
     }
 
+    /// Copies the set with all its values into `<name> copy` (numbered when taken), placed
+    /// right after the original.
+    pub fn duplicate_parameter_set(&mut self, id: ParameterSetId) -> Result<ParameterSet> {
+        let sets = self.parameter_sets()?;
+        let original = sets
+            .iter()
+            .find(|s| s.id == id)
+            .ok_or(ProjectError::UnknownParameterSet(id))?;
+        let taken: HashSet<String> = sets.iter().map(|s| names::fold(s.name.trim())).collect();
+        let copy = ParameterSet {
+            id: ParameterSetId::new(),
+            name: names::copy_name(original.name.trim(), &taken),
+            values: original.values.clone(),
+        };
+        self.add_parameter_set(&copy)?;
+        let mut order: Vec<ParameterSetId> = sets.iter().map(|s| s.id).collect();
+        let at = order
+            .iter()
+            .position(|s| *s == id)
+            .map_or(order.len(), |i| i + 1);
+        order.insert(at, copy.id);
+        self.set_parameter_set_order(&order)?;
+        Ok(copy)
+    }
+
     pub fn rename_parameter_set(&mut self, id: ParameterSetId, name: &str) -> Result<()> {
         self.check_set_name(id, name)?;
         let n = self.conn.execute(

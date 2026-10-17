@@ -164,6 +164,17 @@ impl App {
         Ok(set.id)
     }
 
+    /// Settings ▸ Parameters ▸ Duplicate Set: a copy with the same values, after the original.
+    pub fn duplicate_parameter_set(
+        &mut self,
+        key: ProjectKey,
+        set: ParameterSetId,
+    ) -> Result<ParameterSetId, ModelError> {
+        let copy = self.window(key)?.project.duplicate_parameter_set(set)?;
+        self.parameters_changed(key)?;
+        Ok(copy.id)
+    }
+
     pub fn rename_parameter_set(
         &mut self,
         key: ProjectKey,
