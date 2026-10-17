@@ -63,7 +63,7 @@ must likewise skip its build when cross-checking for macOS from another host (se
   state is main-thread only and deliberately not `Send`; workers get immutable `Arc` snapshots,
   never project state.
 - **libxml2 validation:** when libxml2 objects to something SOAP allows, remove it from the
-  parsed tree before validating (`CompiledSchema::validate_text_stripping`); never filter its
+  parsed tree before validating (`CompiledSchema::validate` with `strip`); never filter its
   errors afterwards (`validation.md`).
 - **Errors:** per-module error enums with `thiserror`. No `unwrap`/`expect` on user input or
   file contents outside tests; malformed WSDLs are normal input.

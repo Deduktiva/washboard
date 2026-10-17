@@ -36,7 +36,6 @@ GUI draft: [`gui-draft.html`](gui-draft.html) (open in a browser), ASCII version
 - XML editor: syntax highlighting, line numbers, live well-formedness errors,
   schema-aware completion, template generation per operation, on-demand and pre-send XSD validation.
 - Send, response viewer, persisted per-request response history.
-- HTTP log window (in-memory only).
 - Autosave + global "Save All" (⌘S).
 - Multiple projects open at once, reopened on next launch.
 
@@ -60,7 +59,7 @@ is the reference for the details they leave out.
 | [disk layout](specs/disk-layout.md) | the project folder, request files and folders, `washboard.sqlite`, locking |
 | [macOS app state](specs/macos-app-state.md) | open projects and restore, app settings |
 | [new project](specs/new-project.md) | New Project, the import check, Replace WSDL |
-| [requests](specs/requests.md) | request and folder commands, placement, sending, the HTTP log, the CLI |
+| [requests](specs/requests.md) | request and folder commands, placement, sending, the CLI |
 | [sidebar](specs/sidebar.md) | the project window's source list |
 | [editor](specs/editor.md) | text view, checking, completion, Format XML, autosave, outside edits |
 | [validation](specs/validation.md) | validation steps, errors and spans |
@@ -93,8 +92,8 @@ buffers, autosave/Save All, reopen projects on launch, with a fake front end in 
 the AppKit shell to it.
 
 **M3 — Send loop**
-Server popup, send with pre-validation, response pane with tabs, history, HTTP log panel,
-project settings sheet (servers + Keychain).
+Server popup, send with pre-validation, response pane with tabs, history, project settings
+sheet (servers + Keychain).
 
 **M4 — Schema-aware editor**
 Completion, hover docs, gutter markers, issues bar, format XML, live validation if fast enough.
@@ -105,17 +104,13 @@ Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, ac
 `cargo-packager` configuration plus `rcodesign` (no hand-written bundling or signing scripts).
 
 ### CI
-- Linux: fmt, clippy, tests for every crate except the AppKit front end (including
-  `washboard-ui-model` with its fake front end), the fixture oracle, `cargo deny check bans`.
-- macOS runner (`macos-26`): clippy and tests for everything, including the app's headless
-  AppKit checks (`crates/washboard-app/tests/appkit.rs`); an unsigned `Washboard.app` artifact.
+`.github/workflows/ci.yml`; the commands are listed in `CLAUDE.md`.
 
 ---
 
 ## Open questions
 
-None blocking. Decided: history retention 20 per request, HTTP log keeps 50 exchanges;
-both may become configurable in v2.
+None blocking. Decided: history retention 20 per request; may become configurable in v2.
 
 ## Planned for v2
 
@@ -125,10 +120,10 @@ both may become configurable in v2.
   (sequence position, `maxOccurs` already reached, chosen `xs:choice` branch) and offers only
   what may legally come next, ranking required elements first.
 - **Decision pending: own HTTP/1.1 client instead of `ureq`.** `ureq` does not expose the raw
-  response, so the HTTP log shows the canonical reason phrase instead of the server's status
+  response, so the Headers tab shows the canonical reason phrase instead of the server's status
   line, lowercased header names, and repeated headers grouped by name; the TLS version is
   unknown. A small client on `native-tls` + `httparse` (POST only, `Content-Length` and chunked
-  responses, no redirects, no proxies) would make the log byte-exact in both directions and
+  responses, no redirects, no proxies) would make the recorded exchange byte-exact in both directions and
   drop a dependency, at the cost of owning chunked decoding and timeout handling. v1 stays on
   `ureq`.
-- **Configurable retention:** history entries per request (v1: 20) and HTTP log size (v1: 50).
+- **Configurable retention:** history entries per request (v1: 20).

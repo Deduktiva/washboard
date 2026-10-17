@@ -22,17 +22,9 @@ what a send returns: [response pane](response-pane.md).
   ([validation](validation.md)). It is sent as written: Send never formats it.
 - Basic auth: `Authorization` header built up front (preemptive, no 401 round-trip).
 - TLS: platform verification; if the server has "ignore TLS errors", certificate and hostname
-  checks are disabled for that request only. The log records whether verification was skipped.
+  checks are disabled for that request only.
 - No redirects and no proxies ([network](network.md)).
-- The exchange goes into the request's history ([response pane](response-pane.md)) and the
-  app's HTTP log (below).
-
-## HTTP log (Window ▸ HTTP Log, ⌥⌘L)
-One panel for the app, across projects. Shows the last exchange in full: request line, headers,
-body; status line, headers, body; timing; TLS info. Keeps the last 50 exchanges in memory in a
-list above (small extension of "last request and response"; trivially dropped if unwanted). Not
-persisted. Bodies over 5 MB are truncated in the view. Authorization values are masked by
-default (click to reveal).
+- The exchange goes into the request's history ([response pane](response-pane.md)).
 
 ## Placement
 The model's `new_request` takes the target folder. The app passes the folder selected in the

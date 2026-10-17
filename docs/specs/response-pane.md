@@ -21,7 +21,7 @@
   - A titlebar accessory (`NSTitlebarAccessoryViewController`, layout attribute bottom) appears
     under the toolbar: "Older exchange · <time> · <server>", **Restore Request**, and **Show
     Latest** (default button, Esc). Its background is a yellow tint that works in light and dark.
-    While it shows, the toolbar's own items (server popup, Send, HTTP Log) are hidden. A unified
+    While it shows, the toolbar's own items (server popup, Send) are hidden. A unified
     toolbar cannot be coloured itself; the accessory is AppKit's way to attach a bar to it.
   - Send (⌘↩), Edit ▸ Validate (⌘B) and Format XML are disabled, in the menu too, and the
     model refuses to send in this state, so an old exchange is never sent by a shortcut.
