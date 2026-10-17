@@ -3684,11 +3684,13 @@ mod checks {
             .expect("delete asks first");
         assert!(confirm.title.contains("Alice"), "{confirm:?}");
         ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
-        assert!(pane.rows().is_empty());
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
         assert!(!project.shows_parameter_sets());
         ctx.delegate
             .command("delete", |app| app.delete_parameter(key, "customer_id"))
             .expect("deleted");
+        assert!(pane.rows().is_empty());
         ctx.dialogs.borrow_mut().alerts.truncate(alerts);
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
