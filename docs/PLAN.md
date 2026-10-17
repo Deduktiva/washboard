@@ -104,10 +104,7 @@ Replace WSDL + report, external-change detection (FSEvents), Dark Mode check, ac
 `cargo-packager` configuration plus `rcodesign` (no hand-written bundling or signing scripts).
 
 ### CI
-- Linux: fmt, clippy, tests for every crate except the AppKit front end (including
-  `washboard-ui-model` with its fake front end), the fixture oracle, `cargo deny check bans`.
-- macOS runner (`macos-26`): clippy and tests for everything, including the app's headless
-  AppKit checks (`crates/washboard-app/tests/appkit.rs`); an unsigned `Washboard.app` artifact.
+`.github/workflows/ci.yml`; the commands are listed in `CLAUDE.md`.
 
 ---
 
