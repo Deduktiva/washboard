@@ -143,11 +143,10 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .dots i { width: 7px; height: 7px; border-radius: 50%; display: block; background: var(--ok); }
 .dots i.bad { background: var(--err); }
 .dots i.cur { box-shadow: 0 0 0 1.5px var(--sidebar), 0 0 0 3px var(--accent); }
-.hist table, .log table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.hist td, .hist th, .log td, .log th { text-align: left; padding: 4px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-.hist th, .log th { font-weight: 600; color: var(--muted); font-size: 11px; }
+.hist table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hist td, .hist th { text-align: left; padding: 4px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.hist th { font-weight: 600; color: var(--muted); font-size: 11px; }
 .hist tr.on td { background: var(--sel); color: #fff; } .hist tr.on td span { color: #fff; }
-.log tr.on td { background: var(--sel-soft); }
 .c500 { color: var(--err); font-weight: 600; } .c200 { color: var(--ok); font-weight: 600; }
 
 [hidden] { display: none !important; }
@@ -199,14 +198,6 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .prefs .sheet { margin-top: 0; width: 440px; }
 .prefs .sheet .form { grid-template-columns: 90px 1fr; }
 
-.win.log { width: 1000px; height: 560px; display: grid; grid-template-rows: 38px 150px 1fr; }
-.log .panes { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; border-top: 1px solid var(--line); }
-.log .pane { overflow: auto; font: 12px/18px var(--mono); padding: 8px 12px; white-space: pre; background: var(--code-bg); min-width: 0; }
-.log .pane + .pane { border-left: 1px solid var(--line); }
-.log .ptitle { font: 600 11px var(--ui); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); display: block; margin-bottom: 4px; }
-.log .listwrap { overflow: auto; }
-.mask { background: var(--chrome); border-radius: 3px; padding: 0 4px; color: var(--muted); }
-.tlswarn { color: var(--warn); font-weight: 600; }
 
 .win.welcome { width: 640px; height: 400px; display: grid; grid-template-columns: 250px 1fr; }
 .welcome .left { display: grid; place-content: center; justify-items: center; gap: 10px; padding: 20px; text-align: center; }
@@ -229,7 +220,6 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
     <button role="tab" aria-selected="true" data-screen="main">Project window</button>
     <button role="tab" aria-selected="false" data-screen="newproj">New project</button>
     <button role="tab" aria-selected="false" data-screen="settings">Settings</button>
-    <button role="tab" aria-selected="false" data-screen="log">HTTP log</button>
     <button role="tab" aria-selected="false" data-screen="welcome">Welcome</button>
   </div>
 
@@ -244,8 +234,6 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
           <div class="tbgroup" id="tbNormal">
             <button class="btn popup" id="serverBtn" title="Server">Staging</button>
             <button class="btn primary" id="sendBtn" title="Send (⌘↩)">▶ Send</button>
-            <span style="width:8px"></span>
-            <button class="btn icon" id="logBtn" title="HTTP Log (⌥⌘L)">≣</button>
           </div>
         </div>
         <div class="histstrip" id="histStrip" hidden>
@@ -278,12 +266,11 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
         <span class="pin" data-for="reqList">1</span>
         <span class="pin" data-for="serverBtn">2</span>
         <span class="pin" data-for="sendBtn">3</span>
-        <span class="pin" data-for="logBtn">4</span>
-        <span class="pin" data-for="xmlState" data-side="before">5</span>
-        <span class="pin" data-for="opsRow">6</span>
-        <span class="pin" data-for="respTabs" data-side="before">7</span>
-        <span class="pin" data-for="grip">8</span>
-        <span class="pin" data-for="histStrip">9</span>
+        <span class="pin" data-for="xmlState" data-side="before">4</span>
+        <span class="pin" data-for="opsRow">5</span>
+        <span class="pin" data-for="respTabs" data-side="before">6</span>
+        <span class="pin" data-for="grip">7</span>
+        <span class="pin" data-for="histStrip">8</span>
       </div>
     </div>
     <aside class="notes">
@@ -291,8 +278,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
       <ol>
         <li><span>Requests list (<code>NSOutlineView</code>, source-list style). Dot = unsaved buffer, ⚠ = last validation failed. Return renames inline; ⌘D duplicates; ⌘⌫ deletes.</span></li>
         <li><span>Server popup. Defaults to this request's last-used server; changing it is stored immediately.</span></li>
-        <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Edit ▸ Validate (⌘B) skips the wait.</span></li>
-        <li><span>HTTP Log (⌥⌘L). Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
+        <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Edit ▸ Validate (⌘B) skips the wait. Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
         <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
         <li><span>Folders: plain subfolders of the project's <code>requests/</code>. New Request (⌘N) picks the operation from a searchable list and files the request, named <code>&lt;Operation&gt; &lt;n&gt;</code>, in that operation's folder, created on first use. Drag to move.</span></li>
         <li><span>Response beside the request, in one vertical split. Its status line shares a band with the request bar; tabs Response and Headers.</span></li>
@@ -407,68 +393,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
         <li><span>Changes apply as they are made; there is no Done button. A server is edited in a sheet with Save and Cancel; Delete Server asks first.</span></li>
         <li><span>The WSDL's SOAP 1.1 addresses are listed as read-only rows. Add as Server… opens the same sheet, filled in; nothing is stored or contacted before Save.</span></li>
         <li><span>User and Password show only with Basic auth. Switching auth off removes the stored password.</span></li>
-        <li><span>Ignoring certificate errors disables both chain and hostname checks for this server only. The HTTP log marks such exchanges.</span></li>
-      </ol>
-    </aside>
-  </section>
-
-  <!-- HTTP LOG -->
-  <section class="stage" data-panel="log" hidden>
-    <div class="scroller">
-      <div class="win log">
-        <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="wtitle">HTTP Log</div><div class="spacer"></div><button class="btn">Clear</button></div>
-        <div class="listwrap">
-          <table>
-            <tr><th>Time</th><th>Project</th><th>Request</th><th>Host</th><th>Status</th><th>Duration</th><th>Size</th></tr>
-            <tr class="on"><td>14:03:12</td><td>Customer API</td><td>GetCustomer 1</td><td>stg.example.com</td><td class="c200">200</td><td>143 ms</td><td>1.2 KB</td></tr>
-            <tr><td>14:01:55</td><td>Customer API</td><td>CreateOrder 1</td><td>stg.example.com</td><td class="c500">500</td><td>98 ms</td><td>0.6 KB</td></tr>
-            <tr><td>13:58:40</td><td>Billing</td><td>GetInvoice 3</td><td>billing.internal</td><td class="c200">200</td><td>412 ms</td><td>18.4 KB</td></tr>
-          </table>
-        </div>
-        <div class="panes">
-          <div class="pane"><span class="ptitle">Request</span>POST /ws/customer HTTP/1.1
-Host: stg.example.com
-Content-Type: text/xml; charset=utf-8
-SOAPAction: "urn:example:customer/GetCustomer"
-Authorization: <span class="mask">Basic ••••• (click to reveal)</span>
-Content-Length: 412
-
-<span class="t">&lt;soapenv:Envelope</span> <span class="a">xmlns:soapenv</span>=<span class="s">"http://schemas.xmlsoap.org/soap/envelope/"</span>
-                  <span class="a">xmlns:cus</span>=<span class="s">"urn:example:customer"</span><span class="t">&gt;</span>
-  <span class="t">&lt;soapenv:Body&gt;</span>
-    <span class="t">&lt;cus:GetCustomer&gt;</span>
-      <span class="t">&lt;cus:customerId&gt;</span>100231<span class="t">&lt;/cus:customerId&gt;</span>
-    <span class="t">&lt;/cus:GetCustomer&gt;</span>
-  <span class="t">&lt;/soapenv:Body&gt;</span>
-<span class="t">&lt;/soapenv:Envelope&gt;</span>
-
-<span class="tlswarn">TLS 1.3 · certificate verification SKIPPED (server setting)</span></div>
-          <div class="pane"><span class="ptitle">Response</span>HTTP/1.1 200 OK
-Content-Type: text/xml; charset=utf-8
-Content-Length: 1234
-Date: Tue, 06 Oct 2026 14:03:12 GMT
-
-<span class="t">&lt;soap:Envelope</span> <span class="a">xmlns:soap</span>=<span class="s">"http://schemas.xmlsoap.org/soap/envelope/"</span><span class="t">&gt;</span>
-  <span class="t">&lt;soap:Body&gt;</span>
-    <span class="t">&lt;GetCustomerResponse</span> <span class="a">xmlns</span>=<span class="s">"urn:example:customer"</span><span class="t">&gt;</span>
-      <span class="t">&lt;customer&gt;</span>
-        <span class="t">&lt;id&gt;</span>100231<span class="t">&lt;/id&gt;</span>
-        <span class="t">&lt;name&gt;</span>Huber Logistik GmbH<span class="t">&lt;/name&gt;</span>
-        <span class="t">&lt;country&gt;</span>AT<span class="t">&lt;/country&gt;</span>
-      <span class="t">&lt;/customer&gt;</span>
-    <span class="t">&lt;/GetCustomerResponse&gt;</span>
-  <span class="t">&lt;/soap:Body&gt;</span>
-<span class="t">&lt;/soap:Envelope&gt;</span></div>
-        </div>
-      </div>
-    </div>
-    <aside class="notes">
-      <h2>Notes</h2>
-      <ol>
-        <li><span>Window ▸ HTTP Log (⌥⌘L). One panel for the whole app, across projects.</span></li>
-        <li><span>The newest exchange is selected automatically. The list holds the last 50 in memory; nothing is written to disk.</span></li>
-        <li><span>Authorization headers are masked by default.</span></li>
-        <li><span>TLS line shows protocol and whether verification was skipped.</span></li>
+        <li><span>Ignoring certificate errors disables both chain and hostname checks for this server only.</span></li>
       </ol>
     </aside>
   </section>

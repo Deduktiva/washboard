@@ -5,7 +5,7 @@ Interactive version: [`gui-draft.html`](gui-draft.html) (open in a browser).
 ## Project window
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ ● ● ●  Customer API                                           [Staging ▾] [▶]           [≣]        │
+│ ● ● ●  Customer API                                           [Staging ▾] [▶]                      │
 ├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
 │ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCustomer  ✓  │ 200 · 143 ms · 1.2 KB · Staging │
 │  ▾ GetCustomer/      │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
@@ -86,21 +86,3 @@ Edit… (sheet)
 │ [Delete Server]            [Cancel] [Save]   │
 └──────────────────────────────────────────────┘
 ```
-
-## HTTP log panel
-```
-┌ HTTP Log ────────────────────────────────────────────────────────┐
-│ 14:03:12  Customer API  POST stg.example.com  200  143 ms  ← last │
-│ 14:01:55  Customer API  POST stg.example.com  500  98 ms          │
-├──────────────────────────────┬───────────────────────────────────┤
-│ POST /ws/customer HTTP/1.1   │ HTTP/1.1 200 OK                   │
-│ Host: stg.example.com        │ Content-Type: text/xml; charset=… │
-│ Content-Type: text/xml; …    │ Content-Length: 1234              │
-│ SOAPAction: "urn:…/GetCust…" │                                   │
-│ Authorization: Basic ••••••  │ <soap:Envelope …>                 │
-│                              │                                   │
-│ <soapenv:Envelope …>         │                                   │
-│ TLS · certificate verificat… │                                   │
-└──────────────────────────────┴───────────────────────────────────┘
-```
-Authorization values are masked in the log by default (click to reveal).

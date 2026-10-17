@@ -15,7 +15,7 @@ washboard/
 │  │   ├─ validate/           libxml2 schema compile/validate, error → (line,col,msg)
 │  │   ├─ xml/                tokenizer (highlighting), well-formedness check, pretty-print
 │  │   ├─ soap.rs             namespaces, envelope builder, body elements
-│  │   ├─ http/               client, TLS policy, exchange capture for the log
+│  │   ├─ http/               client, TLS policy, exchange capture for the history
 │  │   └─ secrets.rs          trait SecretStore { get/set/delete } (Keychain impl behind cfg)
 │  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs
 │  ├─ washboard-cli/          `washboard` command-line tool on the same project folders, no UI
@@ -61,7 +61,7 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 
 **Owns (all toolkit-independent):**
 - App state: open projects, recent projects, restore on launch (`project::AppState`), the
-  welcome-window condition, the HTTP log ring buffer (50).
+  welcome-window condition.
 - Per project window: the sidebar tree (folders, requests with dirty/invalid markers), the
   operations incl. unsupported ones for the New picker, selection, the server popup's items and
   selection, the response pane's state, history list, issues list, the Settings window's project
