@@ -6,7 +6,7 @@ active set are filled in when the request is validated and sent. The file on dis
 placeholder.
 
 ## Data model
-- A project has one list of **variables** (the columns) and any number of **sets** (the rows),
+- A project has one list of **variables** (the rows) and any number of **sets** (the columns),
   each with a value per variable. Settings edits them as one grid. A shared list makes a typo in
   a request an "undefined parameter" error rather than a silent miss, and renaming a variable
   renames it in every set.
@@ -94,11 +94,13 @@ either or both. For a send, each is taken from, in order:
 4. the first server; no set.
 
 - **Toolbar**: a server popup and a parameter set popup before Send. The set popup is hidden
-  while the project has no sets and offers "No Parameter Set". Each popup ends with a "Pin to
-  This Request" item with a checkmark. Not pinned, choosing an item changes the project's
-  choice; pinned, it changes the pin. Unchecking returns the request to the project's choice.
-- **A pin is very noticeable**: the pinned popup shows the `pin.fill` symbol and a bezel tinted
-  with `colors::warning`.
+  while the project has no sets and offers "No Parameter Set". A pin button sits before each
+  popup and toggles the request's pin; it is always visible, so pinning needs no menu item. Not
+  pinned, choosing an item changes the project's choice; pinned, it changes the pin. Unpinning
+  returns the request to the project's choice.
+- **A pin is noticeable**: the button shows `pin.fill` in `colors::warning` while pinned, an
+  outlined `pin` in secondary colour otherwise; its tooltip says which. Without a request the
+  button is disabled.
 - New request: no pins. Duplicate: copies the pins. Deleting a server or set clears the pins on
   it, and those requests follow the project's choice again.
 - **Upgrade**: the project's last used server (`washboard.last_server`) becomes its active
@@ -112,18 +114,22 @@ sent. The entry also records `parameter_set_id`, and the response pane names the
 server.
 
 ## Settings
-Each project gets a **Parameters** pane ([settings](settings.md)): a grid with a row per set
-and a column per variable; add, rename, reorder and delete both; an unset cell is drawn
+Each project gets a **Parameters** pane ([settings](settings.md)): a grid with a row per variable
+and a column per set, which reads like a table of values and grows down as variables are added; add, rename, reorder and delete both; an unset cell is drawn
 differently from an empty one. Deleting a variable or set asks first when values would be lost.
 
-- Cells are edited in place; a value is stored when editing ends. The first column is the set's
-  name. Unset cells read "Not set" and empty values "Empty", both as placeholders.
+- Cells are edited in place; a value is stored when editing ends. The first column is the
+  variable's name, renamed in place. Unset cells read "Not set" and empty values "Empty", both as
+  placeholders.
 - Clearing a cell unsets it; the cell's context menu has Set Empty Value and Unset Value.
-- Add Set adds "New Set" (numbered when taken) and starts editing its name. Add Parameter…
-  and Rename Parameter… use a sheet with one field, so a refused name keeps the sheet open.
-- Parameters are reordered by dragging their columns (the set column stays first), sets with
-  Move Up and Move Down in the row's context menu. The header's context menu has the parameter
-  items, the row's has the set's, the parameter's and the value's.
+- Add Set adds "New Set" (numbered when taken) and opens a sheet to name it; a header cannot be
+  edited in place. Add Parameter… and Rename Set… use the same one-field sheet, so a refused
+  name keeps the sheet open.
+- Sets are reordered by dragging their columns (the name column stays first), parameters with
+  Move Up and Move Down in the row's context menu. The header's context menu has the set's
+  items, a row's has the parameter's, and a value cell's adds the value's.
+- The grid takes the pane's width and scrolls sideways when the sets do not fit; it never
+  resizes the window.
 
 ## CLI
 - `set list`, `set add <name>`, `set rm <name>`, `set rename <old> <new>`.
