@@ -3641,6 +3641,37 @@ mod checks {
         // The toolbar's set popup: the project's set, then pinned to the request.
         let popup = project.parameter_set_popup();
         assert_eq!(choices(popup), ["Alice"]);
+        // The pin's glyph sits level with its popup's title, and a space after each popup
+        // gives the items a glass background each.
+        window.layoutIfNeeded();
+        for (pin, popup) in [
+            (project.server_pin_button(), project.server_popup()),
+            (project.parameter_set_pin_button(), popup),
+        ] {
+            let middle = |view: &NSView, rect: NSRect| {
+                let rect = view.convertRect_toView(rect, None);
+                rect.origin.y + rect.size.height / 2.0
+            };
+            let (Some(pin_cell), Some(popup_cell)) = (pin.cell(), popup.cell()) else {
+                panic!("buttons have cells");
+            };
+            let glyph = middle(pin, pin_cell.imageRectForBounds(pin.bounds()));
+            let title = middle(popup, popup_cell.titleRectForBounds(popup.bounds()));
+            print!("(pin {glyph:.1}, title {title:.1}) ");
+            assert!((glyph - title).abs() <= 1.5, "pin {glyph}, title {title}");
+        }
+        let toolbar_ids = |project: &ProjectWindowController| -> Vec<String> {
+            let toolbar = project.project_window().toolbar().expect("toolbar");
+            toolbar
+                .items()
+                .iter()
+                .filter(|i| !i.isHidden())
+                .map(|i| i.itemIdentifier().to_string())
+                .collect()
+        };
+        let shown = toolbar_ids(&project);
+        let spaces = shown.iter().filter(|id| id.contains("Space")).count();
+        assert_eq!(spaces, 2, "{shown:?}");
         assert_eq!(popup.selectedTag(), NO_SET_ITEM_TAG, "no set chosen yet");
         let action = |name: &std::ffi::CStr| {
             // SAFETY: the window controller's actions take the sender.
@@ -3708,6 +3739,12 @@ mod checks {
         assert_eq!(pane.column_titles(), ["Parameter"]);
         assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
         assert!(!project.shows_parameter_sets());
+        let shown = toolbar_ids(&project);
+        let spaces = shown.iter().filter(|id| id.contains("Space")).count();
+        assert_eq!(
+            spaces, 1,
+            "one space between the server and Send: {shown:?}"
+        );
         ctx.delegate
             .command("delete", |app| app.delete_parameter(key, "customer_id"))
             .expect("deleted");

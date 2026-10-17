@@ -22,7 +22,7 @@ use objc2_app_kit::{
     NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
     NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarSpaceItemIdentifier,
     NSUserInterfaceLayoutOrientation, NSView, NSViewController, NSWindow, NSWindowController,
     NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
 };
@@ -332,11 +332,20 @@ impl ProjectWindowController {
 
         // The toolbar's identifiers in order; system items first, then ours.
         // SAFETY: AppKit's identifier constants are immutable statics.
-        let tracking = unsafe { NSToolbarSidebarTrackingSeparatorItemIdentifier };
+        let (tracking, space) = unsafe {
+            (
+                NSToolbarSidebarTrackingSeparatorItemIdentifier,
+                NSToolbarSpaceItemIdentifier,
+            )
+        };
+        // macOS 26 draws adjacent items on one shared glass background; the spaces give the
+        // server, the parameter set and Send a background each, so it is clear what is what.
         let toolbar_identifiers = NSArray::from_retained_slice(&[
             tracking.copy(),
             NSString::from_str(SERVER_ITEM),
+            space.copy(),
             NSString::from_str(PARAMETER_SET_ITEM),
+            space.copy(),
             NSString::from_str(SEND_ITEM),
         ]);
 
@@ -404,6 +413,7 @@ impl ProjectWindowController {
         toolbar.setDisplayMode(NSToolbarDisplayMode::IconOnly);
         window.setToolbar(Some(&toolbar));
         window.setToolbarStyle(NSWindowToolbarStyle::Unified);
+        hide_spaces_after_hidden(&toolbar);
 
         let split = this.split_view_controller(mtm);
         // The sidebar's width, kept per project like the frame below.
@@ -554,6 +564,9 @@ impl ProjectWindowController {
         add_items(popup, &names);
         if let Some(item) = self.ivars().parameter_set_item.get() {
             item.setHidden(sets.is_empty());
+        }
+        if let Some(toolbar) = self.project_window().toolbar() {
+            hide_spaces_after_hidden(&toolbar);
         }
         *self.ivars().parameter_set_ids.borrow_mut() = sets.into_iter().map(|(id, _)| id).collect();
         self.show_parameter_set_selection();
@@ -833,6 +846,7 @@ impl ProjectWindowController {
                     item.setHidden(shown || none);
                 }
             }
+            hide_spaces_after_hidden(&toolbar);
         }
         if leaving_editor {
             window.makeFirstResponder(Some(self.ivars().sent.text_view()));
@@ -1217,6 +1231,21 @@ fn pin_button(mtm: MainThreadMarker) -> Retained<NSButton> {
     button
 }
 
+/// A space follows an item only while that item shows: without the parameter sets, the server
+/// and Send would otherwise stand two spaces apart.
+fn hide_spaces_after_hidden(toolbar: &NSToolbar) {
+    // SAFETY: AppKit's identifier constants are immutable statics.
+    let space = unsafe { NSToolbarSpaceItemIdentifier };
+    let mut previous_hidden = false;
+    for item in toolbar.items().iter() {
+        if *item.itemIdentifier() == *space {
+            item.setHidden(previous_hidden);
+        } else {
+            previous_hidden = item.isHidden();
+        }
+    }
+}
+
 /// The pin button and its popup side by side, as one toolbar item's view.
 fn pinned_popup(
     pin: &NSButton,
@@ -1226,6 +1255,9 @@ fn pinned_popup(
     let views = [layout::view(pin.retain()), layout::view(popup.retain())];
     let stack = NSStackView::stackViewWithViews(&NSArray::from_retained_slice(&views), mtm);
     stack.setOrientation(NSUserInterfaceLayoutOrientation::Horizontal);
+    // SF Symbols are drawn to sit on a text baseline, like a letter: centred on its frame, the
+    // pin hung below the popup's title.
+    stack.setAlignment(NSLayoutAttribute::FirstBaseline);
     stack.setSpacing(4.0);
     stack
 }
