@@ -699,9 +699,14 @@ impl ResponsePane {
         if let Some(item) = self.table_item() {
             item.setCollapsed(!drawer.open);
         }
-        if drawer.open
-            && let Some(height) = drawer.height
-        {
+        if drawer.open {
+            // Uncollapsed with no height of its own, the split gives the table its minimum:
+            // the header and one row. Earlier versions saved that as the drawer's height, so a
+            // height at the minimum is taken as unset too.
+            let height = drawer
+                .height
+                .filter(|&h| h > MIN_HISTORY_HEIGHT)
+                .unwrap_or(DEFAULT_HISTORY_HEIGHT);
             let split = &self.ivars().drawer_split;
             split.ivars().pending_height.set(Some(height));
             split.setNeedsLayout(true);
@@ -848,6 +853,8 @@ impl ResponsePane {
 const DRAWER_HEADER_HEIGHT: f64 = 26.0;
 const MIN_BODY_HEIGHT: f64 = 120.0;
 const MIN_HISTORY_HEIGHT: f64 = 60.0;
+/// The History table's height until the user drags it: its header and about five rows.
+const DEFAULT_HISTORY_HEIGHT: f64 = 150.0;
 const DOT_SIZE: f64 = 7.0;
 
 /// One stored exchange in the drawer's header: green, red for a SOAP Fault or a transport
