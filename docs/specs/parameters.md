@@ -1,8 +1,5 @@
 # Parameter sets
 
-**Status: planned, not implemented.** When it lands, the specs listed under "Changes elsewhere"
-are updated with it.
-
 A parameter set is a named group of values, such as one test customer: `customer_id` = `4711`,
 `customer_name` = `Jane Doe`. Request files refer to them as `${customer_id}`; the values of the
 active set are filled in when the request is validated and sent. The file on disk keeps the
@@ -119,6 +116,15 @@ Each project gets a **Parameters** pane ([settings](settings.md)): a grid with a
 and a column per variable; add, rename, reorder and delete both; an unset cell is drawn
 differently from an empty one. Deleting a variable or set asks first when values would be lost.
 
+- Cells are edited in place; a value is stored when editing ends. The first column is the set's
+  name. Unset cells read "Not set" and empty values "Empty", both as placeholders.
+- Clearing a cell unsets it; the cell's context menu has Set Empty Value and Unset Value.
+- Add Set adds "New Set" (numbered when taken) and starts editing its name. Add Parameter…
+  and Rename Parameter… use a sheet with one field, so a refused name keeps the sheet open.
+- Parameters are reordered by dragging their columns (the set column stays first), sets with
+  Move Up and Move Down in the row's context menu. The header's context menu has the parameter
+  items, the row's has the set's, the parameter's and the value's.
+
 ## CLI
 - `set list`, `set add <name>`, `set rm <name>`, `set rename <old> <new>`.
 - `param list`, `param add <name>`, `param rm <name>`, `param rename <old> <new>`,
@@ -132,11 +138,9 @@ differently from an empty one. Deleting a variable or set asks first when values
 - Decided when built-ins are added, not now: whether two `${uuid.v4}` in one request share a
   value, and whether a set's value may contain a generator.
 
-## Changes elsewhere
-- [requests](requests.md): selection replaces "each request remembers `last_server_id`"; Send
-  resolves before validating.
-- [disk layout](disk-layout.md): the new tables; "what you see is what is sent" becomes "what
-  you see, with placeholders filled in, is what is sent".
-- [validation](validation.md): runs on the resolved text; the placeholder errors.
+## Elsewhere
+- [requests](requests.md): selection, and Send resolving before it validates.
+- [disk layout](disk-layout.md): the tables, and what is sent.
+- [validation](validation.md): runs on the resolved text.
 - [settings](settings.md): the Parameters pane.
 - [response pane](response-pane.md): the set in the status line and history table.
