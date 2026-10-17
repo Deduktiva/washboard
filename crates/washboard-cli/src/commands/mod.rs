@@ -3,6 +3,7 @@
 pub mod history;
 pub mod inspect;
 pub mod operation;
+pub mod parameters;
 pub mod project;
 pub mod request;
 pub mod send;

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
 
-use super::{LAST_SERVER_KEY, Project, ProjectError, Result, names, parse_uuid};
+use super::{ACTIVE_SERVER_KEY, Project, ProjectError, Result, names, parse_uuid};
 use crate::http;
 use crate::model::{Auth, Server, ServerId};
 use crate::secrets::{SecretKey, SecretStore};
@@ -199,8 +199,9 @@ impl Project {
         Ok(())
     }
 
-    /// Deletes the server and its password. Requests that used it as their last server lose
-    /// that setting (`ON DELETE SET NULL`); history entries keep the id as a plain value.
+    /// Deletes the server and its password. Requests pinned to it or that used it last lose
+    /// that setting (`ON DELETE SET NULL`), and it stops being the project's active server;
+    /// history entries keep the id as a plain value.
     ///
     /// The password is deleted first: if the secret store fails, nothing has changed and the
     /// user can retry, instead of leaving an orphaned Keychain item.
@@ -211,7 +212,7 @@ impl Project {
         tx.execute("DELETE FROM server WHERE id = ?1", params![id.to_string()])?;
         tx.execute(
             "DELETE FROM ui_state WHERE key = ?1 AND value = ?2",
-            params![LAST_SERVER_KEY, id.to_string()],
+            params![ACTIVE_SERVER_KEY, id.to_string()],
         )?;
         tx.commit()?;
         Ok(())

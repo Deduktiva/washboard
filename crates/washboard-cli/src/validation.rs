@@ -9,15 +9,18 @@ use std::process::ExitCode;
 use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
 use anyhow::bail;
 use washboard_core::diag::{self, Diagnostic, LineIndex, Severity};
+use washboard_core::interpolate::Source;
 use washboard_core::model::RequestMeta;
 use washboard_core::project::ProjectSchema;
-use washboard_core::validate::{self, Validation};
+use washboard_core::validate::{self, ResolvedValidation};
 
 use crate::support;
 
-/// Validates `text` (the request's content) against the project's WSDL and prints every
-/// diagnostic, warnings included, to stderr. Whether the request may be sent is
-/// [`Validation::has_errors`]; the `Err` case means the project itself is broken.
+/// Validates `text` (the request's content) with its placeholders filled in from `values`
+/// against the project's WSDL and prints every diagnostic, warnings included, to stderr,
+/// positioned in `text`. Whether the request may be sent is
+/// [`Validation::has_errors`](validate::Validation::has_errors); what to send is
+/// [`ResolvedValidation::text`]. The `Err` case means the project itself is broken.
 ///
 /// The request schema (and the model that explains abstract-type errors) is compiled on the
 /// first call; the CLI is one command per process, where the app compiles it once in the
@@ -26,28 +29,35 @@ pub fn check(
     schema: &ProjectSchema,
     request: &RequestMeta,
     text: &str,
-) -> anyhow::Result<Validation> {
+    values: &dyn Source,
+) -> anyhow::Result<ResolvedValidation> {
     let Some(request_schema) = schema.request_schema() else {
         for d in schema.compile_errors() {
             eprintln!("{d}");
         }
         bail!("the project's schemas do not compile");
     };
-    let result = validate::validate_request(
+    let result = validate::validate_with_parameters(
         &schema.wsdl,
         &request_schema,
         text,
+        values,
         request.operation.as_ref(),
     );
+    print_diagnostics(&request.name, text, &result.validation.diagnostics);
+    Ok(result)
+}
+
+/// Prints `diagnostics` about `text` to stderr, styled when stderr is a terminal.
+pub fn print_diagnostics(name: &str, text: &str, diagnostics: &[Diagnostic]) {
     let renderer = if std::io::stderr().is_terminal() {
         Renderer::styled()
     } else {
         Renderer::plain()
     };
-    for d in &result.diagnostics {
-        eprint!("{}", render(&renderer, &request.name, text, d));
+    for d in diagnostics {
+        eprint!("{}", render(&renderer, name, text, d));
     }
-    Ok(result)
 }
 
 /// A diagnostic as rustc prints one, followed by a blank line: message, location, and the
@@ -88,13 +98,14 @@ fn point(text: &str, byte: usize) -> Range<usize> {
     byte..byte + len
 }
 
-pub fn command(dir: &Path, name: &str) -> anyhow::Result<ExitCode> {
+pub fn command(dir: &Path, name: &str, set: Option<&str>) -> anyhow::Result<ExitCode> {
     let project = support::open_read(dir)?;
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let schema = support::load_project_schema(&project)?;
-    let result = check(&schema, &request, &text)?;
-    match diag::error_count(&result.diagnostics) {
+    let (_, values) = support::parameter_values(&project, &request, set)?;
+    let result = check(&schema, &request, &text, &values)?;
+    match diag::error_count(&result.validation.diagnostics) {
         0 => {
             println!("{name}: valid");
             Ok(ExitCode::SUCCESS)

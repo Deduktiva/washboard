@@ -5,10 +5,12 @@ use std::fmt::Write as _;
 use std::time::{Duration, SystemTime};
 
 use washboard_core::http::{self, Exchange, RawMessage, SendRequest};
-use washboard_core::model::{Auth, HistoryEntry, HistoryId, RequestId, Server, ServerId};
+use washboard_core::model::{
+    Auth, HistoryEntry, HistoryId, ParameterSetId, RequestId, Server, ServerId,
+};
 use washboard_core::project::{HistoryRecord, RequestHead};
 use washboard_core::soap::{SoapFault, detect_fault};
-use washboard_core::validate::validate_request;
+use washboard_core::validate::validate_with_parameters;
 use washboard_core::xml;
 
 use crate::app::{App, ModelError, ProjectKey};
@@ -49,6 +51,9 @@ pub struct ResponseView {
     /// [`ProjectWindow::server_label`](crate::ProjectWindow::server_label).
     pub server: Option<ServerId>,
     pub url: String,
+    /// The parameter set whose values were sent. Name the pair with
+    /// [`ProjectWindow::exchange_label`](crate::ProjectWindow::exchange_label).
+    pub parameter_set: Option<ParameterSetId>,
     pub sent_at: SystemTime,
     pub duration: Option<Duration>,
     pub status: Option<u16>,
@@ -73,6 +78,7 @@ impl ResponseView {
             history: Some(entry.id),
             server: entry.server_id,
             url: entry.url,
+            parameter_set: entry.parameter_set_id,
             sent_at: entry.sent_at,
             duration: entry.duration,
             status: entry.http_status,
@@ -91,6 +97,7 @@ impl ResponseView {
     fn from_exchange(
         history: Option<HistoryId>,
         server: &Server,
+        parameter_set: Option<ParameterSetId>,
         exchange: &Exchange,
         fault: Option<SoapFault>,
         indent: usize,
@@ -100,6 +107,7 @@ impl ResponseView {
             history,
             server: Some(server.id),
             url: server.url.clone(),
+            parameter_set,
             sent_at: exchange.started_at,
             duration: Some(exchange.duration),
             status: response.and_then(RawMessage::status_code),
@@ -154,6 +162,8 @@ enum Outcome {
     Sent {
         exchange: Box<Exchange>,
         fault: Option<SoapFault>,
+        /// The set whose values were filled in.
+        parameter_set: Option<ParameterSetId>,
     },
 }
 
@@ -164,8 +174,9 @@ pub(crate) struct Sending {
 }
 
 impl App {
-    /// Send (⌘↩): saves, validates on a worker and, if there are no errors, sends to the
-    /// selected server. Errors show the issues list instead ([`Event::ShowIssues`]). Refused
+    /// Send (⌘↩): saves, fills in the placeholders, validates on a worker and, if there are no
+    /// errors, sends exactly the validated text to the selected server
+    /// (`docs/specs/parameters.md`, "Resolving"). Errors show the issues list instead ([`Event::ShowIssues`]). Refused
     /// while an older exchange is shown.
     pub fn send(&mut self, key: ProjectKey) -> Result<(), ModelError> {
         // Checked before anything else, so a shortcut can never send an old exchange.
@@ -184,7 +195,10 @@ impl App {
             .as_ref()
             .ok_or(ModelError::NoRequestSelected)?;
         let schema = window.schema.validating()?.clone();
-        let server_id = window.selected_server().ok_or(ModelError::NoServer)?;
+        let selection = window.selection();
+        let server_id = selection.server.ok_or(ModelError::NoServer)?;
+        let parameter_set = selection.parameter_set;
+        let values = window.parameter_values();
         let server = window
             .servers
             .iter()
@@ -207,20 +221,27 @@ impl App {
         let to = server.clone();
         self.spawn(
             move || {
-                let validation = {
+                let checked = {
                     let Some(request_schema) = schema.request_schema() else {
                         return Outcome::Refused(Vec::new());
                     };
-                    validate_request(&schema.wsdl, &request_schema, &text, hint.as_ref())
+                    validate_with_parameters(
+                        &schema.wsdl,
+                        &request_schema,
+                        &text,
+                        &values,
+                        hint.as_ref(),
+                    )
                 };
+                let validation = &checked.validation;
                 if validation.has_errors() {
-                    return Outcome::Refused(Issue::all(&text, validation.diagnostics));
+                    return Outcome::Refused(Issue::all(&text, checked.validation.diagnostics));
                 }
                 let exchange = http::send(&SendRequest {
                     server: to,
                     password,
                     soap_action: validation.soap_action().map(str::to_owned),
-                    body: text,
+                    body: checked.resolved.text,
                 });
                 let fault = exchange
                     .response
@@ -229,6 +250,7 @@ impl App {
                 Outcome::Sent {
                     exchange: Box::new(exchange),
                     fault,
+                    parameter_set,
                 }
             },
             move |app, outcome| app.send_done(key, id, request, version, server, outcome),
@@ -263,21 +285,29 @@ impl App {
         }
         window.sending = None;
         self.events.push(Event::SendStateChanged { project: key });
-        let (exchange, fault) = match outcome {
+        let (exchange, fault, parameter_set) = match outcome {
             Outcome::Refused(issues) => {
                 self.check_done(key, request, version, Check::Full, issues);
                 self.events.push(Event::ShowIssues { project: key });
                 return;
             }
-            Outcome::Sent { exchange, fault } => (exchange, fault),
+            Outcome::Sent {
+                exchange,
+                fault,
+                parameter_set,
+            } => (exchange, fault, parameter_set),
         };
 
         let Some(window) = self.window_mut(key) else {
             return;
         };
-        let recorded = window
-            .project
-            .record_exchange(request, &server, &exchange, fault.is_some());
+        let recorded = window.project.record_exchange(
+            request,
+            &server,
+            parameter_set,
+            &exchange,
+            fault.is_some(),
+        );
         let indent = self.format.indent;
         let history = match recorded {
             Ok(entry) => Some(entry.id),
@@ -290,7 +320,12 @@ impl App {
             && window.selected_request() == Some(request)
         {
             window.response = Some(ResponseView::from_exchange(
-                history, &server, &exchange, fault, indent,
+                history,
+                &server,
+                parameter_set,
+                &exchange,
+                fault,
+                indent,
             ));
             window.reload_history();
             // A send that finishes while an older exchange is shown returns to the latest.
@@ -301,9 +336,6 @@ impl App {
             self.events.push(Event::ResponseChanged { project: key });
             self.events.push(Event::HistoryChanged { project: key });
         }
-        // Recording made it the request's and the project's last server.
-        self.events
-            .push(Event::ServerSelectionChanged { project: key });
     }
 
     /// Shows a history entry of the selected request: the newest returns to the latest

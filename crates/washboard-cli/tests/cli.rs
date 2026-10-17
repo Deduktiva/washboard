@@ -584,6 +584,75 @@ fn servers() {
     fails(&wb(&e, &["server", "remove", "Prod"]), 2, "no server named");
 }
 
+#[test]
+fn parameters_fill_in_placeholders_when_sent() {
+    let e = customer();
+    let (url, seen) = server::serve(vec![("200 OK", OK_RESPONSE)]);
+    ok(wb(&e, &["server", "add", "Local", &url]));
+    ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
+    let req = "GetCustomer 1";
+    fill_from_fixture(&e, req, "valid-get-customer.xml");
+    let file = request_file(&e, req);
+    let text = fs::read_to_string(&file).expect("file");
+    let with_placeholder = text.replace("100231", "${customer_id}");
+    fs::write(&file, &with_placeholder).expect("write");
+
+    // Undefined, then defined but without a set: both are errors, and nothing is sent.
+    fails(
+        &wb(&e, &["request", "validate", req]),
+        1,
+        "undefined parameter: customer_id",
+    );
+    ok(wb(&e, &["param", "add", "customer_id"]));
+    ok(wb(&e, &["set", "add", "Alice"]));
+    ok(wb(&e, &["set", "add", "Bob"]));
+    fails(
+        &wb(&e, &["request", "validate", req]),
+        1,
+        "no parameter set selected",
+    );
+    fails(
+        &wb(&e, &["request", "validate", req, "--set", "alice"]),
+        1,
+        "has no value in “Alice”",
+    );
+    ok(wb(&e, &["param", "set", "Alice", "customer_id", "100231"]));
+    ok(wb(&e, &["param", "set", "Bob", "customer_id", "x"]));
+    ok(wb(&e, &["request", "validate", req, "--set", "Alice"]));
+    // Bob's value is not a valid customer id; the error points at the placeholder.
+    fails(
+        &wb(&e, &["request", "validate", req, "--set", "Bob"]),
+        1,
+        "(customer_id = \"x\" in “Bob”)",
+    );
+
+    let shown = ok(wb(
+        &e,
+        &["request", "show", req, "--resolved", "--set", "Alice"],
+    ));
+    assert_eq!(shown, text);
+    let listed = ok(wb(&e, &["set", "list"]));
+    assert!(listed.contains("customer_id=\"x\""), "{listed}");
+
+    ok(wb(&e, &["request", "send", req, "--set", "Alice"]));
+    let s = seen.recv().expect("request seen");
+    assert_eq!(s.body, text);
+    // The file keeps its placeholder.
+    assert_eq!(fs::read_to_string(&file).expect("file"), with_placeholder);
+
+    ok(wb(&e, &["param", "unset", "Alice", "customer_id"]));
+    ok(wb(&e, &["param", "rename", "customer_id", "id"]));
+    assert_eq!(ok(wb(&e, &["param", "list"])), "id\n");
+    ok(wb(&e, &["set", "rename", "Bob", "Carol"]));
+    ok(wb(&e, &["set", "rm", "Alice"]));
+    let listed = ok(wb(&e, &["set", "list"]));
+    assert!(
+        listed.contains("Carol") && listed.contains("id=\"x\""),
+        "{listed}"
+    );
+    assert!(!listed.contains("Alice"), "{listed}");
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn password_stdin_is_refused_without_a_secret_store() {
@@ -646,7 +715,7 @@ fn send_records_history_and_last_server() {
     let sent = fs::read_to_string(request_file(&e, req)).expect("file");
     assert_eq!(s.body, sent);
 
-    // The last server is remembered, so --server is no longer needed.
+    // Without --server the project's server is used: the first one, as none was chosen.
     let json: Value =
         serde_json::from_str(&ok(wb(&e, &["request", "list", "--json"]))).expect("json");
     assert_eq!(json[0]["last_server"], "Local");

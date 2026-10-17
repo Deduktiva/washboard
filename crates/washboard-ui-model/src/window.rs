@@ -8,8 +8,11 @@ use std::str::Chars;
 use std::sync::Arc;
 
 use washboard_core::http;
-use washboard_core::model::{HistoryEntry, OperationRef, RequestId, Server, ServerId};
-use washboard_core::project::{OpenProject, Project, names};
+use washboard_core::interpolate::Values;
+use washboard_core::model::{
+    HistoryEntry, OperationRef, ParameterSet, ParameterSetId, RequestId, Server, ServerId,
+};
+use washboard_core::project::{OpenProject, Project, Selection, names};
 use washboard_core::schema::SchemaModel;
 use washboard_core::wsdl::{self, Direction, Protocol, Style, Wsdl};
 
@@ -270,6 +273,9 @@ pub struct ProjectWindow {
     pub(crate) schema: SchemaState,
     pub(crate) sidebar: Sidebar,
     pub(crate) servers: Vec<Server>,
+    /// The project's variables, in column order.
+    pub(crate) parameters: Vec<String>,
+    pub(crate) parameter_sets: Vec<ParameterSet>,
     pub(crate) editor: Option<Editor>,
     pub(crate) history: Vec<HistoryEntry>,
     pub(crate) response: Option<ResponseView>,
@@ -383,18 +389,68 @@ impl ProjectWindow {
         http::server_label(&self.servers, server, url)
     }
 
-    /// The server popup's selection: the selected request's last server, else the project's
-    /// most recently used one ([`Project::default_server`]), else the first.
-    pub fn selected_server(&self) -> Option<ServerId> {
+    /// Which server and parameter set the selected request uses, and whether each is pinned
+    /// (`docs/specs/parameters.md`, "Selection"). Without a selection, the project's choice.
+    pub fn selection(&self) -> Selection {
         let request = self
             .selected_request()
             .and_then(|id| self.project.request(id).ok());
-        self.project
-            .default_server(request.as_ref())
-            .ok()
-            .flatten()
-            .filter(|id| self.servers.iter().any(|s| s.id == *id))
-            .or_else(|| self.servers.first().map(|s| s.id))
+        let mut sel = self.project.selection(request.as_ref()).unwrap_or_default();
+        // The popups list what was last loaded; never select something they don't show.
+        if !sel
+            .server
+            .is_some_and(|id| self.servers.iter().any(|s| s.id == id))
+        {
+            sel.server = self.servers.first().map(|s| s.id);
+            sel.server_pinned = false;
+        }
+        if !sel
+            .parameter_set
+            .is_some_and(|id| self.parameter_sets.iter().any(|s| s.id == id))
+        {
+            sel.parameter_set = None;
+            sel.parameter_set_pinned = false;
+        }
+        sel
+    }
+
+    /// The server popup's selection: [`Self::selection`]'s server.
+    pub fn selected_server(&self) -> Option<ServerId> {
+        self.selection().server
+    }
+
+    /// The project's variables, in column order.
+    pub fn parameters(&self) -> &[String] {
+        &self.parameters
+    }
+
+    /// The parameter set popup's items and the Parameters pane's rows, in the project's order.
+    pub fn parameter_sets(&self) -> &[ParameterSet] {
+        &self.parameter_sets
+    }
+
+    /// How a response or history entry names where it went: the server, and the parameter set
+    /// when one was used and still exists (`Staging · Customer A`).
+    pub fn exchange_label(
+        &self,
+        server: Option<ServerId>,
+        url: &str,
+        parameter_set: Option<ParameterSetId>,
+    ) -> String {
+        let server = self.server_label(server, url);
+        match parameter_set.and_then(|id| self.parameter_sets.iter().find(|s| s.id == id)) {
+            Some(set) => format!("{server} · {}", set.name),
+            None => server,
+        }
+    }
+
+    /// What the selected request's placeholders resolve against.
+    pub(crate) fn parameter_values(&self) -> Values {
+        let set = self.selection().parameter_set;
+        Values {
+            variables: self.parameters.clone(),
+            set: set.and_then(|id| self.parameter_sets.iter().find(|s| s.id == id).cloned()),
+        }
     }
 
     /// Re-reads the request rows, sorted by name, and the folder tree, keeping dirty and
@@ -487,6 +543,14 @@ impl ProjectWindow {
 
     pub(crate) fn reload_servers(&mut self) -> Result<(), washboard_core::project::ProjectError> {
         self.servers = self.project.servers()?;
+        Ok(())
+    }
+
+    pub(crate) fn reload_parameters(
+        &mut self,
+    ) -> Result<(), washboard_core::project::ProjectError> {
+        self.parameters = self.project.parameters()?;
+        self.parameter_sets = self.project.parameter_sets()?;
         Ok(())
     }
 }
