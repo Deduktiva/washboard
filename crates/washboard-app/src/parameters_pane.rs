@@ -360,10 +360,20 @@ impl ParametersPane {
                 (w.parameters().to_vec(), w.parameter_sets().to_vec())
             })
             .unwrap_or_default();
-        let columns_changed = *self.ivars().parameters.borrow() != parameters;
+        // Compared with the table's columns, not the last list: the first reload builds the
+        // set column even when there are no parameters.
+        let shown: Vec<String> = self
+            .table()
+            .tableColumns()
+            .iter()
+            .map(|c| c.identifier().to_string())
+            .collect();
+        let wanted: Vec<String> = std::iter::once(SET_COLUMN.to_owned())
+            .chain(parameters.iter().cloned())
+            .collect();
         *self.ivars().parameters.borrow_mut() = parameters;
         *self.ivars().sets.borrow_mut() = sets;
-        if columns_changed {
+        if shown != wanted {
             self.rebuild_columns();
         }
         self.table().reloadData();
