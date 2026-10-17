@@ -14,10 +14,10 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSControlTextEditingDelegate, NSLineBreakMode, NSMenu, NSMenuDelegate,
-    NSMenuItem, NSScrollView, NSTableColumn, NSTableView, NSTableViewColumnAutoresizingStyle,
-    NSTableViewDataSource, NSTableViewDelegate, NSTextField, NSTextFieldDelegate, NSView, NSWindow,
-    NSWindowStyleMask,
+    NSApplication, NSControlTextEditingDelegate, NSLayoutConstraintOrientation,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem, NSScrollView,
+    NSTableColumn, NSTableView, NSTableViewColumnAutoresizingStyle, NSTableViewDataSource,
+    NSTableViewDelegate, NSTextField, NSTextFieldDelegate, NSView, NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSInteger, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
@@ -686,6 +686,19 @@ impl ParametersPane {
         scroll.setHasVerticalScroller(true);
         scroll.setHasHorizontalScroller(true);
         scroll.setAutohidesScrollers(true);
+        // A table reports its columns' total width as its size. At the default priorities that
+        // size beat the window's: opening the pane shrank the window to the grid, and adding
+        // sets would have widened it. The scroll view takes whatever width the pane has.
+        for view in [view(table.clone()), view(scroll.clone())] {
+            view.setContentHuggingPriority_forOrientation(
+                NSLayoutPriorityDefaultLow,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+            view.setContentCompressionResistancePriority_forOrientation(
+                NSLayoutPriorityDefaultLow,
+                NSLayoutConstraintOrientation::Horizontal,
+            );
+        }
         (table, scroll)
     }
 
