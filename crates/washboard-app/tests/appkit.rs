@@ -3491,7 +3491,7 @@ mod checks {
         assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
         // A parameter is renamed in place; an invalid name is an alert and changes nothing.
         pane.cell_edited(0, 0, "1st");
-        assert_eq!(ctx.alerts().len(), alerts + 2);
+        assert_eq!(ctx.alerts().len(), 1, "the refused rename is an alert");
         assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
 
         // Add Set adds a column and opens the sheet to name it.
