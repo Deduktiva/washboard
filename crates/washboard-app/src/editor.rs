@@ -141,6 +141,10 @@ impl LineNumberRuler {
                 orientation: NSRulerOrientation::VerticalRuler]
         };
         this.setRuleThickness(RULER_WIDTH);
+        // Views don't clip by default since macOS 14: NSRulerView fills and rules the whole
+        // dirty rect, which can reach past its bounds, and a half-visible line's number would
+        // spill over the views next to the editor.
+        this.setClipsToBounds(true);
         this
     }
 

@@ -26,6 +26,7 @@ fn main() {
         ("sidebar_folders", checks::sidebar_folders),
         ("editor", checks::editor),
         ("editor_1mb_layout", checks::editor_1mb_layout),
+        ("ruler_clipping", checks::ruler_clipping),
         ("format_xml", checks::format_xml),
         ("file_watching", checks::file_watching),
         ("dark_mode", checks::dark_mode),
@@ -63,15 +64,15 @@ mod checks {
     use block2::RcBlock;
     use objc2::rc::{Retained, autoreleasepool};
     use objc2::runtime::{AnyObject, Sel};
-    use objc2::{AllocAnyThread, MainThreadMarker, Message, msg_send, sel};
+    use objc2::{AllocAnyThread, MainThreadMarker, MainThreadOnly, Message, msg_send, sel};
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
-        NSApplication, NSApplicationDidFinishLaunchingNotification, NSButton, NSColor,
-        NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSResponder, NSScrollView,
+        NSApplication, NSApplicationDidFinishLaunchingNotification, NSBackingStoreType, NSButton,
+        NSColor, NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags,
+        NSEventType, NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSResponder, NSScrollView,
         NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
-        NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView,
-        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView, NSWindow,
+        NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -1829,6 +1830,78 @@ mod checks {
             text_view.insertText_replacementRange(&NSString::from_str("x"), NSRange::new(at, 0))
         };
         print!("(keystroke {} ms) ", started.elapsed().as_millis());
+    }
+
+    /// The line-number ruler draws inside the scroll view only: neither its background and
+    /// rule nor the numbers of half-visible lines reach the views around the editor.
+    pub fn ruler_clipping(_ctx: &Ctx) {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let editor = EditorController::new(mtm);
+        let text: String = (1..=200).map(|n| format!("<line n=\"{n}\"/>\n")).collect();
+        editor.set_text(&text);
+        let bounds = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(400.0, 400.0));
+        let margin = 50.0;
+        let container = NSView::initWithFrame(NSView::alloc(mtm), bounds);
+        let scroll = editor.view();
+        scroll.setFrame(NSRect::new(
+            NSPoint::new(margin, margin),
+            NSSize::new(400.0 - 2.0 * margin, 400.0 - 2.0 * margin),
+        ));
+        container.addSubview(scroll);
+        // SAFETY: the designated initializer, on the main thread.
+        let window = unsafe {
+            NSWindow::initWithContentRect_styleMask_backing_defer(
+                NSWindow::alloc(mtm),
+                bounds,
+                NSWindowStyleMask::Borderless,
+                NSBackingStoreType::Buffered,
+                false,
+            )
+        };
+        // SAFETY: the check keeps the `Retained<NSWindow>`, so AppKit must not release it.
+        unsafe { window.setReleasedWhenClosed(false) };
+        window.setContentView(Some(&container));
+        // Half a line down, so lines are cut at both the top and the bottom edge.
+        let text_view = editor.text_view();
+        text_view.scrollPoint(NSPoint::new(0.0, 7.0));
+        let ruler = editor.ruler();
+        assert!(
+            ruler.visible_lines().len() > 2,
+            "{:?}",
+            ruler.visible_lines()
+        );
+
+        let rep = container
+            .bitmapImageRepForCachingDisplayInRect(bounds)
+            .expect("a bitmap");
+        container.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+        let scale = rep.pixelsWide() as f64 / bounds.size.width;
+        let mut drawn = Vec::new();
+        for y in 0..400 {
+            for x in 0..400 {
+                let (xf, yf) = (f64::from(x), f64::from(y));
+                let inside = (margin..400.0 - margin).contains(&xf)
+                    && (margin..400.0 - margin).contains(&yf);
+                if inside {
+                    continue;
+                }
+                let px = ((xf + 0.5) * scale) as NSInteger;
+                let py = ((yf + 0.5) * scale) as NSInteger;
+                if rep
+                    .colorAtX_y(px, py)
+                    .is_some_and(|c| c.alphaComponent() > 0.0)
+                {
+                    drawn.push((x, y));
+                }
+            }
+        }
+        window.close();
+        assert!(
+            drawn.is_empty(),
+            "{} points drawn outside the editor, first {:?}",
+            drawn.len(),
+            &drawn[..drawn.len().min(8)]
+        );
     }
 
     /// The editor's colours against its background, in both appearances, and the project
