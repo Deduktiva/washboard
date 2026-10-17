@@ -7,7 +7,7 @@
 //! `ureq` agent (native-tls: Security.framework on macOS, OpenSSL elsewhere) so the TLS policy
 //! of one server can never leak into a request to another, and no connection is pooled.
 //!
-//! # What the HTTP log shows
+//! # What an exchange records
 //!
 //! Every request header is set explicitly here, so ureq adds none of its own (`Host`,
 //! `Content-Length`, `User-Agent` included; `Accept`/`Accept-Encoding` are not sent at all) and

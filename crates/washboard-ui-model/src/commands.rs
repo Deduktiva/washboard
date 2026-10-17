@@ -360,7 +360,8 @@ impl App {
         self.servers_changed(key)
     }
 
-    /// Settings ▸ Servers ▸ −. Requests that used it fall back to the popup's default.
+    /// Delete Server in a server's sheet (Settings ▸ Servers). Requests that used it fall back
+    /// to the popup's default.
     pub fn delete_server(&mut self, key: ProjectKey, server: ServerId) -> Result<(), ModelError> {
         let secrets = self.front.secrets.clone();
         self.window(key)?

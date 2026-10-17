@@ -54,8 +54,8 @@ pub struct ProjectIvars {
     /// The model has closed the project (or is closing it); the window follows.
     closing: Cell<bool>,
     sidebar: Retained<SidebarController>,
-    /// The toolbar's server popup; its items are `server_ids`, in order.
     toolbar_identifiers: Retained<NSArray<NSString>>,
+    /// The toolbar's server popup; its items are `server_ids`, in order.
     servers: Retained<NSPopUpButton>,
     server_ids: RefCell<Vec<ServerId>>,
     request_bar: RequestBar,
