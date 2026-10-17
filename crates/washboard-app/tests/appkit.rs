@@ -3529,6 +3529,19 @@ mod checks {
         let pane = settings.parameters(key);
         assert_form_layout(settings, "Parameters, empty");
         assert_eq!(pane.column_titles(), ["Parameter"]);
+        // The pane takes the window's width; the grid's own width once shrank the window.
+        let width = || {
+            settings_window.layoutIfNeeded();
+            settings_window.frame().size.width
+        };
+        settings.select(Pane::App);
+        let wide = width();
+        settings.select(Pane::Parameters(key));
+        assert_eq!(
+            width(),
+            wide,
+            "the Parameters pane keeps the window's width"
+        );
 
         pane.begin_add_parameter();
         wait_until("the name sheet", || {
@@ -3572,6 +3585,7 @@ mod checks {
             pane.rows(),
             [[Some("customer_id".to_owned()), Some("4711".to_owned())]]
         );
+        assert_eq!(width(), wide, "a set column does not widen the window");
         assert!(
             project.shows_parameter_sets(),
             "the first set shows the popup"
