@@ -123,7 +123,8 @@ differently from an empty one. Deleting a variable or set asks first when values
   placeholders.
 - Clearing a cell unsets it; the cell's context menu has Set Empty Value and Unset Value.
 - Add Set adds "New Set" (numbered when taken) and opens a sheet to name it; a header cannot be
-  edited in place. Add Parameter… and Rename Set… use the same one-field sheet, so a refused
+  edited in place. Duplicate Set copies a set with its values into "<name> copy" (numbered when
+  taken), after the original, and opens the same sheet. Add Parameter… and Rename Set… use the same one-field sheet, so a refused
   name keeps the sheet open.
 - Sets are reordered by dragging their columns (the name column stays first), parameters with
   Move Up and Move Down in the row's context menu. The header's context menu has the set's
