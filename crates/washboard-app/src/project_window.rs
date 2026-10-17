@@ -1143,13 +1143,20 @@ fn add_items(popup: &NSPopUpButton, names: &[&str]) {
 }
 
 fn add_item(popup: &NSPopUpButton, title: &str, tag: NSInteger) {
-    // Not `addItemWithTitle` with the title: it drops an item whose title is already in the
-    // menu, and two servers may share a name.
-    popup.addItemWithTitle(ns_string!(""));
-    if let Some(item) = popup.lastItem() {
-        item.setTitle(&NSString::from_str(title));
-        item.setTag(tag);
-    }
+    // Not `addItemWithTitle`: it replaces an item with the same title, and two servers may
+    // share a name, and a separator's title is the empty string a placeholder title would be.
+    let Some(menu) = popup.menu() else { return };
+    // SAFETY: no action; the popup sends its own when the item is chosen.
+    let item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(popup.mtm()),
+            &NSString::from_str(title),
+            None,
+            ns_string!(""),
+        )
+    };
+    item.setTag(tag);
+    menu.addItem(&item);
 }
 
 /// A separator and "Pin to This Request", at the end of the popup.
