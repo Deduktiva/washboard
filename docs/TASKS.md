@@ -30,9 +30,6 @@ and the workspace-level tests `crates/washboard-core/tests/{pipeline,network_bou
 
 ## Open
 
-Every package below that owns `crates/washboard-app/**` touches the same controllers; run
-those one at a time, or split the paths before handing them out in parallel.
-
 ### Manual checks on a Mac
 Not a coding package: what CI cannot see, done by a person from `make app` or the CI artifact.
 - The whole loop on a real project: restore on launch, edit, autosave, validate, send, history,
@@ -49,18 +46,3 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
 |---|---|---|---|
 | WP-DIST | — | `[package.metadata.packager]` and `icons/` in `crates/washboard-app/`, a release workflow in `.github/workflows/`, `Makefile` | The unsigned `.app` already builds (`make app`, CI artifact) with a placeholder icon. Left: the real icon, DMG via `cargo-packager`, codesign and notarization via `rcodesign` (apple-codesign) or `cargo-packager`'s signing support, configured, not scripted. Check first that both handle Developer ID + hardened runtime + notarytool on macOS 26. |
 | WP-A11Y | — | `crates/washboard-app/**` | PLAN M5: VoiceOver labels on toolbar items, sidebar rows and the icon-only buttons, checked in `tests/appkit.rs`. |
-| WP-REQUEST-FOLDERS | — | folders in `crates/washboard-core/src/project/{mod,requests,names}.rs` and `RequestMeta::folder` (additive); the sidebar tree, folder commands and New Request placement in `crates/washboard-ui-model`; request lookup and `request list`/`request mv` in `crates/washboard-cli` | Requests can live in folders, which are real subdirectories of `requests/`, and New Request files a request into its operation's folder, creating it on first use. Below. |
-| WP-REQUEST-FOLDERS-APP | WP-REQUEST-FOLDERS | `crates/washboard-app/src/sidebar.rs`, the folder items in `menu.rs`, folder tests in `tests/appkit.rs` | The sidebar shows the requests' folder tree and drops the OPERATIONS list; folders get context menus, drag and drop moves. Below. |
-
-### WP-REQUEST-FOLDERS tests
-Behaviour: `docs/specs/disk-layout.md`, `docs/specs/requests.md`. Tests (Linux): reconciliation
-of nested files, a move in Finder keeping history, the duplicate-name case; placement with one
-and with several supported ports (both fixtures and a synthetic two-port WSDL), the folder
-reused across case, a selected folder winning; folder rename, move and delete with history; the
-CLI's paths and ambiguity error.
-
-### WP-REQUEST-FOLDERS-APP tests
-Behaviour: `docs/specs/sidebar.md`. Tests (`tests/appkit.rs`): no OPERATIONS rows; New Request
-from the picker lands in the operation's folder and starts rename; New Folder, rename, delete
-with the confirmation; a move by the model's command shows in the tree; collapsed folders
-survive reopening the project.
