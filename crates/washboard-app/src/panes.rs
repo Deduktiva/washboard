@@ -740,7 +740,7 @@ impl ResponsePane {
             let response = window.response().cloned();
             let server = response
                 .as_ref()
-                .map(|r| window.server_label(r.server, &r.url));
+                .map(|r| window.exchange_label(r.server, &r.url, r.parameter_set));
             (response, server, window.sending())
         }) else {
             return;
@@ -774,7 +774,7 @@ impl ResponsePane {
         let (entries, older) = self
             .read_project(key, |window| {
                 let entries = window.history().iter().map(|e| {
-                    let server = window.server_label(e.server_id, &e.url);
+                    let server = window.exchange_label(e.server_id, &e.url, e.parameter_set_id);
                     (e.clone(), server)
                 });
                 let older = window.older_exchange().map(|o| o.entry);

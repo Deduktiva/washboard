@@ -29,6 +29,8 @@ mod operation_picker;
 #[cfg(target_os = "macos")]
 mod panes;
 #[cfg(target_os = "macos")]
+mod parameters_pane;
+#[cfg(target_os = "macos")]
 mod project_window;
 #[cfg(target_os = "macos")]
 mod servers_pane;
@@ -61,7 +63,9 @@ pub use operation_picker::OperationPicker;
 #[cfg(target_os = "macos")]
 pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
-pub use project_window::{ProjectWindowController, project_tabbing_id};
+pub use parameters_pane::{EMPTY_PLACEHOLDER, ParametersPane, UNSET_PLACEHOLDER};
+#[cfg(target_os = "macos")]
+pub use project_window::{NO_SET_ITEM_TAG, ProjectWindowController, project_tabbing_id};
 #[cfg(target_os = "macos")]
 pub use servers_pane::ServersPane;
 #[cfg(target_os = "macos")]

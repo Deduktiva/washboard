@@ -63,9 +63,9 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 - App state: open projects, recent projects, restore on launch (`project::AppState`), the
   welcome-window condition, the HTTP log ring buffer (50).
 - Per project window: the sidebar tree (folders, requests with dirty/invalid markers), the
-  operations incl. unsupported ones for the New picker, selection, the server popup's items and
-  selection, the response pane's state, history list, issues list, the Settings window's project
-  panes.
+  operations incl. unsupported ones for the New picker, selection, the server and set popups'
+  items, selection and pins, the response pane's state, history list, issues list, the Settings
+  window's project panes.
 - Editor buffers: text, dirty flag, BOM preservation, `xml::TokenBuffer`, diagnostics,
   autosave schedule (1 s after the last edit; flush on switch, send, focus loss, quit),
   completion and hover requests answered from `schema::SchemaModel`.

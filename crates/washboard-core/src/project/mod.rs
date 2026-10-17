@@ -23,6 +23,7 @@ mod fsutil;
 mod history;
 mod import;
 pub mod names;
+mod parameters;
 mod replace_report;
 mod requests;
 mod schema;
@@ -52,6 +53,7 @@ pub use db::SCHEMA_VERSION;
 pub use history::{HistoryRecord, RequestHead};
 pub use import::{CheckedImport, check_import};
 pub use names::{NameError, validate_folder_path, validate_request_name};
+pub use parameters::{ParameterError, Selection};
 pub use replace_report::{ReplaceReport, RequestText, request_texts};
 pub use requests::operation_folder;
 pub use schema::ProjectSchema;
@@ -73,8 +75,12 @@ pub const DEFAULT_HISTORY_LIMIT: u32 = 20;
 
 /// Keys in `ui_state` starting with this are used by the core itself.
 pub const RESERVED_UI_STATE_PREFIX: &str = "washboard.";
-/// The server most recently chosen or sent to; new requests start with it.
-const LAST_SERVER_KEY: &str = "washboard.last_server";
+/// The project's active server (`docs/specs/parameters.md`, "Selection"). The key predates
+/// that and named the most recently used server, which is what an upgraded project starts
+/// with.
+const ACTIVE_SERVER_KEY: &str = "washboard.last_server";
+/// The project's active parameter set.
+const ACTIVE_PARAMETER_SET_KEY: &str = "washboard.active_parameter_set";
 
 #[derive(Debug, Error)]
 pub enum ProjectError {
@@ -118,6 +124,10 @@ pub enum ProjectError {
     /// Refused by [`Project::add_server`] or [`Project::update_server`].
     #[error(transparent)]
     InvalidServer(#[from] ServerError),
+    #[error("no parameter set with id {0}")]
+    UnknownParameterSet(crate::model::ParameterSetId),
+    #[error(transparent)]
+    InvalidParameter(#[from] ParameterError),
     #[error("no history entry with id {0}")]
     UnknownHistory(crate::model::HistoryId),
     #[error("cannot read {}: {source}", path.display())]

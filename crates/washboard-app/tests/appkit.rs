@@ -36,6 +36,7 @@ fn main() {
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_window", checks::settings_window),
+        ("parameters", checks::parameters),
         ("wrapped_table", checks::wrapped_table),
     ];
     for (name, check) in checks {
@@ -68,10 +69,10 @@ mod checks {
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSButton, NSColor,
         NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSResponder, NSScrollView,
-        NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
-        NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView,
-        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSPopUpButton, NSResponder,
+        NSScrollView, NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField,
+        NSTextInputClient, NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification,
+        NSView, NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -84,8 +85,8 @@ mod checks {
         ProjectWindowController, SidebarNode, TextTable,
     };
     use washboard_app::{
-        GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, Pane, ROW_INSET, ServersPane,
-        SettingsWindowController, TEXT_ID,
+        EMPTY_PLACEHOLDER, GROUP_ID, HEADER_ID, MAX_WIDTH, NO_SET_ITEM_TAG, PAGE_MARGIN, Pane,
+        ROW_INSET, ServersPane, SettingsWindowController, TEXT_ID, UNSET_PLACEHOLDER,
     };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
@@ -867,7 +868,7 @@ mod checks {
     }
 
     /// New, rename, duplicate and delete through the window's actions change the rows and the
-    /// folder; the server popup follows the selected request.
+    /// folder; the server popup shows the selected request's pin, else the project's server.
     pub fn sidebar_commands(ctx: &Ctx) {
         let project = ctx.open();
         wait_loaded(&project);
@@ -894,13 +895,15 @@ mod checks {
 
         let popup = project.server_popup();
         assert!(popup.isEnabled());
-        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
-        assert_eq!(titles, ["Staging", "Production"]);
+        assert_eq!(choices(popup), ["Staging", "Production"]);
+        let pin = project.server_pin_button();
+        assert!(!pin.isEnabled(), "no request to pin to");
+        assert!(!pinned_shown(pin));
         // A long server name widens the picker only so far; the title truncates.
         popup.addItemWithTitle(&NSString::from_str(
             "Production cluster behind the second load balancer in Frankfurt",
         ));
-        popup.selectItemAtIndex(2);
+        popup.selectItemAtIndex(popup.numberOfItems() - 1);
         window
             .contentView()
             .expect("content")
@@ -911,9 +914,8 @@ mod checks {
             popup.frame()
         );
         project.reload_servers();
-        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
         assert_eq!(
-            titles,
+            choices(popup),
             ["Staging", "Production"],
             "reload restores the list"
         );
@@ -1016,10 +1018,17 @@ mod checks {
         assert_eq!(request_names(&project), ["Lookup/", "  Find customer"]);
         assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
 
-        // The popup remembers the server per request.
+        // A pinned request keeps its server; a duplicate copies the pin.
         popup.selectItemAtIndex(1);
         send("chooseServer:");
         assert_eq!(popup.indexOfSelectedItem(), 1);
+        assert!(
+            pin.isEnabled() && !pinned_shown(pin),
+            "the project's server"
+        );
+        click(pin);
+        assert_eq!(popup.indexOfSelectedItem(), 1, "pinned to what it showed");
+        assert!(pinned_shown(pin), "the pin shows it");
         send("duplicateRequest:");
         assert_eq!(
             request_names(&project),
@@ -1034,6 +1043,8 @@ mod checks {
             Some(outline.selectedRow()),
             "the copy is selected"
         );
+        assert!(pinned_shown(pin), "the copy is pinned too");
+        // Pinned, choosing a server changes the pin.
         popup.selectItemAtIndex(0);
         send("chooseServer:");
         let original = request_row(&project, "Find customer");
@@ -1046,7 +1057,7 @@ mod checks {
             Some(original),
             "selecting a row selects its request"
         );
-        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's server");
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's pin");
 
         send("deleteRequest:");
         let (id, confirm) = ctx
@@ -1064,7 +1075,11 @@ mod checks {
             Some(outline.selectedRow()),
             "the next one is selected"
         );
-        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
+        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's pin");
+        // Unpinning returns the copy to the project's server.
+        click(pin);
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the project's server");
+        assert!(!pinned_shown(pin));
         assert!(ctx.alerts().is_empty());
 
         // The context menu acts on the clicked row. A folder's New Request… creates in that
@@ -2587,6 +2602,30 @@ mod checks {
         );
     }
 
+    /// A toolbar popup's servers or sets, without "No Parameter Set" and the pin item.
+    fn choices(popup: &NSPopUpButton) -> Vec<String> {
+        popup
+            .itemArray()
+            .iter()
+            .filter(|i| i.tag() >= 0 && !i.isSeparatorItem())
+            .map(|i| i.title().to_string())
+            .collect()
+    }
+
+    /// Clicks a toolbar pin button.
+    fn click(button: &NSButton) {
+        assert!(button.isEnabled(), "the pin can be clicked");
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { button.performClick(None) };
+    }
+
+    /// Whether a toolbar pin button shows its popup as pinned.
+    fn pinned_shown(button: &NSButton) -> bool {
+        button
+            .toolTip()
+            .is_some_and(|t| t.to_string().starts_with("Pinned"))
+    }
+
     /// The shown Settings pane keeps `form.rs`'s rules: groups inside the page margins, centred
     /// and all one width; headers and footnotes on the rows' leading line; every label and
     /// control in a group inside the group's insets, at its full height, overlapping no other.
@@ -3123,7 +3162,14 @@ mod checks {
         assert_form_layout(settings, "the app's General");
         assert_eq!(
             settings.sidebar_titles(),
-            ["Washboard", "General", "Customer API", "General", "Servers"],
+            [
+                "Washboard",
+                "General",
+                "Customer API",
+                "General",
+                "Servers",
+                "Parameters"
+            ],
             "the app's section, then one per open project"
         );
 
@@ -3171,14 +3217,7 @@ mod checks {
                 );
             }
         }
-        let popup_titles = || -> Vec<String> {
-            project
-                .server_popup()
-                .itemTitles()
-                .iter()
-                .map(|t| t.to_string())
-                .collect()
-        };
+        let popup_titles = || choices(project.server_popup());
         assert_eq!(popup_titles(), names, "only servers can be sent to");
 
         // Edit… opens the server in a sheet; Save writes it.
@@ -3393,6 +3432,213 @@ mod checks {
         });
         assert_eq!(password(ctx, project.key()), None);
         assert_eq!(servers.servers()[1].auth, Auth::None);
+        autoreleasepool(|_| settings_window.performClose(None));
+        autoreleasepool(|_| window.performClose(None));
+    }
+
+    /// The Parameters pane edits the grid through the model: a parameter added through its
+    /// sheet, a set with a value, an empty value and an unset one drawn differently. The
+    /// toolbar's set popup appears with the first set, and a pinned set tints it.
+    pub fn parameters(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let key = project.key();
+        let window = project.project_window();
+        assert!(!project.shows_parameter_sets(), "no sets, no popup");
+
+        let settings = ctx.delegate.show_settings(Some(Pane::Parameters(key)));
+        let settings_window = settings.window().retain();
+        assert_eq!(
+            settings_window.title().to_string(),
+            "Customer API — Parameters"
+        );
+        let pane = settings.parameters(key);
+        assert_form_layout(settings, "Parameters, empty");
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        // The pane takes the window's width; the grid's own width once shrank the window.
+        let width = || {
+            settings_window.layoutIfNeeded();
+            settings_window.frame().size.width
+        };
+        settings.select(Pane::App);
+        let wide = width();
+        settings.select(Pane::Parameters(key));
+        assert_eq!(
+            width(),
+            wide,
+            "the Parameters pane keeps the window's width"
+        );
+
+        pane.begin_add_parameter();
+        wait_until("the name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        let alerts = ctx.alerts().len();
+        pane.name_field().setStringValue(ns_string!("1st"));
+        pane.save_name();
+        assert_eq!(
+            ctx.alerts().len(),
+            alerts + 1,
+            "an invalid name is an alert"
+        );
+        assert!(pane.is_editing_name(), "and the sheet stays open");
+        pane.name_field().setStringValue(ns_string!("customer_id"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+        // A parameter is renamed in place; an invalid name is an alert and changes nothing.
+        pane.cell_edited(0, 0, "1st");
+        assert_eq!(ctx.alerts().len(), 1, "the refused rename is an alert");
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+
+        // Add Set adds a column and opens the sheet to name it.
+        pane.add_set();
+        assert_eq!(pane.column_titles(), ["Parameter", "New Set"]);
+        wait_until("the set's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        pane.name_field().setStringValue(ns_string!("Alice"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice"]);
+        pane.cell_edited(0, 1, "4711");
+        assert_eq!(
+            pane.rows(),
+            [[Some("customer_id".to_owned()), Some("4711".to_owned())]]
+        );
+        assert_eq!(width(), wide, "a set column does not widen the window");
+        assert!(
+            project.shows_parameter_sets(),
+            "the first set shows the popup"
+        );
+        assert_form_layout(settings, "Parameters, one set");
+
+        let placeholder = |row: NSInteger, column: NSInteger| -> Option<String> {
+            pane.table().layoutSubtreeIfNeeded();
+            let cell = pane
+                .table()
+                .viewAtColumn_row_makeIfNecessary(column, row, true)?;
+            let field = cell
+                .subviews()
+                .iter()
+                .find_map(|v| v.downcast::<NSTextField>().ok())?;
+            field.placeholderString().map(|p| p.to_string())
+        };
+        // Clearing a cell unsets it; Set Empty Value stores "".
+        pane.cell_edited(0, 1, "");
+        assert_eq!(pane.rows()[0][1], None);
+        assert_eq!(placeholder(0, 1).as_deref(), Some(UNSET_PLACEHOLDER));
+        let menu = pane.menu_items(0, 1);
+        assert!(
+            menu.contains(&("Rename Parameter “customer_id”".to_owned(), true)),
+            "{menu:?}"
+        );
+        assert!(
+            menu.contains(&("Set Empty Value".to_owned(), true)),
+            "{menu:?}"
+        );
+        assert!(
+            menu.contains(&("Unset Value".to_owned(), false)),
+            "{menu:?}"
+        );
+        ctx.delegate
+            .command("empty", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[0].id;
+                app.set_parameter_value(key, set, "customer_id", Some(""))
+            })
+            .expect("empty value");
+        assert_eq!(pane.rows()[0][1].as_deref(), Some(""));
+        assert_eq!(placeholder(0, 1).as_deref(), Some(EMPTY_PLACEHOLDER));
+        let header_menu = pane.menu_items(-1, 1);
+        assert_eq!(
+            header_menu,
+            [
+                ("Rename Set “Alice”…".to_owned(), true),
+                ("Duplicate Set “Alice”".to_owned(), true),
+                ("Delete Set “Alice”…".to_owned(), true)
+            ]
+        );
+
+        // The toolbar's set popup: the project's set, then pinned to the request.
+        let popup = project.parameter_set_popup();
+        assert_eq!(choices(popup), ["Alice"]);
+        assert_eq!(popup.selectedTag(), NO_SET_ITEM_TAG, "no set chosen yet");
+        let action = |name: &std::ffi::CStr| {
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(name), Some(&project), None)
+            };
+            assert!(sent, "{name:?} reached the window controller");
+        };
+        popup.selectItemWithTag(0);
+        action(c"chooseParameterSet:");
+        assert_eq!(popup.selectedTag(), 0);
+        assert_eq!(
+            popup
+                .titleOfSelectedItem()
+                .map(|t| t.to_string())
+                .as_deref(),
+            Some("Alice"),
+            "the popup shows the chosen set's name"
+        );
+        let separators = popup
+            .itemArray()
+            .iter()
+            .filter(|i| i.isSeparatorItem())
+            .count();
+        assert_eq!(separators, 1, "after No Parameter Set");
+        if project.selected_request().is_some() {
+            let pin = project.parameter_set_pin_button();
+            click(pin);
+            assert!(pinned_shown(pin), "the set is pinned");
+            click(pin);
+            assert!(!pinned_shown(pin));
+        }
+
+        // Duplicate Set copies the values beside the original and opens the sheet to name it.
+        pane.duplicate_set(0);
+        wait_until("the copy's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Alice copy"]);
+        pane.name_field().setStringValue(ns_string!("Bob"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Bob"]);
+        assert_eq!(pane.rows()[0][2].as_deref(), Some(""));
+        ctx.delegate
+            .command("delete copy", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[1].id;
+                app.delete_parameter_set(key, set)
+            })
+            .expect("deleted");
+
+        // Deleting the set asks first, as it has a value; the popup goes with the last set.
+        pane.delete_set(0);
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert!(confirm.title.contains("Alice"), "{confirm:?}");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+        assert!(!project.shows_parameter_sets());
+        ctx.delegate
+            .command("delete", |app| app.delete_parameter(key, "customer_id"))
+            .expect("deleted");
+        assert!(pane.rows().is_empty());
+        ctx.dialogs.borrow_mut().alerts.truncate(alerts);
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }

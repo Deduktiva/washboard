@@ -1,6 +1,7 @@
-//! `send`: validate, send through `washboard_core::http::send` (the only networking code),
-//! record the exchange in the request's history (which also sets its last server), print the
-//! status line to stderr and the response body, byte-exact, to stdout.
+//! `send`: fill in the placeholders, validate, send through `washboard_core::http::send` (the
+//! only networking code), record the exchange in the request's history, print the status line
+//! to stderr and the response body, byte-exact, to stdout. `--server` and `--set` apply to this
+//! send only; they change neither the request's pins nor the project's choice.
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -9,6 +10,7 @@ use std::process::ExitCode;
 use anyhow::bail;
 use washboard_core::diag;
 use washboard_core::http::{self, SendRequest};
+use washboard_core::interpolate;
 use washboard_core::model::{Auth, RequestMeta, Server};
 use washboard_core::project::Project;
 use washboard_core::soap;
@@ -21,6 +23,7 @@ pub fn run(
     dir: &Path,
     name: &str,
     server_name: Option<&str>,
+    set_name: Option<&str>,
     skip_validation: bool,
     fail_on_fault: bool,
 ) -> anyhow::Result<ExitCode> {
@@ -28,11 +31,12 @@ pub fn run(
     let request = support::find_request(&project, name)?;
     let text = project.read_request(request.id)?;
     let schema = support::load_project_schema(&project)?;
+    let (parameter_set, values) = support::parameter_values(&project, &request, set_name)?;
     // With --skip-validation the request is still validated, so the errors are on record,
     // but nothing stops the send: sending broken requests on purpose is how servers get tested.
-    let validation = match validation::check(&schema, &request, &text) {
+    let checked = match validation::check(&schema, &request, &text, &values) {
         Ok(v) => {
-            let errors = diag::error_count(&v.diagnostics);
+            let errors = diag::error_count(&v.validation.diagnostics);
             let s = if errors == 1 { "" } else { "s" };
             if errors > 0 && !skip_validation {
                 eprintln!(
@@ -51,6 +55,12 @@ pub fn run(
         }
         Err(e) => return Err(e.context("not sent")),
     };
+    // Without validation the text is still resolved: placeholders that cannot be filled in
+    // stay as written, as `--skip-validation` sends broken requests on purpose.
+    let (body, validation) = match checked {
+        Some(c) => (c.resolved.text, Some(c.validation)),
+        None => (interpolate::resolve(&text, &values).text, None),
+    };
     let server = choose_server(&project, &request, server_name)?;
     let password = match &server.auth {
         Auth::Basic { username } => Some(passwords::for_send(&project, &server, username)?),
@@ -62,13 +72,19 @@ pub fn run(
         server: server.clone(),
         password,
         soap_action,
-        body: text,
+        body,
     });
     let fault = exchange
         .response
         .as_ref()
         .and_then(|r| soap::detect_fault(&r.body));
-    project.record_exchange(request.id, &server, &exchange, fault.is_some())?;
+    project.record_exchange(
+        request.id,
+        &server,
+        parameter_set,
+        &exchange,
+        fault.is_some(),
+    )?;
 
     let Some(response) = &exchange.response else {
         let err = exchange.error.as_deref().unwrap_or("no response");
@@ -100,8 +116,8 @@ pub fn run(
     Ok(ExitCode::SUCCESS)
 }
 
-/// `--server`, else the request's last server, else the project's most recently used one
-/// ([`Project::default_server`]), else the only server.
+/// `--server`, else the request's pin, else the project's server, else the first
+/// ([`Project::selection`]).
 fn choose_server(
     project: &Project,
     request: &RequestMeta,
@@ -110,14 +126,9 @@ fn choose_server(
     if let Some(n) = name {
         return support::find_server(project, n);
     }
-    if let Some(id) = project.default_server(Some(request))? {
-        return Ok(project.server(id)?);
-    }
-    let mut all = project.servers()?;
-    match all.len() {
-        0 => bail!("the project has no servers; add one with `washboard server add`"),
-        1 => Ok(all.remove(0)),
-        _ => bail!("the request has no last server; choose one with --server"),
+    match project.selection(Some(request))?.server {
+        Some(id) => Ok(project.server(id)?),
+        None => bail!("the project has no servers; add one with `washboard server add`"),
     }
 }
 

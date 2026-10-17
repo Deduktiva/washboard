@@ -21,6 +21,7 @@ use std::sync::Arc;
 use roxmltree::Node;
 
 use crate::diag::{DiagSource, Diagnostic, LineIndex, TextPos, pos_at_byte};
+use crate::interpolate::{self, Resolved};
 use crate::model::{OperationRef, QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::schema::{SchemaModel, SuggestionSource, block_path};
 use crate::soap::{SOAP11_ENV_NS, SOAP12_ENV_NS};
@@ -252,6 +253,54 @@ pub fn validate_request(
     out
 }
 
+/// [`validate_with_parameters`]'s result: the text that was validated, which is what a send
+/// must send, and the findings positioned in the source.
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedValidation {
+    pub resolved: Resolved,
+    pub validation: Validation,
+}
+
+impl ResolvedValidation {
+    /// The text to send: the source with its placeholders filled in.
+    pub fn text(&self) -> &str {
+        &self.resolved.text
+    }
+}
+
+/// Validates the request with its `${...}` placeholders filled in from `values`
+/// (`docs/specs/parameters.md`, "Validation"), positions mapped back to `source`.
+///
+/// A placeholder that cannot be filled in is an error; while there is one, only
+/// well-formedness is checked, so libxml2 never reports a literal `${...}` as a type error.
+pub fn validate_with_parameters(
+    wsdl: &Wsdl,
+    schema: &RequestSchema,
+    source: &str,
+    values: &dyn interpolate::Source,
+    hint: Option<&OperationRef>,
+) -> ResolvedValidation {
+    let resolved = interpolate::resolve(source, values);
+    let validation = if resolved.has_errors() {
+        let mut diagnostics = resolved.diagnostics.clone();
+        if let Err(d) = xml::check_well_formed(source) {
+            diagnostics.push(d);
+        }
+        Validation {
+            diagnostics,
+            dispatched: Vec::new(),
+        }
+    } else {
+        let mut v = validate_request(wsdl, schema, &resolved.text, hint);
+        v.diagnostics = resolved.map_diagnostics(source, v.diagnostics);
+        v
+    };
+    ResolvedValidation {
+        resolved,
+        validation,
+    }
+}
+
 /// SOAP 1.1 attributes any header block may carry (§4.2.2, §4.2.3, §4.1.1).
 ///
 /// A block the project schema declares has a type that usually allows no foreign attributes,
@@ -433,6 +482,49 @@ mod tests {
             v.soap_action(),
             Some("urn:example:customer:service/GetCustomer")
         );
+    }
+
+    #[test]
+    fn placeholders_are_validated_with_their_values() {
+        use crate::interpolate::Values;
+        use crate::model::{ParameterSet, ParameterSetId};
+
+        let (w, s) = customer();
+        let source = GET_CUSTOMER.replace(
+            "<msg:customerId>1</msg:customerId>",
+            "<msg:customerId>${id}</msg:customerId>",
+        );
+        let with = |value: Option<&str>| Values {
+            variables: vec!["id".into()],
+            set: value.map(|v| ParameterSet {
+                id: ParameterSetId::new(),
+                name: "A".into(),
+                values: [("id".to_owned(), v.to_owned())].into(),
+            }),
+        };
+
+        let ok = validate_with_parameters(&w, &s, &source, &with(Some("7")), None);
+        assert!(ok.validation.diagnostics.is_empty(), "{:#?}", ok.validation);
+        assert_eq!(ok.text(), GET_CUSTOMER.replace(">1<", ">7<"));
+        assert_eq!(
+            ok.validation.soap_action(),
+            Some("urn:example:customer:service/GetCustomer")
+        );
+
+        // A value of the wrong type is reported at the placeholder, naming the value.
+        let bad = validate_with_parameters(&w, &s, &source, &with(Some("abc")), None);
+        let e = errors(&bad.validation);
+        assert_eq!(e.len(), 1, "{e:#?}");
+        assert!(e[0].ends_with("(id = \"abc\" in “A”)"), "{e:#?}");
+        let at = source.find("${id}").expect("placeholder");
+        let span = LineIndex::new(&source).span(at..at + 5);
+        assert_eq!(bad.validation.diagnostics[0].span, Some(span));
+
+        // Without a value there is no schema pass: just the placeholder error.
+        let none = validate_with_parameters(&w, &s, &source, &with(None), None);
+        assert_eq!(errors(&none.validation).len(), 1);
+        assert!(errors(&none.validation)[0].contains("parameter id has no value"));
+        assert!(none.validation.dispatched.is_empty());
     }
 
     #[test]
