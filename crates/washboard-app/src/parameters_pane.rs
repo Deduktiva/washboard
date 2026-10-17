@@ -423,9 +423,13 @@ impl ParametersPane {
 
     /// Starts editing the name of the set in `row`.
     pub fn begin_rename_set(&self, row: usize) {
-        if let Ok(row) = NSInteger::try_from(row) {
-            self.table()
-                .editColumn_row_withEvent_select(0, row, None, true);
+        let table = self.table();
+        // AppKit raises for a cell that does not exist, which aborts the app.
+        if let Ok(row) = NSInteger::try_from(row)
+            && row < table.numberOfRows()
+            && table.numberOfColumns() > 0
+        {
+            table.editColumn_row_withEvent_select(0, row, None, true);
         }
     }
 
@@ -573,6 +577,8 @@ impl ParametersPane {
         let mtm = self.mtm();
         let table = self.table();
         let was = self.ivars().applying.replace(true);
+        // A cell still being edited would lose its column under the field editor.
+        table.abortEditing();
         for column in table.tableColumns().iter() {
             table.removeTableColumn(&column);
         }
