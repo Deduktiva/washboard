@@ -425,6 +425,29 @@ pub fn stacked_row(label: &str, content: &NSView, mtm: MainThreadMarker) -> Reta
     row
 }
 
+/// `content`, a scroll view such as a table, across the row at `height`: for a grid that is
+/// edited in place rather than through a label and a control.
+pub fn table_row(content: &NSView, height: f64, mtm: MainThreadMarker) -> Retained<NSView> {
+    let row = new_view(mtm);
+    add(&row, content);
+    activate([
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET),
+        content
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&row.trailingAnchor(), -ROW_INSET),
+        content
+            .topAnchor()
+            .constraintEqualToAnchor_constant(&row.topAnchor(), ROW_PADDING),
+        content
+            .bottomAnchor()
+            .constraintEqualToAnchor_constant(&row.bottomAnchor(), -ROW_PADDING),
+        content.heightAnchor().constraintEqualToConstant(height),
+    ]);
+    row
+}
+
 /// A title with a secondary line under it on the leading edge, `control` on the trailing edge:
 /// an item in a list of things to act on.
 pub fn subtitle_row(
