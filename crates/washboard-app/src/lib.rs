@@ -65,9 +65,7 @@ pub use panes::{IssuesBar, RESPONSE_TABS, RequestBar, ResponsePane};
 #[cfg(target_os = "macos")]
 pub use parameters_pane::{EMPTY_PLACEHOLDER, ParametersPane, UNSET_PLACEHOLDER};
 #[cfg(target_os = "macos")]
-pub use project_window::{
-    NO_SET_ITEM_TAG, PIN_ITEM_TAG, ProjectWindowController, project_tabbing_id,
-};
+pub use project_window::{NO_SET_ITEM_TAG, ProjectWindowController, project_tabbing_id};
 #[cfg(target_os = "macos")]
 pub use servers_pane::ServersPane;
 #[cfg(target_os = "macos")]
