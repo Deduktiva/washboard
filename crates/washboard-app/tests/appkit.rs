@@ -3454,7 +3454,7 @@ mod checks {
         );
         let pane = settings.parameters(key);
         assert_form_layout(settings, "Parameters, empty");
-        assert_eq!(pane.column_titles(), ["Set"]);
+        assert_eq!(pane.column_titles(), ["Parameter"]);
 
         pane.begin_add_parameter();
         wait_until("the name sheet", || {
@@ -3474,17 +3474,29 @@ mod checks {
         wait_until("the sheet to close", || {
             settings_window.attachedSheet().is_none()
         });
-        assert_eq!(pane.column_titles(), ["Set", "customer_id"]);
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+        // A parameter is renamed in place; an invalid name is an alert and changes nothing.
+        pane.cell_edited(0, 0, "1st");
+        assert_eq!(ctx.alerts().len(), alerts + 2);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
 
+        // Add Set adds a column and opens the sheet to name it.
         pane.add_set();
-        assert_eq!(pane.rows(), [[Some("New Set".to_owned()), None]]);
-        // Add Set starts editing the new name; ending it unchanged changes nothing.
-        settings_window.makeFirstResponder(None);
-        pane.cell_edited(0, 0, "Alice");
+        assert_eq!(pane.column_titles(), ["Parameter", "New Set"]);
+        wait_until("the set's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        pane.name_field().setStringValue(ns_string!("Alice"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice"]);
         pane.cell_edited(0, 1, "4711");
         assert_eq!(
             pane.rows(),
-            [[Some("Alice".to_owned()), Some("4711".to_owned())]]
+            [[Some("customer_id".to_owned()), Some("4711".to_owned())]]
         );
         assert!(
             project.shows_parameter_sets(),
@@ -3509,6 +3521,10 @@ mod checks {
         assert_eq!(placeholder(0, 1).as_deref(), Some(UNSET_PLACEHOLDER));
         let menu = pane.menu_items(0, 1);
         assert!(
+            menu.contains(&("Rename Parameter “customer_id”".to_owned(), true)),
+            "{menu:?}"
+        );
+        assert!(
             menu.contains(&("Set Empty Value".to_owned(), true)),
             "{menu:?}"
         );
@@ -3528,8 +3544,8 @@ mod checks {
         assert_eq!(
             header_menu,
             [
-                ("Rename Parameter “customer_id”…".to_owned(), true),
-                ("Delete Parameter “customer_id”…".to_owned(), true)
+                ("Rename Set “Alice”…".to_owned(), true),
+                ("Delete Set “Alice”…".to_owned(), true)
             ]
         );
 
