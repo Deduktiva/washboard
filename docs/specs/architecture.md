@@ -19,9 +19,11 @@ washboard/
 │  │   └─ secrets.rs          trait SecretStore { get/set/delete } (Keychain impl behind cfg)
 │  ├─ washboard-ui-model/     toolkit-independent app behaviour: windows' state, commands, jobs
 │  ├─ washboard-cli/          `washboard` command-line tool on the same project folders, no UI
-│  ├─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; bundle, assets
+│  ├─ washboard-app/          objc2 AppKit front end: views, menus, editor widget; `cargo-packager`
+│  │                          config for the .app in its Cargo.toml ("Packaging" below)
 │  └─ washboard-test-support/ dev-dependency only: the fixtures path, a local HTTP server for tests
-└─ packaging                  `cargo-packager` config (.app, DMG) + `rcodesign` for signing/notarizing
+├─ fixtures/                  WSDL/XSD/request fixtures + lxml oracle
+└─ vendor/                    libxml2 sources, built and linked statically by libxml2-sys
 ```
 
 ## Key crates
