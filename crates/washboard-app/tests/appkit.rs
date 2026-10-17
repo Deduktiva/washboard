@@ -68,10 +68,10 @@ mod checks {
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSButton, NSColor,
         NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags, NSEventType,
-        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSScrollView, NSSplitViewItemBehavior,
-        NSStackView, NSTableCellView, NSTextField, NSTextInputClient, NSTextView,
-        NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView, NSWindowOrderingMode,
-        NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSResponder, NSScrollView,
+        NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
+        NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView,
+        NSWindowOrderingMode, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -2197,7 +2197,35 @@ mod checks {
         // Selecting it shows the request as sent and the accessory instead of the toolbar.
         let window = project.project_window();
         let send_item = project.send_item().expect("a Send item");
-        response.history().click(1);
+        // Picked with ↓ in the History table, which keeps the focus for the next ↑ or ↓.
+        response.set_drawer_open(true);
+        let table = response.history().table();
+        assert!(
+            window.makeFirstResponder(Some(table)),
+            "the table takes the focus"
+        );
+        let down = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            NSEventType::KeyDown,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags::NumericPad | NSEventModifierFlags::Function,
+            0.0,
+            window.windowNumber(),
+            None,
+            ns_string!("\u{F701}"),
+            ns_string!("\u{F701}"),
+            false,
+            125,
+        )
+        .expect("a ↓ key event");
+        table.keyDown(&down);
+        assert_eq!(table.selectedRow(), 1, "↓ picked the older exchange");
+        assert!(
+            window
+                .firstResponder()
+                .is_some_and(|r| &*r == table.as_ref() as &NSResponder),
+            "the table keeps the focus: {:?}",
+            window.firstResponder()
+        );
         assert!(!project.older_accessory().isHidden(), "accessory shown");
         assert!(send_item.isHidden(), "Send hidden");
         assert!(
@@ -2256,6 +2284,13 @@ mod checks {
         // SAFETY: as above.
         let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };
         assert!(enabled, "Send is enabled again");
+        assert!(
+            window
+                .firstResponder()
+                .is_some_and(|r| &*r == table.as_ref() as &NSResponder),
+            "Show Latest leaves the focus in the table"
+        );
+        response.set_drawer_open(false);
 
         // Restore Request puts the sent request into the editor as one undo step.
         response.history().click(1);

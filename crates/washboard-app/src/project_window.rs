@@ -617,10 +617,17 @@ impl ProjectWindowController {
         } else {
             self.ivars().request_bar.show_sent(None);
         }
-        let leaving_sent = !shown
-            && window
+        // Hidden views lose the focus to the window; it moves only off what is being hidden, so
+        // a pick in the History table keeps ↑/↓ there.
+        let focus_in = |view: &NSView| {
+            window
                 .firstResponder()
-                .is_some_and(|r| &*r == self.ivars().sent.text_view().as_ref() as &NSResponder);
+                .and_then(|r| r.downcast::<NSView>().ok())
+                .is_some_and(|r| r.isDescendantOf(view))
+        };
+        let leaving_editor =
+            shown && (focus_in(self.editor().view()) || focus_in(self.issues().view()));
+        let leaving_sent = !shown && focus_in(self.ivars().sent.view());
         self.editor().view().setHidden(shown);
         self.issues().view().setHidden(shown);
         self.ivars().sent.view().setHidden(!shown);
@@ -635,7 +642,7 @@ impl ProjectWindowController {
                 }
             }
         }
-        if shown {
+        if leaving_editor {
             window.makeFirstResponder(Some(self.ivars().sent.text_view()));
         } else if leaving_sent {
             window.makeFirstResponder(Some(self.editor().text_view()));
