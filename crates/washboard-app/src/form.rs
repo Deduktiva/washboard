@@ -287,6 +287,26 @@ pub fn group(rows: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSB
     group.setCornerRadius(10.0);
     group.setContentViewMargins(NSSize::new(0.0, 0.0));
     group.setIdentifier(Some(&NSString::from_str(GROUP_ID)));
+    // NSBox sizes its content view by frame, which Auto Layout sees as a fixed size: with
+    // rows that span it, a stale content width held the rows, and through them the window.
+    if let Some(content) = group.contentView() {
+        content.setTranslatesAutoresizingMaskIntoConstraints(false);
+        let frame: &NSView = &group;
+        activate([
+            content
+                .leadingAnchor()
+                .constraintEqualToAnchor(&frame.leadingAnchor()),
+            content
+                .trailingAnchor()
+                .constraintEqualToAnchor(&frame.trailingAnchor()),
+            content
+                .topAnchor()
+                .constraintEqualToAnchor(&frame.topAnchor()),
+            content
+                .bottomAnchor()
+                .constraintEqualToAnchor(&frame.bottomAnchor()),
+        ]);
+    }
     set_rows(&group, rows, mtm);
     group
 }
