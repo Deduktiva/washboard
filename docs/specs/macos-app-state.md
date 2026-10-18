@@ -13,7 +13,7 @@ lists recent projects with *New Project…* / *Open Project…*.
 
 ## App settings
 App settings (not per project) live in the user defaults (`NSUserDefaults`, domain
-`at.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
+`com.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
 and `FormatOnSave` so far. The app reads them and passes them to the model at launch and on
 change; the model stores no settings of its own, and the CLI reads none. The Settings window's
 selected pane (`SettingsPane`) is kept there too.

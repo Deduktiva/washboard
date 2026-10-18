@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::model::{ProjectId, ServerId};
 
-pub const KEYCHAIN_SERVICE: &str = "at.deduktiva.washboard";
+pub const KEYCHAIN_SERVICE: &str = "com.deduktiva.washboard";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SecretKey {

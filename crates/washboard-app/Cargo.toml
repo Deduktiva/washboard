@@ -42,7 +42,7 @@ washboard-test-support.workspace = true
 # because on case-insensitive APFS it would overwrite the CLI (`washboard`) in `target/release/`.
 [package.metadata.packager]
 product-name = "Washboard"
-identifier = "at.deduktiva.washboard"
+identifier = "com.deduktiva.washboard"
 formats = ["app"]
 before-packaging-command = """
 MACOSX_DEPLOYMENT_TARGET=26.0 cargo build --release -p washboard-app \

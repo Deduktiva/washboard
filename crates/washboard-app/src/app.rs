@@ -45,7 +45,7 @@ pub struct Options {
     /// `None`: AppKit open panels and alerts.
     pub dialogs: Option<Box<dyn Dialogs>>,
     /// The user defaults suite for the app's settings; `None`: the app's own defaults
-    /// (`at.deduktiva.washboard` when run from the bundle).
+    /// (`com.deduktiva.washboard` when run from the bundle).
     pub defaults_suite: Option<String>,
 }
 

@@ -34,7 +34,7 @@ washboard/
 | XML parsing | own tolerant tokenizer for highlighting and start tags, `roxmltree` for the WSDL/XSD model, libxml2 for well-formedness and validation, `quick-xml` for escaping | one well-formedness verdict for editor and validation |
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see [schema bundle](schema-bundle.md) and [`libxml2-sys`](../../crates/libxml2-sys/README.md) |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Header capture is close but not byte-exact (PLAN, "Planned for v2"). |
-| Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
+| Keychain | `security-framework` | generic password, service `com.deduktiva.washboard` |
 | IDs / time | `uuid`, `jiff` | |
 | File watching | `notify` (FSEvents backend) | external edits to request files |
 

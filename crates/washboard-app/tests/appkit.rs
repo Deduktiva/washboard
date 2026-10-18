@@ -99,7 +99,7 @@ mod checks {
     use washboard_test_support::fixtures;
     use washboard_test_support::server::serve_once;
 
-    const DEFAULTS_SUITE: &str = "at.deduktiva.washboard.appkit-checks";
+    const DEFAULTS_SUITE: &str = "com.deduktiva.washboard.appkit-checks";
 
     /// How long launching may take before the run is abandoned instead of hanging CI.
     const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
