@@ -9,7 +9,7 @@ use washboard_core::model::OperationRef;
 use washboard_core::wsdl::{Reference, Resolution, Unresolved};
 use washboard_ui_model::{
     CheckState, CheckedImport, CompletionKind, Hover, ImportSheet, ImportTarget, Issue,
-    ReplaceOutcome, WellFormedness,
+    ReplaceOutcome,
 };
 
 /// A row of the import sheet's reference table: mark, the file the reference is in, the
@@ -250,50 +250,27 @@ pub(crate) fn operation_chip(operation: &OperationRef) -> String {
     format!("SOAP 1.1 · {}", operation.operation)
 }
 
-/// The request bar's well-formedness indicator; empty until the first check has finished.
-pub(crate) fn well_formedness_text(state: WellFormedness) -> String {
-    match state {
-        WellFormedness::Pending => String::new(),
-        WellFormedness::WellFormed => "Well-formed".to_owned(),
-        WellFormedness::Error { line: Some(line) } => format!("XML error, line {line}"),
-        WellFormedness::Error { line: None } => "XML error".to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use washboard_core::diag::{DiagSource, Severity, TextPos};
     use washboard_core::model::{OperationRef, QName, RequestId};
     use washboard_core::wsdl::{MatchedBy, RefKind, Reference, Resolution, Unresolved};
     use washboard_ui_model::{
-        CompletionKind, Hover, ImportSheet, ImportTarget, Issue, ReplaceOutcome, WellFormedness,
+        CompletionKind, Hover, ImportSheet, ImportTarget, Issue, ReplaceOutcome,
     };
 
     use super::{
         LineMarker, completion_kinds, hover_text, import_files, import_status, line_markers,
-        operation_chip, reference_row, replace_summary, text_tool_tip, well_formedness_text,
+        operation_chip, reference_row, replace_summary, text_tool_tip,
     };
 
     #[test]
-    fn the_request_bar_names_the_operation_and_the_xml_state() {
+    fn the_request_bar_names_the_operation() {
         let operation = OperationRef {
             binding: QName::new("urn:example:legacy", "LegacyBinding"),
             operation: "Lookup".into(),
         };
         assert_eq!(operation_chip(&operation), "SOAP 1.1 · Lookup");
-        assert_eq!(well_formedness_text(WellFormedness::Pending), "");
-        assert_eq!(
-            well_formedness_text(WellFormedness::WellFormed),
-            "Well-formed"
-        );
-        assert_eq!(
-            well_formedness_text(WellFormedness::Error { line: Some(9) }),
-            "XML error, line 9"
-        );
-        assert_eq!(
-            well_formedness_text(WellFormedness::Error { line: None }),
-            "XML error"
-        );
     }
 
     #[test]

@@ -117,11 +117,10 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .complete .on { background: var(--sel); color: #fff; } .complete .on span { color: #fff; opacity: .8; }
 
 .issues { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--sidebar); padding: 6px 12px; font-size: 12px; display: grid; gap: 3px; }
-.issues .head { display: flex; gap: 10px; align-items: center; }
-.issues .err { color: var(--err); font-weight: 600; }
 .issues a { color: var(--fg); text-decoration: none; cursor: pointer; }
 .issues a code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: 6px; }
-.issues.ok .head span { color: var(--ok); font-weight: 600; }
+/* The validity widget: a pill at the request bar's right end, click shows or hides the issues list. */
+.vwidget { font: 600 12px var(--ui); padding: 1px 9px; border: 1px solid var(--line); border-radius: 10px; background: none; cursor: default; }
 
 .resp { display: grid; grid-template-rows: 30px auto minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
 .resphead { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; }
@@ -256,7 +255,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
           </aside>
           <div class="content">
             <div class="reqcol" id="reqcol">
-              <div class="reqbar"><b id="reqName">GetCustomer 1</b><span class="chip" id="reqOp">SOAP 1.1 · GetCustomer</span><span class="spacer"></span><span class="lbl" id="xmlState" style="color:var(--ok)">Well-formed</span></div>
+              <div class="reqbar"><b id="reqName">GetCustomer 1</b><span class="chip" id="reqOp">SOAP 1.1 · GetCustomer</span><span class="spacer"></span><span class="lbl" id="xmlState"></span><button class="vwidget" id="vWidget" title="Show or hide the issues list"></button></div>
               <div class="editor" id="editor"></div>
               <div class="issues" id="issues" hidden></div>
             </div>
@@ -266,7 +265,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
         <span class="pin" data-for="reqList">1</span>
         <span class="pin" data-for="serverBtn">2</span>
         <span class="pin" data-for="sendBtn">3</span>
-        <span class="pin" data-for="xmlState" data-side="before">4</span>
+        <span class="pin" data-for="vWidget" data-side="before">4</span>
         <span class="pin" data-for="opsRow">5</span>
         <span class="pin" data-for="respTabs" data-side="before">6</span>
         <span class="pin" data-for="grip">7</span>
@@ -279,7 +278,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
         <li><span>Requests list (<code>NSOutlineView</code>, source-list style). Dot = unsaved buffer, ⚠ = last validation failed. Return renames inline; ⌘D duplicates; ⌘⌫ deletes.</span></li>
         <li><span>Server popup. Defaults to this request's last-used server; changing it is stored immediately.</span></li>
         <li><span>Send (⌘↩) validates first and refuses to send on errors. There is no Validate button: requests are validated as they are edited, and Edit ▸ Validate (⌘B) skips the wait. Save All (⌘S) is menu-only; autosave runs 1 s after typing stops.</span></li>
-        <li><span>Live well-formedness state. Broken XML turns this red and underlines the position. Try the CreateOrder 1 request.</span></li>
+        <li><span>Validity widget, live as you type: "✓ Valid", "Checking…", warnings, or "⚠ n errors" in red, which also underline the position and mark the line in the gutter. Click it to show or hide the issues list under the editor; a list row jumps to its line. Try the CreateOrder 1 request.</span></li>
         <li><span>Folders: plain subfolders of the project's <code>requests/</code>. New Request (⌘N) picks the operation from a searchable list and files the request, named <code>&lt;Operation&gt; &lt;n&gt;</code>, in that operation's folder, created on first use. Drag to move.</span></li>
         <li><span>Response beside the request, in one vertical split. Its status line shares a band with the request bar; tabs Response and Headers.</span></li>
         <li><span>History drawer under the response, kept on disk (last 20). Collapsed it is one line with a dot per exchange (red: fault or failure; ringed: shown). Click it, then pick a row.</span></li>
@@ -474,7 +473,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 
   let cur = 0;
   // Shown history entry (0 = latest), response tab, drawer state.
-  let shown = 0, tab = "body", drawerOpen = false;
+  let shown = 0, tab = "body", drawerOpen = false, issuesHidden = false;
   const $ = id => document.getElementById(id);
   function render() {
     const r = reqs[cur];
@@ -483,19 +482,22 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
     const errLines = new Set(r.errors.map(e => e.line));
     let codeHtml = lines.map((l, i) => {
       let h = hl(l);
-      if (!ro && !r.wf && i + 1 === r.wfLine) h = `<span class="squig">${h}</span>`;
+      if (!ro && errLines.has(i + 1)) h = `<span class="squig">${h}</span>`;
       return h || " ";
     }).join("\n");
-    const gutter = lines.map((_, i) => `<div class="${(!ro && !r.wf && i + 1 === r.wfLine) ? "e" : ""}">${i + 1}</div>`).join("");
+    const gutter = lines.map((_, i) => `<div class="${(!ro && errLines.has(i + 1)) ? "e" : ""}">${i + 1}</div>`).join("");
     $("editor").innerHTML = `<div class="gutter">${gutter}</div><div class="code" style="position:relative">${codeHtml}${r.complete && !ro ? completeBox() : ""}</div>`;
     $("reqName").textContent = r.name;
     $("reqOp").textContent = r.op;
     const st = $("xmlState");
     st.className = ro ? "robadge" : "lbl";
-    st.textContent = ro ? `Sent ${HIST[shown].day} ${HIST[shown].t} · read-only` : r.wf ? "Well-formed" : "XML error, line " + r.wfLine;
-    st.style.color = ro ? "" : r.wf ? "var(--ok)" : "var(--err)";
-    const iss = $("issues");
-    if (!r.wf && !ro) showIssues(r.errors, "XML error"); else iss.hidden = true;
+    st.textContent = ro ? `Sent ${HIST[shown].day} ${HIST[shown].t} · read-only` : "";
+    const w = $("vWidget"), n = r.errors.length;
+    w.hidden = ro;
+    w.textContent = n ? `⚠ ${n} error${n > 1 ? "s" : ""}` : "✓ Valid";
+    w.style.color = n ? "var(--err)" : "var(--ok)";
+    showIssues(r.errors);
+    $("issues").hidden = ro || n === 0 || issuesHidden;
     $("reqcol").classList.toggle("ro", ro);
     // An older exchange: the strip under the toolbar replaces the toolbar's own items.
     $("histStrip").hidden = !ro;
@@ -511,22 +513,13 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
       <div>cus:asOf <span>xs:date · 0..1</span></div>
       <div>cus:fields <span>FieldList · 0..1</span></div></div>`;
   }
-  function showIssues(errs, kind) {
-    const iss = $("issues");
-    iss.classList.toggle("ok", errs.length === 0);
-    if (errs.length === 0) {
-      iss.innerHTML = `<div class="head"><span>✓ Valid against CustomerService.wsdl</span></div>`;
-    } else {
-      iss.innerHTML = `<div class="head"><span class="err">⚠ ${errs.length} ${kind}${errs.length > 1 ? "s" : ""}</span><span class="lbl">Send is blocked until this is fixed.</span></div>` +
-        errs.map(e => `<a><code>line ${e.line}</code>${esc(e.msg)}</a>`).join("");
-    }
-    iss.hidden = false;
+  function showIssues(errs) {
+    $("issues").innerHTML = errs.map(e => `<a><code>line ${e.line}</code>${esc(e.msg)}</a>`).join("");
   }
+  // Validate (⌘B) and a refused Send show the list even if it was hidden.
   function validate() {
-    const r = reqs[cur];
-    if (!r.wf) return showIssues(r.errors, "XML error");
-    showIssues(r.errors, "validation error");
-    document.querySelectorAll("#editor .gutter div").forEach((d, i) => d.classList.toggle("e", r.errors.some(e => e.line === i + 1)));
+    issuesHidden = false;
+    render();
   }
   // Mirrors the app's status line: status · duration · size [· fault] · server · sent time.
   function statusParts(e) {
@@ -577,10 +570,10 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
     el.addEventListener("click", go);
     el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
   });
+  $("vWidget").addEventListener("click", () => { issuesHidden = !issuesHidden; render(); });
   $("sendBtn").addEventListener("click", () => {
     const r = reqs[cur];
     if (!r.wf || r.errors.length) { validate(); return; }
-    $("issues").hidden = true;
     HIST[0].ms = 120 + Math.floor(Math.random() * 60);
     HIST[0].t = new Date().toTimeString().slice(0, 8);
     shown = 0; tab = "body"; render();

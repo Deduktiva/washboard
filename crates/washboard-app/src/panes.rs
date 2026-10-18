@@ -1,5 +1,5 @@
-//! The request bar above the editor, the issues bar under it, and the response pane beside them
-//! with its History drawer (`docs/specs/response-pane.md`).
+//! The request bar above the editor with the validity widget, the issues list under it, and the
+//! response pane beside them with its History drawer (`docs/specs/response-pane.md`).
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
@@ -22,7 +22,7 @@ use objc2_foundation::{
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
-    HistoryDrawer, Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
+    HistoryDrawer, Issue, ProjectKey, RequestSummary, ResponseView, Validity,
 };
 
 use crate::app::ModelAccess;
@@ -30,22 +30,19 @@ use crate::colors;
 use crate::editor::EditorController;
 use crate::layout;
 use crate::table::TextTable;
-use crate::text::{count, operation_chip, well_formedness_text};
+use crate::text::{count, operation_chip};
 use crate::views::{read_only_text, read_only_text_get_text, read_only_text_set_text};
 
 /// The bar above the editor (`docs/gui-draft.html`): the request's name, a chip with its
-/// operation, and the live well-formedness state. Plain views with no actions, so no
-/// Objective-C class of its own.
+/// operation, and at its right end the validity widget (`IssuesBar`), or "Sent … · read-only"
+/// while an older exchange is shown. Plain views with no actions, so no Objective-C class of its
+/// own.
 #[derive(Debug)]
 pub struct RequestBar {
     name: Retained<NSTextField>,
     operation: Retained<NSBox>,
     operation_label: Retained<NSTextField>,
     state: Retained<NSTextField>,
-    /// The editor's live state, shown again when the sent-request label goes.
-    well_formedness: Cell<WellFormedness>,
-    /// "Sent <time> · read-only" while an older exchange is shown.
-    sent: RefCell<Option<String>>,
     view: Retained<NSStackView>,
 }
 
@@ -58,6 +55,7 @@ impl RequestBar {
         operation.setHidden(true);
         let state = NSTextField::labelWithString(ns_string!(""), mtm);
         state.setFont(Some(&NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE)));
+        state.setTextColor(Some(&NSColor::secondaryLabelColor()));
         let view = NSStackView::stackViewWithViews(&NSArray::new(), mtm);
         view.addView_inGravity(&name, NSStackViewGravity::Leading);
         view.addView_inGravity(&operation, NSStackViewGravity::Leading);
@@ -71,8 +69,6 @@ impl RequestBar {
             operation,
             operation_label,
             state,
-            well_formedness: Cell::new(WellFormedness::Pending),
-            sent: RefCell::new(None),
             view,
         }
     }
@@ -92,38 +88,13 @@ impl RequestBar {
         self.operation_label
             .setStringValue(&NSString::from_str(chip.as_deref().unwrap_or_default()));
         self.operation.setHidden(chip.is_none());
-        self.set_state(request.map_or(WellFormedness::Pending, |r| r.well_formedness));
-    }
-
-    /// The well-formedness state alone, which changes with every check. While an older
-    /// exchange is shown it is kept for later: the bar is about the sent request then.
-    pub fn set_state(&self, state: WellFormedness) {
-        self.well_formedness.set(state);
-        if self.sent.borrow().is_some() {
-            return;
-        }
-        self.state
-            .setStringValue(&NSString::from_str(&well_formedness_text(state)));
-        let colour = match state {
-            WellFormedness::Pending => NSColor::secondaryLabelColor(),
-            WellFormedness::WellFormed => colors::success(),
-            WellFormedness::Error { .. } => colors::error(),
-        };
-        self.state.setTextColor(Some(&colour));
     }
 
     /// `Some("Sent … · read-only")` while an older exchange's request is shown in place of
-    /// the editor; `None` shows the editor's state again.
+    /// the editor; `None` clears it.
     pub fn show_sent(&self, sent: Option<&str>) {
-        *self.sent.borrow_mut() = sent.map(str::to_owned);
-        match sent {
-            Some(text) => {
-                self.state.setStringValue(&NSString::from_str(text));
-                self.state
-                    .setTextColor(Some(&NSColor::secondaryLabelColor()));
-            }
-            None => self.set_state(self.well_formedness.get()),
-        }
+        self.state
+            .setStringValue(&NSString::from_str(sent.unwrap_or_default()));
     }
 
     pub fn name(&self) -> String {
@@ -140,6 +111,13 @@ impl RequestBar {
         &self.operation
     }
 
+    /// A view at the right end, beside the "Sent … · read-only" label: the validity widget.
+    pub fn add_trailing(&self, view: &NSView) {
+        self.view
+            .addView_inGravity(view, NSStackViewGravity::Trailing);
+    }
+
+    /// The trailing label: "Sent … · read-only", or empty.
     pub fn state(&self) -> String {
         self.state.stringValue().to_string()
     }
@@ -151,9 +129,15 @@ pub struct IssuesIvars {
     table: Retained<TextTable>,
     /// The listed issues, in the table's order.
     issues: RefCell<Vec<Issue>>,
-    summary: OnceCell<Retained<NSTextField>>,
-    /// Hide or Show, for the list.
-    hide: OnceCell<Retained<NSButton>>,
+    /// The validity widget at the right end of the request bar, and its button.
+    widget: OnceCell<Retained<NSBox>>,
+    /// A request is open, so the widget has something to say.
+    open: Cell<bool>,
+    /// An older exchange's request is shown in place of the editor, so the widget gives way.
+    sent: Cell<bool>,
+    summary: OnceCell<Retained<NSButton>>,
+    /// The hairline above the list, shown and hidden with it.
+    line: OnceCell<Retained<NSBox>>,
     view: OnceCell<Retained<NSStackView>>,
 }
 
@@ -174,15 +158,14 @@ define_class!(
         // SAFETY: action methods take the sender and return nothing.
         #[unsafe(method(toggleIssues:))]
         fn toggle(&self, _sender: Option<&AnyObject>) {
-            let list = self.ivars().table.view();
-            self.show_list(list.isHidden());
+            self.show_list(!self.list_shown());
         }
     }
 );
 
 impl IssuesBar {
     pub fn new(editor: &EditorController, mtm: MainThreadMarker) -> Retained<Self> {
-        // Line and message, without a header: the bar is only a few rows high.
+        // Line and message, without a header: the list is only a few rows high.
         let table = TextTable::new(&["", ""], mtm);
         table.fix_column_width(0, LINE_COLUMN_WIDTH);
         table.wrap_column(1);
@@ -190,23 +173,19 @@ impl IssuesBar {
             editor: editor.retain(),
             table,
             issues: RefCell::new(Vec::new()),
+            widget: OnceCell::new(),
+            open: Cell::new(false),
+            sent: Cell::new(false),
             summary: OnceCell::new(),
-            hide: OnceCell::new(),
+            line: OnceCell::new(),
             view: OnceCell::new(),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
-        let summary = layout::small_label("", mtm);
-        // A long first message keeps the Hide button in view.
-        layout::truncating(&summary, NSLineBreakMode::ByTruncatingTail);
-        let hide = layout::button("Hide", &this, sel!(toggleIssues:), mtm);
-        hide.setControlSize(NSControlSize::Small);
-        let header = layout::row(
-            &[layout::view(summary.clone()), layout::view(hide.clone())],
-            mtm,
-        );
-        header.setEdgeInsets(layout::insets(4.0, 8.0, 4.0, 8.0));
+        // The request bar shows it (`RequestBar::add_trailing`).
+        let (widget, summary) = validity_widget(&this, mtm);
+        widget.setHidden(true);
 
         // The table belongs to this bar: a strong reference back would be a cycle.
         let bar = Weak::from(&*this);
@@ -217,10 +196,13 @@ impl IssuesBar {
         });
         let list: Retained<NSView> = Retained::into_super(this.ivars().table.view().retain());
         layout::set_height(&list, ISSUES_HEIGHT);
-        let view = layout::fill_column(&[Retained::into_super(header), list], mtm);
+        let line = NSBox::new(mtm);
+        line.setBoxType(NSBoxType::Separator);
+        let view = layout::fill_column(&[Retained::into_super(line.clone()), list], mtm);
         layout::hug_vertically(&view);
+        let _ = this.ivars().widget.set(widget);
         let _ = this.ivars().summary.set(summary);
-        let _ = this.ivars().hide.set(hide);
+        let _ = this.ivars().line.set(line);
         let _ = this.ivars().view.set(view);
         this
     }
@@ -233,27 +215,36 @@ impl IssuesBar {
         &self.ivars().table
     }
 
-    /// The summary beside the list: the validation state of the editor's text.
+    /// The validity widget's text: the validation state of the editor's text.
     pub fn summary(&self) -> String {
         self.ivars()
             .summary
             .get()
-            .map(|label| label.stringValue().to_string())
+            .map(|button| button.title().to_string())
             .unwrap_or_default()
     }
 
-    /// Lists the editor's issues, marks their lines in the ruler and underlines their ranges
-    /// (`DiagnosticsChanged`). The summary is the live validation indicator: it says
-    /// whether the text has been validated yet, so an empty list never reads as "valid" while a
-    /// check is still due. `basis` is `None` with no request open.
-    pub fn set_issues(&self, issues: Vec<Issue>, basis: Option<IssuesBasis>) {
-        let errors = issues.iter().filter(|i| i.is_error()).count();
-        let warnings = issues.len() - errors;
-        let (summary, colour) = summary(errors, warnings, basis);
-        if let Some(label) = self.ivars().summary.get() {
-            label.setStringValue(&NSString::from_str(&summary));
-            label.setTextColor(Some(&colour));
+    /// The validity widget, for layout checks.
+    pub fn widget(&self) -> &NSBox {
+        self.ivars().widget.get().expect("set in new()")
+    }
+
+    /// The validity widget's button, which shows or hides the list.
+    pub fn widget_button(&self) -> &NSButton {
+        self.ivars().summary.get().expect("set in new()")
+    }
+
+    /// Lists the editor's issues, marks their lines in the ruler, underlines their ranges and
+    /// sums them up in the validity widget (`DiagnosticsChanged`). `validity` is `None` with no
+    /// request open, which hides the widget.
+    pub fn set_issues(&self, issues: Vec<Issue>, validity: Option<Validity>) {
+        let (summary, colour) = summary(validity);
+        if let Some(button) = self.ivars().summary.get() {
+            button.setTitle(&NSString::from_str(&summary));
+            button.setContentTintColor(Some(&colour));
         }
+        self.ivars().open.set(validity.is_some());
+        self.show_widget();
         self.ivars().table.set_rows(
             issues
                 .iter()
@@ -275,21 +266,36 @@ impl IssuesBar {
         *self.ivars().issues.borrow_mut() = issues;
     }
 
+    /// While an older exchange is shown, the request bar is about the sent request: the widget
+    /// gives way to its "Sent … · read-only" label.
+    pub fn show_sent(&self, sent: bool) {
+        self.ivars().sent.set(sent);
+        self.show_widget();
+    }
+
+    fn show_widget(&self) {
+        let ivars = self.ivars();
+        self.widget()
+            .setHidden(!ivars.open.get() || ivars.sent.get());
+    }
+
     /// Shows the list if it was hidden (`ShowIssues`).
     pub fn reveal(&self) {
         self.show_list(true);
     }
 
-    /// A hidden list leaves the stack, so the editor takes its height.
+    /// A hidden list leaves the stack, so the editor takes its height. The list's own views
+    /// are hidden, not the bar: the bar is hidden while an older exchange is shown, and showing
+    /// it again must not undo the user's choice.
     fn show_list(&self, shown: bool) {
         self.ivars().table.view().setHidden(!shown);
-        if let Some(hide) = self.ivars().hide.get() {
-            hide.setTitle(if shown {
-                ns_string!("Hide")
-            } else {
-                ns_string!("Show")
-            });
+        if let Some(line) = self.ivars().line.get() {
+            line.setHidden(!shown);
         }
+    }
+
+    fn list_shown(&self) -> bool {
+        !self.ivars().table.view().isHidden()
     }
 
     /// A click on row `row`: selects the issue's range, else its line.
@@ -883,24 +889,71 @@ fn history_dot(failed: bool, shown: bool, mtm: MainThreadMarker) -> Retained<NSB
     dot
 }
 
-/// The issues summary and its colour. Errors show as soon as any check finds them; "Valid"
-/// only once the schema check of the current text found none.
-fn summary(
-    errors: usize,
-    warnings: usize,
-    basis: Option<IssuesBasis>,
-) -> (String, Retained<NSColor>) {
-    match (errors, warnings, basis) {
-        (_, _, None) => (String::new(), NSColor::secondaryLabelColor()),
-        (0, _, Some(IssuesBasis::Pending)) => ("Checking…".into(), NSColor::secondaryLabelColor()),
-        (0, _, Some(IssuesBasis::WellFormedOnly)) => {
+/// The validity widget: a borderless button that toggles the issues list, in a pill-shaped
+/// outline like the operation chip beside it.
+fn validity_widget(
+    target: &IssuesBar,
+    mtm: MainThreadMarker,
+) -> (Retained<NSBox>, Retained<NSButton>) {
+    let button = layout::button("", target, sel!(toggleIssues:), mtm);
+    button.setBordered(false);
+    button.setFont(Some(&NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE)));
+    button.setToolTip(Some(ns_string!("Show or hide the issues list")));
+    let plate = NSBox::new(mtm);
+    plate.setBoxType(NSBoxType::Custom);
+    plate.setTitlePosition(NSTitlePosition::NoTitle);
+    // Semantic colours, so the outline follows the appearance (a CALayer border would not).
+    plate.setBorderColor(&NSColor::separatorColor());
+    plate.setBorderWidth(1.0);
+    plate.setCornerRadius(WIDGET_HEIGHT / 2.0);
+    plate.setContentViewMargins(NSSize::new(0.0, 0.0));
+    if let Some(content) = plate.contentView() {
+        button.setTranslatesAutoresizingMaskIntoConstraints(false);
+        content.addSubview(&button);
+        for constraint in [
+            button
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), WIDGET_PADDING),
+            content
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&button.trailingAnchor(), WIDGET_PADDING),
+            button
+                .centerYAnchor()
+                .constraintEqualToAnchor(&content.centerYAnchor()),
+            plate
+                .heightAnchor()
+                .constraintEqualToConstant(WIDGET_HEIGHT),
+        ] {
+            constraint.setActive(true);
+        }
+    }
+    (plate, button)
+}
+
+/// The validity widget's height; it is a pill.
+const WIDGET_HEIGHT: f64 = 20.0;
+const WIDGET_PADDING: f64 = 8.0;
+
+/// The validity widget's text and colour; empty with no request open.
+fn summary(validity: Option<Validity>) -> (String, Retained<NSColor>) {
+    match validity {
+        None => (String::new(), NSColor::secondaryLabelColor()),
+        Some(Validity::Checking) => ("Checking…".into(), NSColor::secondaryLabelColor()),
+        Some(Validity::SchemaNotChecked) => {
             ("Well-formed · schema not checked".into(), colors::warning())
         }
-        (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), colors::success()),
-        (0, w, Some(IssuesBasis::Validated)) => (count(w, "warning"), colors::warning()),
-        (e, 0, _) => (format!("⚠ {}", count(e, "error")), colors::error()),
-        (e, w, _) => (
-            format!("⚠ {}, {}", count(e, "error"), count(w, "warning")),
+        Some(Validity::Valid) => ("✓ Valid".into(), colors::success()),
+        Some(Validity::Warnings(w)) => (count(w, "warning"), colors::warning()),
+        Some(Validity::Errors {
+            errors,
+            warnings: 0,
+        }) => (format!("⚠ {}", count(errors, "error")), colors::error()),
+        Some(Validity::Errors { errors, warnings }) => (
+            format!(
+                "⚠ {}, {}",
+                count(errors, "error"),
+                count(warnings, "warning")
+            ),
             colors::error(),
         ),
     }

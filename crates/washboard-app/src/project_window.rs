@@ -31,7 +31,7 @@ use objc2_foundation::{
 };
 
 use washboard_core::model::{RequestId, ServerId};
-use washboard_ui_model::{ImportTarget, ModelError, ProjectKey, WellFormedness};
+use washboard_ui_model::{ImportTarget, ModelError, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::editor::EditorController;
@@ -483,27 +483,21 @@ impl ProjectWindowController {
         self.project_window().setDocumentEdited(edited);
     }
 
-    /// The issues bar, ruler and underlines show the editor's issues, and the request bar
-    /// whether its text is well-formed (`DiagnosticsChanged`).
+    /// The issues list, validity widget, ruler and underlines show the editor's issues
+    /// (`DiagnosticsChanged`).
     pub fn show_issues(&self) {
         let key = self.key();
-        let (issues, basis, state) = self
+        let (issues, validity) = self
             .read_project(key, |w| {
-                w.editor().map(|e| {
-                    (
-                        e.issues().to_vec(),
-                        Some(e.issues_basis()),
-                        e.well_formedness(),
-                    )
-                })
+                w.editor()
+                    .map(|e| (e.issues().to_vec(), Some(e.validity())))
             })
             .flatten()
-            .unwrap_or((Vec::new(), None, WellFormedness::Pending));
-        self.issues().set_issues(issues, basis);
-        self.ivars().request_bar.set_state(state);
+            .unwrap_or_default();
+        self.issues().set_issues(issues, validity);
     }
 
-    /// The request bar shows the open request's name, operation and well-formedness
+    /// The request bar shows the open request's name and operation
     /// (`EditorReplaced`, and `SidebarChanged` for a rename).
     pub fn show_request_bar(&self) {
         let key = self.key();
@@ -617,6 +611,7 @@ impl ProjectWindowController {
         } else {
             self.ivars().request_bar.show_sent(None);
         }
+        self.issues().show_sent(shown);
         // Hidden views lose the focus to the window; it moves only off what is being hidden, so
         // a pick in the History table keeps ↑/↓ there.
         let focus_in = |view: &NSView| {
@@ -888,6 +883,7 @@ impl ProjectWindowController {
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
         let issues = IssuesBar::new(editor, mtm);
+        self.ivars().request_bar.add_trailing(issues.widget());
         let content = content_pane(
             self.ivars().request_bar.view(),
             &[editor.view(), self.ivars().sent.view()],

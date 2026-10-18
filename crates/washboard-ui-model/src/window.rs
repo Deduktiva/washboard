@@ -14,7 +14,6 @@ use washboard_core::schema::SchemaModel;
 use washboard_core::wsdl::{self, Direction, Protocol, Style, Wsdl};
 
 use crate::app::ModelError;
-use crate::diagnostics::WellFormedness;
 use crate::editor::Editor;
 use crate::import::ReplaceOutcome;
 use crate::send::{OlderExchange, ResponseView, Sending};
@@ -258,7 +257,6 @@ pub struct RequestSummary {
     pub name: String,
     /// The operation the request was made for; `None` for a request without the hint.
     pub operation: Option<OperationRef>,
-    pub well_formedness: WellFormedness,
 }
 
 /// One open project and the state of its window.
@@ -330,14 +328,13 @@ impl ProjectWindow {
         self.editor.as_ref()
     }
 
-    /// The open request's name, operation and well-formedness; `None` with no request open.
+    /// The open request's name and operation; `None` with no request open.
     pub fn request_summary(&self) -> Option<RequestSummary> {
         let editor = self.editor.as_ref()?;
         let id = editor.request();
         Some(RequestSummary {
             name: self.sidebar.request(id)?.name.clone(),
             operation: self.request_operation(id),
-            well_formedness: editor.well_formedness(),
         })
     }
 

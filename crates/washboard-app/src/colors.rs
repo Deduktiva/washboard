@@ -7,19 +7,19 @@
 use objc2::rc::Retained;
 use objc2_app_kit::NSColor;
 
-/// Errors: the request bar's "XML error", the issues bar's error count, the editor's ruler
-/// markers and underlines, the sidebar's invalid-request marker.
+/// Errors: the validity widget's error count, the editor's ruler markers and underlines, the
+/// sidebar's invalid-request marker.
 pub fn error() -> Retained<NSColor> {
     NSColor::systemRedColor()
 }
 
-/// Warnings: the issues bar's "schema not checked" and warning count, the editor's ruler
+/// Warnings: the validity widget's "schema not checked" and warning count, the editor's ruler
 /// markers for lines with only warnings.
 pub fn warning() -> Retained<NSColor> {
     NSColor::systemOrangeColor()
 }
 
-/// Success: "Well-formed" in the request bar, "✓ Valid" in the issues bar.
+/// Success: the validity widget's "✓ Valid".
 pub fn success() -> Retained<NSColor> {
     NSColor::systemGreenColor()
 }

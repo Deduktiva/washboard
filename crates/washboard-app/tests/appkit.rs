@@ -2013,12 +2013,12 @@ mod checks {
             project.issues().summary() == "✓ Valid"
         });
 
-        // The request bar names the open request and its operation, and says the text is
-        // well-formed.
+        // The request bar names the open request and its operation; validity is the widget's
+        // alone.
         let bar = project.request_bar();
         assert_eq!(bar.name(), selected_row(&project).title());
         assert_eq!(bar.operation().as_deref(), Some("SOAP 1.1 · Lookup"));
-        assert_eq!(bar.state(), "Well-formed");
+        assert_eq!(bar.state(), "");
         project.project_window().layoutIfNeeded();
         let chip = bar.operation_chip();
         assert!(
@@ -2026,6 +2026,28 @@ mod checks {
             "the chip shows its text: {:?}",
             chip.frame()
         );
+        // The widget sits at the request bar's right end, clear of the chip.
+        let widget = project.issues().widget();
+        assert!(!widget.isHidden());
+        let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let (at, bar_rect, chip_rect) = (in_window(widget), in_window(bar.view()), in_window(chip));
+        assert!(
+            at.size.width > 50.0
+                && at.origin.x > chip_rect.origin.x + chip_rect.size.width
+                && at.origin.x + at.size.width <= bar_rect.origin.x + bar_rect.size.width
+                && at.origin.y >= bar_rect.origin.y
+                && at.origin.y + at.size.height <= bar_rect.origin.y + bar_rect.size.height,
+            "the widget is in the bar, right of the chip: {at:?} in {bar_rect:?}"
+        );
+        // Clicking it hides the list and clicking again shows it.
+        let list = project.issues().table().view();
+        assert!(!list.isHidden());
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { project.issues().widget_button().performClick(None) };
+        assert!(list.isHidden(), "the widget hides the list");
+        // SAFETY: as above.
+        unsafe { project.issues().widget_button().performClick(None) };
+        assert!(!list.isHidden(), "and shows it again");
 
         let replace = |at: usize, len: usize, with: &str| {
             // SAFETY: replacing a range inside the text, as typing over a selection does.
@@ -2094,18 +2116,15 @@ mod checks {
             "click selects the issue: {selected:?}"
         );
 
-        // Broken XML turns the request bar's state into the error's line; the schema error
-        // before it did not.
-        assert_eq!(bar.state(), "Well-formed");
+        // Broken XML replaces the schema error with the parse error alone.
         replace(start, "someday".len(), "<");
-        wait_until("the XML error in the request bar", || {
-            bar.state() == format!("XML error, line {line}")
+        wait_until("the XML error alone", || {
+            project.issues().summary() == "⚠ 1 error"
+                && issues.rows().len() == 1
+                && issues.rows()[0][1].starts_with("not well-formed")
         });
 
         replace(start, 1, &date);
-        wait_until("the request bar to read well-formed again", || {
-            bar.state() == "Well-formed"
-        });
         let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
         // SAFETY: the window controller's actions take the sender.
         let sent = unsafe {
@@ -2347,6 +2366,10 @@ mod checks {
         );
         assert!(!project.sent_request().text_view().isEditable());
         assert!(project.request_bar().state().ends_with(" · read-only"));
+        assert!(
+            project.issues().widget().isHidden(),
+            "the validity widget gives way to the sent label"
+        );
         assert_eq!(
             text_view.string().to_string(),
             edited,
@@ -2385,6 +2408,10 @@ mod checks {
         assert!(project.older_accessory().isHidden(), "accessory gone");
         assert!(!send_item.isHidden(), "Send back");
         assert!(!project.editor().view().isHidden(), "the editor is back");
+        assert!(
+            !project.issues().widget().isHidden(),
+            "and the validity widget"
+        );
         assert_eq!(text_view.string().to_string(), edited);
         // SAFETY: as above.
         let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };

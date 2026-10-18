@@ -75,22 +75,47 @@ pub enum IssuesBasis {
     WellFormedOnly,
 }
 
-/// Whether the editor's text is well-formed XML: the request bar's live indicator. Like the
-/// issues it comes from, it may lag the text by up to a debounce interval.
+/// The editor's validity indicator: what its issues say about the current text, and how far
+/// they cover it. Errors show as soon as any check finds them; `Valid` only once the schema
+/// check of the current text found none, so an empty list never reads as valid while a check
+/// is still due.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WellFormedness {
-    /// No check has finished since the request was opened.
-    Pending,
-    WellFormed,
-    /// `line` is 1-based; `None` if the parser gave no position.
-    Error {
-        line: Option<u32>,
+pub enum Validity {
+    /// No error is known, but the text changed since the last full check or the WSDL is still
+    /// loading.
+    Checking,
+    Valid,
+    /// Validated against the schema: no errors, `0 <` this many warnings.
+    Warnings(usize),
+    /// No errors, but only well-formedness could be checked: the WSDL or its schemas failed
+    /// to load. The issues say why.
+    SchemaNotChecked,
+    /// From any check, current or not: an edit keeps them until its own check, so the
+    /// indicator does not flicker while typing.
+    Errors {
+        errors: usize,
+        warnings: usize,
     },
+}
+
+impl Validity {
+    pub(crate) fn of(issues: &[Issue], basis: IssuesBasis) -> Validity {
+        let errors = issues.iter().filter(|i| i.is_error()).count();
+        let warnings = issues.len() - errors;
+        match (errors, warnings, basis) {
+            (0, _, IssuesBasis::Pending) => Validity::Checking,
+            (0, _, IssuesBasis::WellFormedOnly) => Validity::SchemaNotChecked,
+            (0, 0, IssuesBasis::Validated) => Validity::Valid,
+            (0, w, IssuesBasis::Validated) => Validity::Warnings(w),
+            (errors, warnings, _) => Validity::Errors { errors, warnings },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Check {
-    /// Replaces the well-formedness issue and keeps the rest until the full check catches up.
+    /// Replaces the well-formedness issue and keeps the rest until the full check catches up,
+    /// unless the text does not parse: then its error replaces all issues.
     WellFormed,
     /// Replaces all issues.
     Full,
@@ -191,9 +216,11 @@ impl App {
         if check == Check::Full {
             editor.checked = Some((version, schema));
         }
-        // Every check, the full one too, finds a well-formedness error if there is one.
-        editor.well_formedness_checked = true;
         match check {
+            // Text that does not parse cannot be schema-checked: the full check will find the
+            // parse error alone, so the last full check's issues go now rather than being
+            // counted beside it until then.
+            Check::WellFormed if issues.iter().any(Issue::is_error) => editor.issues = issues,
             Check::WellFormed => {
                 editor
                     .issues

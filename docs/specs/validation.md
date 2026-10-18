@@ -29,8 +29,9 @@ tree before validating (`CompiledSchema::validate` with `strip`, used for the SO
 header-block attributes) rather than filtering errors afterwards.
 
 ## Errors
-Errors: list in the issues bar under the editor (click → jump to line), plus gutter markers.
-**Send is blocked** while any error exists; the send attempt itself shows the issues bar.
+Errors: counted in the editor's validity widget ([editor](editor.md)), listed in the
+collapsible issues list under the editor (click → jump to line), plus gutter markers.
+**Send is blocked** while any error exists; the send attempt itself shows the issues list.
 
 - libxml2's messages for `xsi:type`, abstract elements and abstract types are terse (e.g. "The
   type definition is abstract"); we append the list of allowed concrete types/members from the
