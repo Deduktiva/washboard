@@ -21,7 +21,7 @@ placeholder.
 - Sets are independent of servers: any set can be used with any server.
 
 ## Storage
-In `washboard.sqlite`, beside the servers ([disk layout](disk-layout.md)):
+In `washboard.sqlite`, beside the servers ([disk layout](projects-disk-layout.md)):
 
 ```sql
 CREATE TABLE parameter_set (id TEXT PRIMARY KEY, name TEXT NOT NULL,
@@ -135,7 +135,7 @@ differently from an empty one. Deleting a variable or set asks first when values
 ## Changes elsewhere
 - [requests](requests.md): selection replaces "each request remembers `last_server_id`"; Send
   resolves before validating.
-- [disk layout](disk-layout.md): the new tables; "what you see is what is sent" becomes "what
+- [disk layout](projects-disk-layout.md): the new tables; "what you see is what is sent" becomes "what
   you see, with placeholders filled in, is what is sent".
 - [validation](validation.md): runs on the resolved text; the placeholder errors.
 - [settings](settings.md): the Parameters pane.

@@ -130,7 +130,7 @@ impl fmt::Debug for App {
 }
 
 impl App {
-    /// `state_dir` holds `state.json`: `~/Library/Application Support/Washboard` on macOS.
+    /// `state_dir` holds the AppState (`state.json`).
     pub fn new(state_dir: impl Into<PathBuf>, front: FrontEnd) -> App {
         let (done_tx, done_rx) = channel();
         App {

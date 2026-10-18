@@ -34,7 +34,7 @@ washboard/
 | XML parsing | own tolerant tokenizer for highlighting and start tags, `roxmltree` for the WSDL/XSD model, libxml2 for well-formedness and validation, `quick-xml` for escaping | one well-formedness verdict for editor and validation |
 | XSD validation | own `libxml2-sys`, building a pinned libxml2 release from source (`cc`/`cmake` in `build.rs`), statically linked, HTTP/FTP support compiled out | see [schema bundle](schema-bundle.md) and [`libxml2-sys`](../../crates/libxml2-sys/README.md) |
 | HTTP | `ureq` 3 with `native-tls` (Security.framework) | blocking on a worker thread; native trust store incl. user-installed corp CAs; supports disabling verification. Header capture is close but not byte-exact (PLAN, "Planned for v2"). |
-| Keychain | `security-framework` | generic password, service `at.deduktiva.washboard` |
+| Keychain | `security-framework` | generic password, service `com.deduktiva.washboard` |
 | IDs / time | `uuid`, `jiff` | |
 | File watching | `notify` (FSEvents backend) | external edits to request files |
 
@@ -77,7 +77,7 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
   compile, shared in an `Arc`) also goes to `RequestSchema::with_model`, so abstract-type errors
   name the alternatives. `Diagnostic::detail` is there for quick fixes later (e.g. "set
   `xsi:type` to …"); none are planned yet.
-- **Not undo/redo.** The native text widget owns undo (`NSTextView`'s undo manager, later
+- **No undo/redo.** The native text widget owns undo (`NSTextView`'s undo manager, later
   `GtkSourceView`'s or the Windows control's); the model only receives the resulting edits
   like any other edit. Programmatic changes the model makes (format XML, insert template,
   completion) are applied through the widget so they land on its undo stack too.
@@ -104,25 +104,9 @@ and the word "model" keeps it apart from `washboard-core` (domain logic) and fro
 (applying token spans as attributes, the line-number ruler, the completion popup), table and
 outline views, sheets, the app bundle and platform integration (recent documents, Dock).
 
-**Why now:** the behaviour has to be written once either way. Writing it into a toolkit-free
-crate costs little more than writing it into AppKit controllers, and it buys tests: autosave
-timing, validate-before-send, stale-result dropping and restore-on-launch run on Linux CI with a
-fake front end. Extracting it later from finished AppKit code would mean rewriting it.
-
 **Rough reuse for a second GUI:** `washboard-core` and `washboard-ui-model` unchanged; the
 front end is new. For GTK4 the editor would be `GtkSourceView` (XML highlighting and a line
 gutter included); on Windows, Scintilla or a RichEdit-based control.
 
-## Packaging
-`cargo-packager` builds `Washboard.app` from configuration (`Info.plist`: `CFBundleIdentifier`
-`at.deduktiva.washboard`, `LSMinimumSystemVersion` 26.0, `NSHighResolutionCapable`, version
-from Cargo); WP-DIST adds the DMG, signing and notarization. The app's Cargo binary stays
-`washboard-app`: the CLI is `washboard`, and on case-insensitive APFS a binary named `Washboard`
-would overwrite it in `target/release/`. Inside the bundle the executable is `Washboard`
-(`CFBundleExecutable`), in `Washboard.app/Contents/MacOS/`. The macOS CI job builds the bundle,
-but only a Mac with a display can show it.
-
-## Why not NSDocument
-NSDocument assumes "one file, dirty flag, save prompts". A project is many files plus a DB with
-continuous autosave, so we use our own `ProjectWindowController`. We still call
-`NSDocumentController.noteNewRecentDocumentURL` so *File ▸ Open Recent* and the Dock menu work.
+## Packaging on macOS
+`cargo-packager` builds `Washboard.app`, currently unsigned.

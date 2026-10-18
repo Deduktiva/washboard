@@ -37,8 +37,6 @@ Not a coding package: what CI cannot see, done by a person from `make app` or th
   `KeychainSecretStore` so far; it is type-checked on Linux).
 - Typing stays responsive in a 1 MB request; completion and hover appear where expected.
 - Layout and light/dark appearance against `docs/gui-draft.html`. Findings become app fixes.
-- macOS numbers for `docs/specs/performance.md`: `cargo test --release --test validate_perf --test schema_perf
-  -- --nocapture` (CI runs debug tests with captured output, so it shows none).
 
 ### Coding packages
 

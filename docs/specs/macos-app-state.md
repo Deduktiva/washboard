@@ -1,9 +1,9 @@
-# macOS app state
+# macOS app state: `AppState`
 
 What the app keeps outside project folders, and how it reopens projects.
 
 ## Open projects
-`~/Library/Application Support/Washboard/state.json`: list of open projects (path +
+`~/Library/Application Support/com.deduktiva.Washboard/state.json`: list of open projects (path +
 bookmark data, window frame autosave name, last selected request). Bookmark data is stored
 from day one so we can enable the App Sandbox later without a migration.
 
@@ -13,7 +13,7 @@ lists recent projects with *New Project…* / *Open Project…*.
 
 ## App settings
 App settings (not per project) live in the user defaults (`NSUserDefaults`, domain
-`at.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
+`com.deduktiva.washboard`), where macOS keeps them and `defaults` can read them: `FormatIndent`
 and `FormatOnSave` so far. The app reads them and passes them to the model at launch and on
 change; the model stores no settings of its own, and the CLI reads none. The Settings window's
 selected pane (`SettingsPane`) is kept there too.

@@ -1,7 +1,7 @@
 # Requests
 
 A request is one `.xml` file holding the full envelope, in `requests/` or a folder below it
-([disk layout](disk-layout.md)). Where requests and folders are listed: [sidebar](sidebar.md);
+([disk layout](projects-disk-layout.md)). Where requests and folders are listed: [sidebar](sidebar.md);
 what a send returns: [response pane](response-pane.md).
 
 ## Commands

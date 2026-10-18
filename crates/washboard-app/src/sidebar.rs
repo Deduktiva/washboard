@@ -39,7 +39,7 @@ use crate::menu::{self, BACKSPACE, CMD, Entry, NONE, OPT_CMD, item};
 /// The pasteboard type of a row being dragged inside the sidebar. Only this outline view
 /// accepts it; the row itself is kept in the controller while the drag lasts.
 fn drag_type() -> &'static NSString {
-    ns_string!("at.deduktiva.washboard.sidebar-row")
+    ns_string!("com.deduktiva.washboard.sidebar-row")
 }
 
 /// What a sidebar row stands for.

@@ -1,4 +1,4 @@
-# Disk layout
+# Projects: Disk layout
 
 A project is a plain folder (not a package, so it's browsable in Finder and git-friendly).
 

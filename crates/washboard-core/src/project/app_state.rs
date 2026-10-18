@@ -1,8 +1,7 @@
 //! App-level state: which projects were open, for restoring them on launch
 //! (`docs/specs/macos-app-state.md`).
 //!
-//! Lives in `<dir>/state.json`, where the app passes `~/Library/Application Support/Washboard`.
-//! JSON, not SQLite: it is tiny, written on quit, and worth being readable when debugging.
+//! `<state_dir>/state.json`.
 //! Unknown fields are ignored so an older build can read a newer file.
 
 use std::fs;

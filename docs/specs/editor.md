@@ -18,8 +18,7 @@
   1 s); fast enough on large schemas per the measurements in [performance](performance.md).
   What is checked and how errors show: [validation](validation.md).
 - **Validity widget**: the one indicator, a pill at the right end of the request bar above the
-  editor (JetBrains' inspection widget, moved out of the text so it neither covers it nor
-  fights the text cursor): "Checking…" while a check is due and no error is known, "✓ Valid" only
+  editor: "Checking…" while a check is due and no error is known, "✓ Valid" only
   after a schema check of the current text, the warning count, "Well-formed · schema not
   checked" when the WSDL or its schemas failed to load, or the error count. Errors stay shown
   while typing until the next check, so it does not flicker. Clicking it shows or hides the

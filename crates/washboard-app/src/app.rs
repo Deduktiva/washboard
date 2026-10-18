@@ -29,7 +29,7 @@ use washboard_ui_model::{
 };
 
 use crate::app_settings;
-use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, default_state_dir, delegate_ref};
+use crate::front_end::{AppKitDialogs, DispatchTimers, Wake, app_state_dir, delegate_ref};
 use crate::menu;
 use crate::project_window::ProjectWindowController;
 use crate::settings_window::{Pane, SettingsWindowController};
@@ -45,15 +45,13 @@ pub struct Options {
     /// `None`: AppKit open panels and alerts.
     pub dialogs: Option<Box<dyn Dialogs>>,
     /// The user defaults suite for the app's settings; `None`: the app's own defaults
-    /// (`at.deduktiva.washboard` when run from the bundle).
     pub defaults_suite: Option<String>,
 }
 
 impl Options {
-    /// `~/Library/Application Support/Washboard`, the Keychain, AppKit panels.
     pub fn standard() -> Options {
         Options {
-            state_dir: default_state_dir(),
+            state_dir: app_state_dir(),
             secrets: Arc::new(washboard_core::secrets::KeychainSecretStore),
             dialogs: None,
             defaults_suite: None,
