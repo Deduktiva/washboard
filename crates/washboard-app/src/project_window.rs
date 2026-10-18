@@ -611,6 +611,7 @@ impl ProjectWindowController {
         } else {
             self.ivars().request_bar.show_sent(None);
         }
+        self.issues().show_sent(shown);
         // Hidden views lose the focus to the window; it moves only off what is being hidden, so
         // a pick in the History table keeps ↑/↓ there.
         let focus_in = |view: &NSView| {
@@ -882,6 +883,7 @@ impl ProjectWindowController {
         let content_vc = NSViewController::new(mtm);
         let editor = &self.ivars().editor;
         let issues = IssuesBar::new(editor, mtm);
+        self.ivars().request_bar.add_trailing(issues.widget());
         let content = content_pane(
             self.ivars().request_bar.view(),
             &[editor.view(), self.ivars().sent.view()],

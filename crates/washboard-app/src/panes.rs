@@ -1,6 +1,5 @@
-//! The request bar above the editor, the issues bar under it with the validity widget in the
-//! editor's corner, and the response pane beside them with its History drawer
-//! (`docs/specs/response-pane.md`).
+//! The request bar above the editor with the validity widget, the issues list under it, and the
+//! response pane beside them with its History drawer (`docs/specs/response-pane.md`).
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::fmt;
@@ -10,16 +9,16 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor,
-    NSControlSize, NSEvent, NSFont, NSImage, NSImageView, NSLayoutConstraintOrientation,
-    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle,
-    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
-    NSSplitViewItem, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField,
-    NSTitlePosition, NSView, NSViewController,
+    NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor, NSControlSize, NSEvent, NSFont,
+    NSImage, NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow,
+    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSResponder, NSScrollView,
+    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTitlePosition, NSView,
+    NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
-    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -35,9 +34,9 @@ use crate::text::{count, operation_chip};
 use crate::views::{read_only_text, read_only_text_get_text, read_only_text_set_text};
 
 /// The bar above the editor (`docs/gui-draft.html`): the request's name, a chip with its
-/// operation, and "Sent … · read-only" while an older exchange is shown. Whether the text is
-/// valid is the validity widget's (`IssuesBar`). Plain views with no actions, so no
-/// Objective-C class of its own.
+/// operation, and at its right end the validity widget (`IssuesBar`), or "Sent … · read-only"
+/// while an older exchange is shown. Plain views with no actions, so no Objective-C class of its
+/// own.
 #[derive(Debug)]
 pub struct RequestBar {
     name: Retained<NSTextField>,
@@ -112,6 +111,12 @@ impl RequestBar {
         &self.operation
     }
 
+    /// A view at the right end, beside the "Sent … · read-only" label: the validity widget.
+    pub fn add_trailing(&self, view: &NSView) {
+        self.view
+            .addView_inGravity(view, NSStackViewGravity::Trailing);
+    }
+
     /// The trailing label: "Sent … · read-only", or empty.
     pub fn state(&self) -> String {
         self.state.stringValue().to_string()
@@ -124,8 +129,12 @@ pub struct IssuesIvars {
     table: Retained<TextTable>,
     /// The listed issues, in the table's order.
     issues: RefCell<Vec<Issue>>,
-    /// The validity widget in the editor's top-right corner, and its button.
+    /// The validity widget at the right end of the request bar, and its button.
     widget: OnceCell<Retained<NSBox>>,
+    /// A request is open, so the widget has something to say.
+    open: Cell<bool>,
+    /// An older exchange's request is shown in place of the editor, so the widget gives way.
+    sent: Cell<bool>,
     summary: OnceCell<Retained<NSButton>>,
     /// The hairline above the list, shown and hidden with it.
     line: OnceCell<Retained<NSBox>>,
@@ -165,6 +174,8 @@ impl IssuesBar {
             table,
             issues: RefCell::new(Vec::new()),
             widget: OnceCell::new(),
+            open: Cell::new(false),
+            sent: Cell::new(false),
             summary: OnceCell::new(),
             line: OnceCell::new(),
             view: OnceCell::new(),
@@ -172,10 +183,9 @@ impl IssuesBar {
         // SAFETY: `NSObject`'s `init` has this signature.
         let this: Retained<Self> = unsafe { msg_send![super(this), init] };
 
+        // The request bar shows it (`RequestBar::add_trailing`).
         let (widget, summary) = validity_widget(&this, mtm);
         widget.setHidden(true);
-        editor.view().addSubview(&widget);
-        place_widget(editor.view(), &widget, &summary);
 
         // The table belongs to this bar: a strong reference back would be a cycle.
         let bar = Weak::from(&*this);
@@ -233,10 +243,8 @@ impl IssuesBar {
             button.setTitle(&NSString::from_str(&summary));
             button.setContentTintColor(Some(&colour));
         }
-        if let Some(button) = self.ivars().summary.get() {
-            place_widget(self.ivars().editor.view(), self.widget(), button);
-        }
-        self.widget().setHidden(validity.is_none());
+        self.ivars().open.set(validity.is_some());
+        self.show_widget();
         self.ivars().table.set_rows(
             issues
                 .iter()
@@ -256,6 +264,19 @@ impl IssuesBar {
                 .collect(),
         );
         *self.ivars().issues.borrow_mut() = issues;
+    }
+
+    /// While an older exchange is shown, the request bar is about the sent request: the widget
+    /// gives way to its "Sent … · read-only" label.
+    pub fn show_sent(&self, sent: bool) {
+        self.ivars().sent.set(sent);
+        self.show_widget();
+    }
+
+    fn show_widget(&self) {
+        let ivars = self.ivars();
+        self.widget()
+            .setHidden(!ivars.open.get() || ivars.sent.get());
     }
 
     /// Shows the list if it was hidden (`ShowIssues`).
@@ -868,8 +889,8 @@ fn history_dot(failed: bool, shown: bool, mtm: MainThreadMarker) -> Retained<NSB
     dot
 }
 
-/// The validity widget: a borderless button that toggles the issues list, on an opaque rounded
-/// plate so the text scrolling under it does not show through.
+/// The validity widget: a borderless button that toggles the issues list, in a pill-shaped
+/// outline like the operation chip beside it.
 fn validity_widget(
     target: &IssuesBar,
     mtm: MainThreadMarker,
@@ -881,74 +902,37 @@ fn validity_widget(
     let plate = NSBox::new(mtm);
     plate.setBoxType(NSBoxType::Custom);
     plate.setTitlePosition(NSTitlePosition::NoTitle);
-    // Semantic colours, so the plate follows the appearance (a CALayer would not).
-    plate.setFillColor(&NSColor::controlBackgroundColor());
+    // Semantic colours, so the outline follows the appearance (a CALayer border would not).
     plate.setBorderColor(&NSColor::separatorColor());
     plate.setBorderWidth(1.0);
     plate.setCornerRadius(WIDGET_HEIGHT / 2.0);
     plate.setContentViewMargins(NSSize::new(0.0, 0.0));
     if let Some(content) = plate.contentView() {
+        button.setTranslatesAutoresizingMaskIntoConstraints(false);
         content.addSubview(&button);
+        for constraint in [
+            button
+                .leadingAnchor()
+                .constraintEqualToAnchor_constant(&content.leadingAnchor(), WIDGET_PADDING),
+            content
+                .trailingAnchor()
+                .constraintEqualToAnchor_constant(&button.trailingAnchor(), WIDGET_PADDING),
+            button
+                .centerYAnchor()
+                .constraintEqualToAnchor(&content.centerYAnchor()),
+            plate
+                .heightAnchor()
+                .constraintEqualToConstant(WIDGET_HEIGHT),
+        ] {
+            constraint.setActive(true);
+        }
     }
-    // Stays centred when `place_widget` resizes the plate.
-    button.setAutoresizingMask(
-        NSAutoresizingMaskOptions::ViewMinXMargin
-            | NSAutoresizingMaskOptions::ViewMaxXMargin
-            | NSAutoresizingMaskOptions::ViewMinYMargin
-            | NSAutoresizingMaskOptions::ViewMaxYMargin,
-    );
     (plate, button)
 }
 
-/// Sizes the validity widget to its text and pins it to the top-right corner of `scroll`'s
-/// visible text, where it stays while the text scrolls under it. Frames and autoresizing, not
-/// constraints: NSScrollView places its subviews itself and leaves constraint-based ones at a
-/// zero frame.
-fn place_widget(scroll: &NSScrollView, plate: &NSBox, button: &NSButton) {
-    button.sizeToFit();
-    let text = button.frame().size;
-    let size = NSSize::new(text.width + 2.0 * WIDGET_PADDING, WIDGET_HEIGHT);
-    let bounds = scroll.bounds();
-    let clip = scroll.contentView().frame();
-    // A legacy scroller narrows the clip view; an overlay one draws over it. Before the first
-    // layout the clip view has no size yet, and the autoresizing mask keeps the margins.
-    let (right, top) = if clip.size.width > 0.0 {
-        (clip.origin.x + clip.size.width, clip.origin.y)
-    } else {
-        (bounds.size.width, 0.0)
-    };
-    let flipped = scroll.isFlipped();
-    let y = if flipped {
-        top + WIDGET_INSET
-    } else {
-        bounds.size.height - top - WIDGET_INSET - size.height
-    };
-    plate.setFrame(NSRect::new(
-        NSPoint::new(right - WIDGET_TRAILING_INSET - size.width, y),
-        size,
-    ));
-    let pinned_top = if flipped {
-        NSAutoresizingMaskOptions::ViewMaxYMargin
-    } else {
-        NSAutoresizingMaskOptions::ViewMinYMargin
-    };
-    plate.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin | pinned_top);
-    if let Some(content) = plate.contentView() {
-        let inner = content.bounds().size;
-        button.setFrameOrigin(NSPoint::new(
-            ((inner.width - text.width) / 2.0).max(0.0),
-            ((inner.height - text.height) / 2.0).max(0.0),
-        ));
-    }
-}
-
 /// The validity widget's height; it is a pill.
-const WIDGET_HEIGHT: f64 = 22.0;
+const WIDGET_HEIGHT: f64 = 20.0;
 const WIDGET_PADDING: f64 = 8.0;
-/// From the top of the visible text.
-const WIDGET_INSET: f64 = 6.0;
-/// From the right of the visible text: clear of an overlay scroller's knob.
-const WIDGET_TRAILING_INSET: f64 = 18.0;
 
 /// The validity widget's text and colour; empty with no request open.
 fn summary(validity: Option<Validity>) -> (String, Retained<NSColor>) {

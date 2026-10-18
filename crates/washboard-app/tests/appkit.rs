@@ -2026,26 +2026,18 @@ mod checks {
             "the chip shows its text: {:?}",
             chip.frame()
         );
-        // The widget sits in the editor's top-right corner, over the visible text.
+        // The widget sits at the request bar's right end, clear of the chip.
         let widget = project.issues().widget();
         assert!(!widget.isHidden());
-        let scroll = editor.view();
-        let clip = scroll.contentView().frame();
-        let at = widget.frame();
+        let in_window = |v: &NSView| v.convertRect_toView(v.bounds(), None);
+        let (at, bar_rect, chip_rect) = (in_window(widget), in_window(bar.view()), in_window(chip));
         assert!(
-            at.origin.x > clip.origin.x + clip.size.width / 2.0
-                && at.origin.x + at.size.width <= clip.origin.x + clip.size.width
-                && at.size.width > 50.0,
-            "the widget is right-aligned and shows its text: {at:?} in {clip:?}"
-        );
-        let top = if scroll.isFlipped() {
-            at.origin.y - clip.origin.y
-        } else {
-            clip.origin.y + clip.size.height - at.origin.y - at.size.height
-        };
-        assert!(
-            (0.0..20.0).contains(&top),
-            "the widget is at the top: {at:?} in {clip:?}"
+            at.size.width > 50.0
+                && at.origin.x > chip_rect.origin.x + chip_rect.size.width
+                && at.origin.x + at.size.width <= bar_rect.origin.x + bar_rect.size.width
+                && at.origin.y >= bar_rect.origin.y
+                && at.origin.y + at.size.height <= bar_rect.origin.y + bar_rect.size.height,
+            "the widget is in the bar, right of the chip: {at:?} in {bar_rect:?}"
         );
         // Clicking it hides the list and clicking again shows it.
         let list = project.issues().table().view();
@@ -2374,6 +2366,10 @@ mod checks {
         );
         assert!(!project.sent_request().text_view().isEditable());
         assert!(project.request_bar().state().ends_with(" · read-only"));
+        assert!(
+            project.issues().widget().isHidden(),
+            "the validity widget gives way to the sent label"
+        );
         assert_eq!(
             text_view.string().to_string(),
             edited,
@@ -2412,6 +2408,10 @@ mod checks {
         assert!(project.older_accessory().isHidden(), "accessory gone");
         assert!(!send_item.isHidden(), "Send back");
         assert!(!project.editor().view().isHidden(), "the editor is back");
+        assert!(
+            !project.issues().widget().isHidden(),
+            "and the validity widget"
+        );
         assert_eq!(text_view.string().to_string(), edited);
         // SAFETY: as above.
         let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };
