@@ -22,7 +22,7 @@ use objc2_foundation::{
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
-    HistoryDrawer, Issue, IssuesBasis, ProjectKey, RequestSummary, ResponseView, WellFormedness,
+    HistoryDrawer, Issue, ProjectKey, RequestSummary, ResponseView, Validity, WellFormedness,
 };
 
 use crate::app::ModelAccess;
@@ -245,11 +245,9 @@ impl IssuesBar {
     /// Lists the editor's issues, marks their lines in the ruler and underlines their ranges
     /// (`DiagnosticsChanged`). The summary is the live validation indicator: it says
     /// whether the text has been validated yet, so an empty list never reads as "valid" while a
-    /// check is still due. `basis` is `None` with no request open.
-    pub fn set_issues(&self, issues: Vec<Issue>, basis: Option<IssuesBasis>) {
-        let errors = issues.iter().filter(|i| i.is_error()).count();
-        let warnings = issues.len() - errors;
-        let (summary, colour) = summary(errors, warnings, basis);
+    /// check is still due. `validity` is `None` with no request open.
+    pub fn set_issues(&self, issues: Vec<Issue>, validity: Option<Validity>) {
+        let (summary, colour) = summary(validity);
         if let Some(label) = self.ivars().summary.get() {
             label.setStringValue(&NSString::from_str(&summary));
             label.setTextColor(Some(&colour));
@@ -883,24 +881,26 @@ fn history_dot(failed: bool, shown: bool, mtm: MainThreadMarker) -> Retained<NSB
     dot
 }
 
-/// The issues summary and its colour. Errors show as soon as any check finds them; "Valid"
-/// only once the schema check of the current text found none.
-fn summary(
-    errors: usize,
-    warnings: usize,
-    basis: Option<IssuesBasis>,
-) -> (String, Retained<NSColor>) {
-    match (errors, warnings, basis) {
-        (_, _, None) => (String::new(), NSColor::secondaryLabelColor()),
-        (0, _, Some(IssuesBasis::Pending)) => ("Checking…".into(), NSColor::secondaryLabelColor()),
-        (0, _, Some(IssuesBasis::WellFormedOnly)) => {
+/// The issues summary and its colour; empty with no request open.
+fn summary(validity: Option<Validity>) -> (String, Retained<NSColor>) {
+    match validity {
+        None => (String::new(), NSColor::secondaryLabelColor()),
+        Some(Validity::Checking) => ("Checking…".into(), NSColor::secondaryLabelColor()),
+        Some(Validity::SchemaNotChecked) => {
             ("Well-formed · schema not checked".into(), colors::warning())
         }
-        (0, 0, Some(IssuesBasis::Validated)) => ("✓ Valid".into(), colors::success()),
-        (0, w, Some(IssuesBasis::Validated)) => (count(w, "warning"), colors::warning()),
-        (e, 0, _) => (format!("⚠ {}", count(e, "error")), colors::error()),
-        (e, w, _) => (
-            format!("⚠ {}, {}", count(e, "error"), count(w, "warning")),
+        Some(Validity::Valid) => ("✓ Valid".into(), colors::success()),
+        Some(Validity::Warnings(w)) => (count(w, "warning"), colors::warning()),
+        Some(Validity::Errors {
+            errors,
+            warnings: 0,
+        }) => (format!("⚠ {}", count(errors, "error")), colors::error()),
+        Some(Validity::Errors { errors, warnings }) => (
+            format!(
+                "⚠ {}, {}",
+                count(errors, "error"),
+                count(warnings, "warning")
+            ),
             colors::error(),
         ),
     }

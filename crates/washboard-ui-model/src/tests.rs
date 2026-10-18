@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use tempfile::TempDir;
-use washboard_core::diag::DiagSource;
+use washboard_core::diag::{DiagSource, Severity};
 use washboard_core::model::{Auth, RequestId, Server, ServerId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
 use washboard_core::project::{ProjectError, ServerError};
@@ -17,7 +17,7 @@ use crate::fake::Fake;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
     HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
-    ProjectWindow, Reformat, SchemaState, WellFormedness, WsdlServer,
+    ProjectWindow, Reformat, SchemaState, Validity, WellFormedness, WsdlServer,
 };
 
 /// Creates a project named `name` in `<tmp>/<name>` and closes it again.
@@ -1281,6 +1281,66 @@ fn schema_errors_come_from_the_full_check_after_a_second() {
         IssuesBasis::Pending,
         "an edit makes it stale"
     );
+}
+
+#[test]
+fn validity_reads_valid_only_after_a_current_schema_check() {
+    let issue = |severity| Issue {
+        severity,
+        source: DiagSource::Schema,
+        message: String::new(),
+        line: None,
+        range: None,
+    };
+    let error = issue(Severity::Error);
+    let warning = issue(Severity::Warning);
+    let cases = [
+        (vec![], IssuesBasis::Pending, Validity::Checking),
+        (vec![], IssuesBasis::Validated, Validity::Valid),
+        (
+            vec![],
+            IssuesBasis::WellFormedOnly,
+            Validity::SchemaNotChecked,
+        ),
+        (
+            vec![warning.clone()],
+            IssuesBasis::Pending,
+            Validity::Checking,
+        ),
+        (
+            vec![warning.clone()],
+            IssuesBasis::Validated,
+            Validity::Warnings(1),
+        ),
+        (
+            vec![warning.clone()],
+            IssuesBasis::WellFormedOnly,
+            Validity::SchemaNotChecked,
+        ),
+        (
+            vec![error.clone()],
+            IssuesBasis::Pending,
+            Validity::Errors {
+                errors: 1,
+                warnings: 0,
+            },
+        ),
+        (
+            vec![error, warning.clone(), warning],
+            IssuesBasis::Validated,
+            Validity::Errors {
+                errors: 1,
+                warnings: 2,
+            },
+        ),
+    ];
+    for (issues, basis, expected) in cases {
+        assert_eq!(
+            Validity::of(&issues, basis),
+            expected,
+            "{issues:?} {basis:?}"
+        );
+    }
 }
 
 fn basis(app: &App, key: ProjectKey) -> IssuesBasis {

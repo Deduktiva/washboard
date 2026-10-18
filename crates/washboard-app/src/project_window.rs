@@ -487,19 +487,14 @@ impl ProjectWindowController {
     /// whether its text is well-formed (`DiagnosticsChanged`).
     pub fn show_issues(&self) {
         let key = self.key();
-        let (issues, basis, state) = self
+        let (issues, validity, state) = self
             .read_project(key, |w| {
-                w.editor().map(|e| {
-                    (
-                        e.issues().to_vec(),
-                        Some(e.issues_basis()),
-                        e.well_formedness(),
-                    )
-                })
+                w.editor()
+                    .map(|e| (e.issues().to_vec(), Some(e.validity()), e.well_formedness()))
             })
             .flatten()
             .unwrap_or((Vec::new(), None, WellFormedness::Pending));
-        self.issues().set_issues(issues, basis);
+        self.issues().set_issues(issues, validity);
         self.ivars().request_bar.set_state(state);
     }
 

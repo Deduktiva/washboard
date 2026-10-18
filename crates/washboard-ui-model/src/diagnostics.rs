@@ -75,6 +75,43 @@ pub enum IssuesBasis {
     WellFormedOnly,
 }
 
+/// The editor's validity indicator: what its issues say about the current text, and how far
+/// they cover it. Errors show as soon as any check finds them; `Valid` only once the schema
+/// check of the current text found none, so an empty list never reads as valid while a check
+/// is still due.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Validity {
+    /// No error is known, but the text changed since the last full check or the WSDL is still
+    /// loading.
+    Checking,
+    Valid,
+    /// Validated against the schema: no errors, `0 <` this many warnings.
+    Warnings(usize),
+    /// No errors, but only well-formedness could be checked: the WSDL or its schemas failed
+    /// to load. The issues say why.
+    SchemaNotChecked,
+    /// From any check, current or not: an edit keeps them until its own check, so the
+    /// indicator does not flicker while typing.
+    Errors {
+        errors: usize,
+        warnings: usize,
+    },
+}
+
+impl Validity {
+    pub(crate) fn of(issues: &[Issue], basis: IssuesBasis) -> Validity {
+        let errors = issues.iter().filter(|i| i.is_error()).count();
+        let warnings = issues.len() - errors;
+        match (errors, warnings, basis) {
+            (0, _, IssuesBasis::Pending) => Validity::Checking,
+            (0, _, IssuesBasis::WellFormedOnly) => Validity::SchemaNotChecked,
+            (0, 0, IssuesBasis::Validated) => Validity::Valid,
+            (0, w, IssuesBasis::Validated) => Validity::Warnings(w),
+            (errors, warnings, _) => Validity::Errors { errors, warnings },
+        }
+    }
+}
+
 /// Whether the editor's text is well-formed XML: the request bar's live indicator. Like the
 /// issues it comes from, it may lag the text by up to a debounce interval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

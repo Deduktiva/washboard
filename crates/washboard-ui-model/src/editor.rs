@@ -13,7 +13,7 @@ use washboard_core::xml::utf16::{Utf16Cursor, utf16_len, utf16_to_byte};
 use washboard_core::xml::{TokenBuffer, TokenKind};
 
 use crate::app::{App, ModelError, ProjectKey};
-use crate::diagnostics::{Check, Issue, IssuesBasis, WellFormedness};
+use crate::diagnostics::{Check, Issue, IssuesBasis, Validity, WellFormedness};
 use crate::event::Event;
 use crate::timers::TimerKind;
 
@@ -89,6 +89,11 @@ impl Editor {
             Some((version, false)) if version == self.version => IssuesBasis::WellFormedOnly,
             _ => IssuesBasis::Pending,
         }
+    }
+
+    /// The validity indicator's state, from the issues and their basis.
+    pub fn validity(&self) -> Validity {
+        Validity::of(&self.issues, self.issues_basis())
     }
 
     /// From the issues: an edit does not make it pending again, so the indicator does not
