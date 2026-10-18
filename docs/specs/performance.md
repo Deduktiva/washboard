@@ -21,8 +21,4 @@ Inputs are > 500 KB WSDLs with multi-level XSD imports. Consequences:
   [editor](editor.md)).
 
 ## Fixture corpus
-Since real WSDLs can't be shared, CI uses public WSDLs of similar shape plus a generator that
-synthesises large schema sets (N files, depth D, namespaces split across files, recursive types,
-deep derivation chains, substitution groups across namespaces, `xs:any`, multi-file
-`wsdl:import`, BOM-prefixed files). `washboard inspect` prints the same structural report
-locally, without contents, so real WSDLs can be checked against the assumptions here.
+CI uses public WSDLs of expected shapes plus generated synthetic large schema sets.
