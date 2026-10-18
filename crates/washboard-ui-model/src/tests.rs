@@ -1343,6 +1343,26 @@ fn validity_reads_valid_only_after_a_current_schema_check() {
     }
 }
 
+#[test]
+fn a_parse_error_replaces_the_last_schema_errors() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    let text = editor_text(&app, key).replace("2026-01-01", "yesterday");
+    set_text(&mut app, key, &text);
+    app.validate(key).expect("validate");
+    let issues = next_check(&fake, &mut app, key);
+    assert!(
+        issues.iter().any(|i| i.source == DiagSource::Schema),
+        "{issues:?}"
+    );
+
+    set_text(&mut app, key, &format!("{text}<"));
+    fake.advance(&mut app, ms(150));
+    let issues = next_check(&fake, &mut app, key);
+    assert_eq!(issues.len(), 1, "only the parse error: {issues:?}");
+    assert_eq!(issues[0].source, DiagSource::WellFormedness);
+}
+
 fn basis(app: &App, key: ProjectKey) -> IssuesBasis {
     let window = project(app, key);
     window.editor().expect("editor").issues_basis()

@@ -127,7 +127,8 @@ pub enum WellFormedness {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Check {
-    /// Replaces the well-formedness issue and keeps the rest until the full check catches up.
+    /// Replaces the well-formedness issue and keeps the rest until the full check catches up,
+    /// unless the text does not parse: then its error replaces all issues.
     WellFormed,
     /// Replaces all issues.
     Full,
@@ -231,6 +232,10 @@ impl App {
         // Every check, the full one too, finds a well-formedness error if there is one.
         editor.well_formedness_checked = true;
         match check {
+            // Text that does not parse cannot be schema-checked: the full check will find the
+            // parse error alone, so the last full check's issues go now rather than being
+            // counted beside it until then.
+            Check::WellFormed if issues.iter().any(Issue::is_error) => editor.issues = issues,
             Check::WellFormed => {
                 editor
                     .issues
