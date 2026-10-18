@@ -10,16 +10,16 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor, NSControlSize, NSEvent, NSFont,
-    NSImage, NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow,
-    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSResponder, NSScrollView,
-    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
-    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTitlePosition, NSView,
-    NSViewController,
+    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor,
+    NSControlSize, NSEvent, NSFont, NSImage, NSImageView, NSLayoutConstraintOrientation,
+    NSLayoutPriorityDefaultLow, NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle,
+    NSResponder, NSScrollView, NSSplitView, NSSplitViewController, NSSplitViewDividerStyle,
+    NSSplitViewItem, NSStackView, NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField,
+    NSTitlePosition, NSView, NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
-    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -174,7 +174,8 @@ impl IssuesBar {
 
         let (widget, summary) = validity_widget(&this, mtm);
         widget.setHidden(true);
-        overlay_top_trailing(editor.view(), &widget);
+        editor.view().addSubview(&widget);
+        place_widget(editor.view(), &widget, &summary);
 
         // The table belongs to this bar: a strong reference back would be a cycle.
         let bar = Weak::from(&*this);
@@ -231,6 +232,9 @@ impl IssuesBar {
         if let Some(button) = self.ivars().summary.get() {
             button.setTitle(&NSString::from_str(&summary));
             button.setContentTintColor(Some(&colour));
+        }
+        if let Some(button) = self.ivars().summary.get() {
+            place_widget(self.ivars().editor.view(), self.widget(), button);
         }
         self.widget().setHidden(validity.is_none());
         self.ivars().table.set_rows(
@@ -884,41 +888,57 @@ fn validity_widget(
     plate.setCornerRadius(WIDGET_HEIGHT / 2.0);
     plate.setContentViewMargins(NSSize::new(0.0, 0.0));
     if let Some(content) = plate.contentView() {
-        button.setTranslatesAutoresizingMaskIntoConstraints(false);
         content.addSubview(&button);
-        for constraint in [
-            button
-                .leadingAnchor()
-                .constraintEqualToAnchor_constant(&content.leadingAnchor(), WIDGET_PADDING),
-            content
-                .trailingAnchor()
-                .constraintEqualToAnchor_constant(&button.trailingAnchor(), WIDGET_PADDING),
-            button
-                .centerYAnchor()
-                .constraintEqualToAnchor(&content.centerYAnchor()),
-            plate
-                .heightAnchor()
-                .constraintEqualToConstant(WIDGET_HEIGHT),
-        ] {
-            constraint.setActive(true);
-        }
     }
+    // Stays centred when `place_widget` resizes the plate.
+    button.setAutoresizingMask(
+        NSAutoresizingMaskOptions::ViewMinXMargin
+            | NSAutoresizingMaskOptions::ViewMaxXMargin
+            | NSAutoresizingMaskOptions::ViewMinYMargin
+            | NSAutoresizingMaskOptions::ViewMaxYMargin,
+    );
     (plate, button)
 }
 
-/// Pins `view` to the top-right corner of `scroll`'s visible text, where it stays while the
-/// text scrolls under it.
-fn overlay_top_trailing(scroll: &NSScrollView, view: &NSView) {
-    view.setTranslatesAutoresizingMaskIntoConstraints(false);
-    scroll.addSubview(view);
-    let clip = scroll.contentView();
-    for constraint in [
-        view.topAnchor()
-            .constraintEqualToAnchor_constant(&clip.topAnchor(), WIDGET_INSET),
-        clip.trailingAnchor()
-            .constraintEqualToAnchor_constant(&view.trailingAnchor(), WIDGET_TRAILING_INSET),
-    ] {
-        constraint.setActive(true);
+/// Sizes the validity widget to its text and pins it to the top-right corner of `scroll`'s
+/// visible text, where it stays while the text scrolls under it. Frames and autoresizing, not
+/// constraints: NSScrollView places its subviews itself and leaves constraint-based ones at a
+/// zero frame.
+fn place_widget(scroll: &NSScrollView, plate: &NSBox, button: &NSButton) {
+    button.sizeToFit();
+    let text = button.frame().size;
+    let size = NSSize::new(text.width + 2.0 * WIDGET_PADDING, WIDGET_HEIGHT);
+    let bounds = scroll.bounds();
+    let clip = scroll.contentView().frame();
+    // A legacy scroller narrows the clip view; an overlay one draws over it. Before the first
+    // layout the clip view has no size yet, and the autoresizing mask keeps the margins.
+    let (right, top) = if clip.size.width > 0.0 {
+        (clip.origin.x + clip.size.width, clip.origin.y)
+    } else {
+        (bounds.size.width, 0.0)
+    };
+    let flipped = scroll.isFlipped();
+    let y = if flipped {
+        top + WIDGET_INSET
+    } else {
+        bounds.size.height - top - WIDGET_INSET - size.height
+    };
+    plate.setFrame(NSRect::new(
+        NSPoint::new(right - WIDGET_TRAILING_INSET - size.width, y),
+        size,
+    ));
+    let pinned_top = if flipped {
+        NSAutoresizingMaskOptions::ViewMaxYMargin
+    } else {
+        NSAutoresizingMaskOptions::ViewMinYMargin
+    };
+    plate.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin | pinned_top);
+    if let Some(content) = plate.contentView() {
+        let inner = content.bounds().size;
+        button.setFrameOrigin(NSPoint::new(
+            ((inner.width - text.width) / 2.0).max(0.0),
+            ((inner.height - text.height) / 2.0).max(0.0),
+        ));
     }
 }
 
