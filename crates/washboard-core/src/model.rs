@@ -43,6 +43,10 @@ id_type!(
     RequestId
 );
 id_type!(HistoryId);
+id_type!(
+    /// Pins and history refer to a parameter set by this, so renaming a set keeps them.
+    ParameterSetId
+);
 
 /// An XML qualified name. `ns` is the namespace URI, empty for no namespace.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -178,6 +182,16 @@ pub struct HistoryEntry {
     pub soap_fault: bool,
     /// Transport error (connect, TLS, timeout). `None` when a response was received.
     pub error: Option<String>,
+}
+
+/// One row of the project's parameter grid: a value per variable (`docs/specs/parameters.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParameterSet {
+    pub id: ParameterSetId,
+    pub name: String,
+    /// Variable name to value. A variable that is missing here is unset in this set, which is
+    /// not the same as an empty value.
+    pub values: std::collections::BTreeMap<String, String>,
 }
 
 /// Where a schema document came from.
