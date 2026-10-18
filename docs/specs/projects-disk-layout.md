@@ -12,7 +12,7 @@ Customer API/
 │     └─ common/types.xsd
 ├─ requests/
 │  ├─ GetCustomer/              a folder: a plain subdirectory, any depth
-│  │  └─ GetCustomer 1.xml      full SOAP envelope, exactly what is sent
+│  │  └─ GetCustomer 1.xml      full SOAP envelope, sent with ${…} filled in
 │  └─ CreateOrder 1.xml
 └─ history/
    └─ <request-uuid>/
@@ -33,7 +33,9 @@ Customer API/
   WSDL with 200 operations would get 200 empty folders, git does not keep empty directories, and
   Replace WSDL would leave folders for removed operations behind. Folders and files starting
   with `.` are ignored.
-- **Request files contain the full envelope.** What you see is what is sent; SOAP headers are editable.
+- **Request files contain the full envelope.** What you see, with `${name}` placeholders filled
+  in from the parameter set ([parameter sets](parameters.md)), is what is sent; SOAP headers
+  are editable. The file keeps the placeholders; the history stores the text as sent.
 - **History** is keyed by request UUID (not name) so renames don't orphan it. The sent request is
   stored too — without it a response is hard to interpret later. Retention: last 20 per request
   (project setting).
@@ -55,6 +57,9 @@ What the schema decides:
   folder in the app state and give a copy a new id on open, copying its passwords over.
 - A request row names its file by a path relative to `requests/`, always `/`-separated whatever
   the platform; its operation is a hint that may go stale when the WSDL changes.
+- Servers, parameters, parameter sets and their values are tables; a request row holds its
+  pinned server and set, a history row the set it was sent with. The project's chosen server
+  and set are `ui_state` keys.
 - History rows point at their `history/` files and keep the request's start line and headers
   and the response's headers as JSON, with `Authorization` masked before it is stored.
 - Rollback journal, not WAL: write volume is tiny and WAL side files behave badly on

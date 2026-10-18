@@ -1,15 +1,12 @@
 # Parameter sets
 
-**Status: planned, not implemented.** When it lands, the specs listed under "Changes elsewhere"
-are updated with it.
-
 A parameter set is a named group of values, such as one test customer: `customer_id` = `4711`,
 `customer_name` = `Jane Doe`. Request files refer to them as `${customer_id}`; the values of the
 active set are filled in when the request is validated and sent. The file on disk keeps the
 placeholder.
 
 ## Data model
-- A project has one list of **variables** (the columns) and any number of **sets** (the rows),
+- A project has one list of **variables** (the rows) and any number of **sets** (the columns),
   each with a value per variable. Settings edits them as one grid. A shared list makes a typo in
   a request an "undefined parameter" error rather than a silent miss, and renaming a variable
   renames it in every set.
@@ -94,14 +91,17 @@ either or both. For a send, each is taken from, in order:
 1. the CLI flag (`--server`, `--set`), in the CLI only;
 2. the request's pin;
 3. the project's active choice;
-4. the first server; no set.
+4. the first server and the first set; no set only while the project has none.
 
 - **Toolbar**: a server popup and a parameter set popup before Send. The set popup is hidden
-  while the project has no sets and offers "No Parameter Set". Each popup ends with a "Pin to
-  This Request" item with a checkmark. Not pinned, choosing an item changes the project's
-  choice; pinned, it changes the pin. Unchecking returns the request to the project's choice.
-- **A pin is very noticeable**: the pinned popup shows the `pin.fill` symbol and a bezel tinted
-  with `colors::warning`.
+  while the project has no sets; like the server popup it lists only the sets, with no "none"
+  item, so a project with sets always uses one. A pin button sits before each
+  popup and toggles the request's pin; it is always visible, so pinning needs no menu item. Not
+  pinned, choosing an item changes the project's choice; pinned, it changes the pin. Unpinning
+  returns the request to the project's choice.
+- **A pin is noticeable**: the button shows `pin.fill` in `colors::warning` while pinned, an
+  outlined `pin` in secondary colour otherwise; its tooltip says which. Without a request the
+  button is disabled.
 - New request: no pins. Duplicate: copies the pins. Deleting a server or set clears the pins on
   it, and those requests follow the project's choice again.
 - **Upgrade**: the project's last used server (`washboard.last_server`) becomes its active
@@ -115,9 +115,24 @@ sent. The entry also records `parameter_set_id`, and the response pane names the
 server.
 
 ## Settings
-Each project gets a **Parameters** pane ([settings](settings.md)): a grid with a row per set
-and a column per variable; add, rename, reorder and delete both; an unset cell is drawn
-differently from an empty one. Deleting a variable or set asks first when values would be lost.
+Each project gets a **Parameters** pane ([settings](settings.md)): a grid with a row per variable
+and a column per set, which reads like a table of values; add, rename, reorder and delete both;
+an unset cell is drawn differently from an empty one. Deleting a variable or set asks first when values would be lost.
+
+- Cells are edited in place; a value is stored when editing ends. The first column is the
+  variable's name, renamed in place. Unset cells read "Not set" and empty values "Empty", both as
+  placeholders.
+- Clearing a cell unsets it; the cell's context menu has Set Empty Value and Unset Value.
+- Add Set adds "New Set" (numbered when taken) and opens a sheet to name it; a header cannot be
+  edited in place. Duplicate Set copies a set with its values into "<name> copy" (numbered when
+  taken), after the original, and opens the same sheet. Add Parameter… and Rename Set… use the same one-field sheet, so a refused
+  name keeps the sheet open.
+- Sets are reordered by dragging their columns (the name column stays first), parameters with
+  Move Up and Move Down in the row's context menu. The header's context menu has the set's
+  items, a row's has the parameter's, and a value cell's adds the value's.
+- The grid takes the pane's width and the window's height, at least 120 pt, and scrolls when the
+  variables or sets do not fit; the rows never decide its height, and it never resizes the
+  window.
 
 ## CLI
 - `set list`, `set add <name>`, `set rm <name>`, `set rename <old> <new>`.
@@ -125,6 +140,9 @@ differently from an empty one. Deleting a variable or set asks first when values
   `param set <set> <name> <value>`, `param unset <set> <name>`.
 - `request send` and `request validate` take `--set <name>`; `request show --resolved` prints
   what would be sent.
+- `request send --skip-validation` sends despite schema and well-formedness errors, but never
+  with a placeholder error: unresolved `${...}` text is never sent.
+- `set list` marks with `*` the set a send uses without `--set` or a pin.
 
 ## Reserved
 - Names containing `.` are for built-in generated values (`${uuid.v4}`, `${now.iso}`); until
@@ -132,11 +150,9 @@ differently from an empty one. Deleting a variable or set asks first when values
 - Decided when built-ins are added, not now: whether two `${uuid.v4}` in one request share a
   value, and whether a set's value may contain a generator.
 
-## Changes elsewhere
-- [requests](requests.md): selection replaces "each request remembers `last_server_id`"; Send
-  resolves before validating.
-- [disk layout](projects-disk-layout.md): the new tables; "what you see is what is sent" becomes "what
-  you see, with placeholders filled in, is what is sent".
-- [validation](validation.md): runs on the resolved text; the placeholder errors.
+## Elsewhere
+- [requests](requests.md): selection, and Send resolving before it validates.
+- [disk layout](projects-disk-layout.md): the tables, and what is sent.
+- [validation](validation.md): runs on the resolved text.
 - [settings](settings.md): the Parameters pane.
 - [response pane](response-pane.md): the set in the status line and history table.

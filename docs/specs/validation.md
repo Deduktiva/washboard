@@ -3,6 +3,10 @@
 When it runs (live, ⌘B, before send): [editor](editor.md), "Checking".
 
 ## Steps
+0. `${name}` placeholders are filled in from the parameter set, and every later step runs on
+   that text; diagnostics are mapped back to the placeholders. A placeholder that cannot be
+   filled in is an error, and the schema steps are skipped until none is left
+   ([parameter sets](parameters.md), "Validation").
 1. Must be well-formed.
 2. Root must be a SOAP 1.1 `soap:Envelope`. A SOAP 1.2 envelope gets a specific error.
 3. Each `Body` child is matched to a binding operation by QName; unknown → error. (Schema

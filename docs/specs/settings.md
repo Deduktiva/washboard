@@ -8,8 +8,9 @@ as they are made; there is no Done button. A closed project's section leaves the
 - **Washboard** (the app): General, with the indent width and format on save. Stored in the
   user defaults ([macOS app state](macos-app-state.md)).
 - **One section per open project**: General (name, folder, WSDL files with Show in Finder and
-  Replace WSDL…, see [new project](new-project.md)) and Servers. Project panes say that their
-  settings belong to the project and are saved in its folder.
+  Replace WSDL…, see [new project](new-project.md)), Servers and Parameters
+  ([parameter sets](parameters.md), "Settings"). Project panes say that their settings belong
+  to the project and are saved in its folder.
 
 ## Servers
 The project's servers, then one read-only "From WSDL" row per SOAP 1.1 `soap:address` of the
