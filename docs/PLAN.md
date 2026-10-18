@@ -56,7 +56,7 @@ is the reference for the details they leave out.
 | Spec | Covers |
 |---|---|
 | [architecture](specs/architecture.md) | crates, key dependencies, threading, the UI model, packaging |
-| [disk layout](specs/disk-layout.md) | the project folder, request files and folders, `washboard.sqlite`, locking |
+| [project disk layout](specs/projects-disk-layout.md) | project folder with database and request files and folders, locking |
 | [macOS app state](specs/macos-app-state.md) | open projects and restore, app settings |
 | [new project](specs/new-project.md) | New Project, the import check, Replace WSDL |
 | [requests](specs/requests.md) | request and folder commands, placement, sending, the CLI |
