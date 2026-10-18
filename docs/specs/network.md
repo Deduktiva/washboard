@@ -3,7 +3,7 @@
 - The only code that opens sockets is `core::http`, and it only accepts a `Server` value.
 - No update checker, analytics, crash reporter, or remote fonts/images. Sparkle etc. excluded.
 - libxml2: custom entity loader + `XML_PARSE_NONET` ([schema bundle](schema-bundle.md)).
-- Redirects disabled; a 3xx is shown as the response.
+- Redirects explicitly disabled; a 3xx is shown as the response.
 - Proxy: ureq's env proxy detection disabled; system proxy settings are ignored. No proxy support.
 - DNS lookups for the server host are, of course, still made.
 - CI check: `cargo deny check bans` with a ban list in `deny.toml` (no `reqwest`, `hyper`,
