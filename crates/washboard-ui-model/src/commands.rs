@@ -31,6 +31,8 @@ impl App {
         self.events.push(Event::SelectionChanged { project: key });
         self.events
             .push(Event::ServerSelectionChanged { project: key });
+        self.events
+            .push(Event::ParameterSetSelectionChanged { project: key });
         self.load_editor(key);
         self.events.push(Event::EditorReplaced { project: key });
         Ok(())
@@ -295,21 +297,6 @@ impl App {
         Ok(())
     }
 
-    /// The toolbar's server popup. Remembered on the selected request, which is also what a new
-    /// request starts with (`docs/specs/requests.md`).
-    pub fn choose_server(&mut self, key: ProjectKey, server: ServerId) -> Result<(), ModelError> {
-        let window = self.window(key)?;
-        let Some(request) = window.selected_request() else {
-            return Ok(());
-        };
-        window
-            .project
-            .set_request_last_server(request, Some(server))?;
-        self.events
-            .push(Event::ServerSelectionChanged { project: key });
-        Ok(())
-    }
-
     /// Settings ▸ Servers ▸ Add Server…'s Save: adds the sheet's server in one step, so a
     /// server the project refuses (no URL, a bad one, a taken name) is never added. A blank
     /// name becomes “New Server”, numbered when taken. `password` as for
@@ -360,8 +347,8 @@ impl App {
         self.servers_changed(key)
     }
 
-    /// Delete Server in a server's sheet (Settings ▸ Servers). Requests that used it fall back
-    /// to the popup's default.
+    /// Delete Server in a server's sheet (Settings ▸ Servers). Requests pinned to it follow
+    /// the project's server again.
     pub fn delete_server(&mut self, key: ProjectKey, server: ServerId) -> Result<(), ModelError> {
         let secrets = self.front.secrets.clone();
         self.window(key)?
@@ -390,8 +377,8 @@ impl App {
                 server,
             },
             format!("Delete “{name}”?"),
-            "Requests that used it will use another server. Its password is removed from the \
-             Keychain.",
+            "Requests pinned to it will use the project's server. Its password is removed from \
+             the Keychain.",
         );
         Ok(())
     }
@@ -416,6 +403,11 @@ impl App {
         self.events.push(Event::SidebarChanged { project: key });
         if deselected {
             self.events.push(Event::SelectionChanged { project: key });
+            // The popups showed the request's pins.
+            self.events
+                .push(Event::ServerSelectionChanged { project: key });
+            self.events
+                .push(Event::ParameterSetSelectionChanged { project: key });
             self.load_editor(key);
             self.events.push(Event::EditorReplaced { project: key });
         }
@@ -432,7 +424,7 @@ impl App {
 
     /// The one shape every Delete confirmation takes: a destructive "Delete" and Cancel, with
     /// `pending` saying what to delete once it is confirmed.
-    fn confirm_delete(&mut self, pending: PendingDialog, title: String, message: &str) {
+    pub(crate) fn confirm_delete(&mut self, pending: PendingDialog, title: String, message: &str) {
         let id = self.pend_dialog(pending);
         self.front.dialogs.confirm(
             id,

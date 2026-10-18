@@ -13,9 +13,9 @@ use rusqlite::{Connection, OpenFlags};
 use super::ProjectError;
 
 /// The version this build writes and understands.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
-const MIGRATIONS: &[&str] = &[V1, V2];
+const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// Schema v1: project, servers, request metadata, history, UI state.
 const V1: &str = "
@@ -49,6 +49,25 @@ CREATE TABLE ui_state (key TEXT PRIMARY KEY, value TEXT);
 /// The request's start line and headers as sent (`RequestHead` as JSON); `NULL` in rows
 /// written before.
 const V2: &str = "ALTER TABLE history ADD COLUMN request_headers TEXT;";
+
+/// Parameter sets (`docs/specs/parameters.md`): the variables, the sets, a value per set and
+/// variable (a missing row is an unset value), per-request pins, and the set a history entry
+/// used. The project's active server keeps its `ui_state` key `washboard.last_server`, so a
+/// project opens on the server it last used; `request.last_server_id` is not turned into pins.
+const V3: &str = "
+CREATE TABLE parameter_set (id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                            sort_order INTEGER NOT NULL);
+CREATE TABLE parameter     (name TEXT PRIMARY KEY, sort_order INTEGER NOT NULL);
+CREATE TABLE parameter_value (
+  set_id TEXT NOT NULL REFERENCES parameter_set(id) ON DELETE CASCADE,
+  name   TEXT NOT NULL REFERENCES parameter(name) ON DELETE CASCADE ON UPDATE CASCADE,
+  value  TEXT NOT NULL,
+  PRIMARY KEY (set_id, name));
+ALTER TABLE request ADD COLUMN pinned_server_id TEXT REFERENCES server(id) ON DELETE SET NULL;
+ALTER TABLE request ADD COLUMN pinned_parameter_set_id TEXT
+  REFERENCES parameter_set(id) ON DELETE SET NULL;
+ALTER TABLE history ADD COLUMN parameter_set_id TEXT;
+";
 
 /// Opens the database with the settings every connection needs.
 ///

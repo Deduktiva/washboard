@@ -25,9 +25,10 @@ use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
 use objc2_app_kit::{
     NSBox, NSBoxType, NSColor, NSFont, NSLayoutConstraintOrientation, NSLayoutPriority,
-    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow, NSLayoutPriorityRequired,
-    NSLineBreakMode, NSResponder, NSStackView, NSTextField, NSTitlePosition,
-    NSUserInterfaceItemIdentification, NSUserInterfaceLayoutOrientation, NSView,
+    NSLayoutPriorityDefaultHigh, NSLayoutPriorityDefaultLow,
+    NSLayoutPriorityFittingSizeCompression, NSLayoutPriorityRequired, NSLineBreakMode, NSResponder,
+    NSStackView, NSTextField, NSTitlePosition, NSUserInterfaceItemIdentification,
+    NSUserInterfaceLayoutOrientation, NSView,
 };
 use objc2_foundation::{NSArray, NSObject, NSSize, NSString};
 
@@ -85,6 +86,21 @@ define_class!(
 
 /// A pane: `sections` top to bottom, in a column that scrolls when the window is short.
 pub fn page(sections: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    page_with(sections, false, mtm)
+}
+
+/// A [`page`] at least as tall as the window's content area, for a pane with a
+/// [`stretching_table_row`]: that row takes the height left over, so the window, not the
+/// number of rows, decides how tall the table is, and nothing is drawn below the page.
+pub fn filling_page(sections: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<NSView> {
+    page_with(sections, true, mtm)
+}
+
+fn page_with(
+    sections: Vec<Retained<NSView>>,
+    fill: bool,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
     let blocks = sections
         .into_iter()
         .enumerate()
@@ -135,6 +151,11 @@ pub fn page(sections: Vec<Retained<NSView>>, mtm: MainThreadMarker) -> Retained<
             .widthAnchor()
             .constraintEqualToAnchor(&clip.widthAnchor()),
     ]);
+    if fill {
+        activate([document
+            .heightAnchor()
+            .constraintGreaterThanOrEqualToAnchor(&clip.heightAnchor())]);
+    }
     view(scroll)
 }
 
@@ -442,6 +463,40 @@ pub fn stacked_row(label: &str, content: &NSView, mtm: MainThreadMarker) -> Reta
             .bottomAnchor()
             .constraintEqualToAnchor_constant(&row.bottomAnchor(), -ROW_PADDING),
     ]);
+    row
+}
+
+/// `content`, a scroll view such as a table, across the row, at least `min_height` tall and
+/// taking whatever height a [`filling_page`] has left: for a grid that is edited in place
+/// rather than through a label and a control. In a [`page`] it stays at `min_height`.
+pub fn stretching_table_row(
+    content: &NSView,
+    min_height: f64,
+    mtm: MainThreadMarker,
+) -> Retained<NSView> {
+    let row = new_view(mtm);
+    add(&row, content);
+    activate([
+        content
+            .leadingAnchor()
+            .constraintEqualToAnchor_constant(&row.leadingAnchor(), ROW_INSET),
+        content
+            .trailingAnchor()
+            .constraintEqualToAnchor_constant(&row.trailingAnchor(), -ROW_INSET),
+        content
+            .topAnchor()
+            .constraintEqualToAnchor_constant(&row.topAnchor(), ROW_PADDING),
+        content
+            .bottomAnchor()
+            .constraintEqualToAnchor_constant(&row.bottomAnchor(), -ROW_PADDING),
+        content
+            .heightAnchor()
+            .constraintGreaterThanOrEqualToConstant(min_height),
+    ]);
+    // Weaker than everything that places the blocks, so the row alone takes the slack.
+    let preferred = content.heightAnchor().constraintEqualToConstant(min_height);
+    preferred.setPriority(NSLayoutPriorityFittingSizeCompression);
+    preferred.setActive(true);
     row
 }
 

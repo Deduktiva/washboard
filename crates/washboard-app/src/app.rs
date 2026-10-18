@@ -458,6 +458,24 @@ impl AppDelegate {
                     controller.show_server_selection();
                 }
             }
+            Event::ParametersChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.reload_parameter_sets();
+                    // A renamed or deleted set changes how the response, the history and an
+                    // older exchange's label name it.
+                    controller.response().show_response();
+                    controller.response().show_history();
+                    controller.show_exchange();
+                }
+                if let Some(settings) = self.ivars().settings.get() {
+                    settings.reload_parameters(project);
+                }
+            }
+            Event::ParameterSetSelectionChanged { project } => {
+                if let Some(controller) = self.project(project) {
+                    controller.show_parameter_set_selection();
+                }
+            }
             Event::EditorReplaced { project } => {
                 if let Some(controller) = self.project(project) {
                     // The request bar, response pane and history follow the editor's request.
@@ -544,6 +562,7 @@ impl AppDelegate {
         // The model announces a new project once; its state so far is read here.
         controller.sidebar().reload();
         controller.reload_servers();
+        controller.reload_parameter_sets();
         controller.editor().show_model_text();
         controller.show_request_bar();
         controller.show_issues();

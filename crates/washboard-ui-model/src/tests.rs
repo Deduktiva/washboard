@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use tempfile::TempDir;
 use washboard_core::diag::{DiagSource, Severity};
-use washboard_core::model::{Auth, RequestId, Server, ServerId};
+use washboard_core::model::{Auth, ParameterSetId, RequestId, Server, ServerId};
 use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
 use washboard_core::project::{ProjectError, ServerError};
 use washboard_core::wsdl::Protocol;
@@ -383,6 +383,7 @@ fn new_request_creates_selects_and_starts_rename() {
             Event::SidebarChanged { project: key },
             Event::SelectionChanged { project: key },
             Event::ServerSelectionChanged { project: key },
+            Event::ParameterSetSelectionChanged { project: key },
             Event::EditorReplaced { project: key },
             Event::BeginRename {
                 project: key,
@@ -693,7 +694,7 @@ fn deleting_the_last_request_clears_the_selection() {
 }
 
 #[test]
-fn the_server_popup_follows_the_request() {
+fn the_server_popup_is_for_the_project_unless_pinned() {
     let setup = Setup::new();
     let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
@@ -704,25 +705,34 @@ fn the_server_popup_follows_the_request() {
     assert_eq!(
         window.selected_server(),
         Some(a),
-        "first server without a request"
+        "first server without a choice"
     );
 
     let first = app.new_request(key, &op, None).expect("new");
     app.choose_server(key, b).expect("choose");
     let second = app.new_request(key, &op, None).expect("new");
+    assert_eq!(project(&app, key).selected_server(), Some(b));
+    app.select_request(key, Some(first)).expect("select");
     assert_eq!(
         project(&app, key).selected_server(),
         Some(b),
-        "a new request starts with the last used server"
+        "project-wide"
     );
-    app.choose_server(key, a).expect("choose");
-    app.select_request(key, Some(first)).expect("select");
-    assert_eq!(project(&app, key).selected_server(), Some(b));
-    app.select_request(key, Some(second)).expect("select");
-    assert_eq!(project(&app, key).selected_server(), Some(a));
 
+    // A pin keeps the request on its server; the popup then changes the pin.
+    app.set_server_pinned(key, true).expect("pin");
+    assert!(project(&app, key).selection().server_pinned);
+    app.choose_server(key, a).expect("choose");
+    assert_eq!(project(&app, key).selected_server(), Some(a));
+    app.select_request(key, Some(second)).expect("select");
+    let sel = project(&app, key).selection();
+    assert_eq!((sel.server, sel.server_pinned), (Some(b), false));
+
+    // Deleting the pinned server returns the request to the project's.
     app.delete_server(key, a).expect("delete");
-    assert_eq!(project(&app, key).selected_server(), Some(b));
+    app.select_request(key, Some(first)).expect("select");
+    let sel = project(&app, key).selection();
+    assert_eq!((sel.server, sel.server_pinned), (Some(b), false));
 }
 
 #[test]
@@ -772,6 +782,92 @@ fn a_server_is_deleted_after_confirmation() {
     app.ask_delete_server(key, id).expect("ask");
     fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
     assert!(project(&app, key).servers().is_empty());
+}
+
+#[test]
+fn grid_edits_unset_on_clear_and_move_parameters() {
+    let setup = Setup::new();
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
+    for name in ["a", "b", "c"] {
+        app.add_parameter(key, name).expect("add");
+    }
+    let set = app.add_parameter_set(key).expect("set");
+    let value = |app: &App| -> Option<String> {
+        project(app, key).parameter_sets()[0]
+            .values
+            .get("a")
+            .cloned()
+    };
+    // An unset cell left empty stays unset; text stores it; clearing it unsets it.
+    assert!(!app.edit_parameter_value(key, set, "a", "").expect("edit"));
+    assert_eq!(value(&app), None);
+    assert!(app.edit_parameter_value(key, set, "a", "1").expect("edit"));
+    assert_eq!(value(&app).as_deref(), Some("1"));
+    assert!(!app.edit_parameter_value(key, set, "a", "1").expect("same"));
+    assert!(app.edit_parameter_value(key, set, "a", "").expect("clear"));
+    assert_eq!(value(&app), None);
+    // An empty value left empty stays an empty value.
+    app.set_parameter_value(key, set, "a", Some(""))
+        .expect("empty");
+    assert!(!app.edit_parameter_value(key, set, "a", "").expect("edit"));
+    assert_eq!(value(&app).as_deref(), Some(""));
+
+    app.move_parameter(key, "c", -1).expect("up");
+    assert_eq!(project(&app, key).parameters(), ["a", "c", "b"]);
+    app.move_parameter(key, "a", -1).expect("at the top");
+    app.move_parameter(key, "b", 1).expect("at the bottom");
+    assert_eq!(project(&app, key).parameters(), ["a", "c", "b"]);
+}
+
+#[test]
+fn the_parameter_grid_asks_before_losing_values() {
+    let setup = Setup::new();
+    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    app.add_parameter(key, " a ").expect("trimmed");
+    app.add_parameter(key, "b").expect("b");
+    let first = app.add_parameter_set(key).expect("set");
+    let second = app.add_parameter_set(key).expect("set");
+    let names = |app: &App| -> Vec<String> {
+        let window = project(app, key);
+        window
+            .parameter_sets()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&app), ["New Set", "New Set 2"]);
+    assert!(
+        app.take_events()
+            .contains(&Event::ParametersChanged { project: key })
+    );
+
+    app.set_parameter_order(key, &["b".to_owned()])
+        .expect("order");
+    assert_eq!(project(&app, key).parameters(), ["b", "a"]);
+    app.set_parameter_set_order(key, &[second]).expect("order");
+    assert_eq!(names(&app), ["New Set 2", "New Set"]);
+    let copy = app.duplicate_parameter_set(key, second).expect("copy");
+    assert_eq!(names(&app), ["New Set 2", "New Set 2 copy", "New Set"]);
+    app.delete_parameter_set(key, copy).expect("delete");
+
+    // Without values, nothing is lost and nothing is asked.
+    app.ask_delete_parameter(key, "b").expect("ask");
+    app.ask_delete_parameter_set(key, second).expect("ask");
+    assert_eq!(confirms(&fake), 0);
+    assert_eq!(project(&app, key).parameters(), ["a"]);
+    assert_eq!(names(&app), ["New Set"]);
+
+    app.set_parameter_value(key, first, "a", Some(""))
+        .expect("empty is a value");
+    app.ask_delete_parameter(key, "a").expect("ask");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Cancelled);
+    assert_eq!(confirm.title, "Delete the parameter “a”?");
+    assert!(confirm.message.contains("1 parameter set"), "{confirm:?}");
+    app.ask_delete_parameter_set(key, first).expect("ask");
+    let confirm = fake.answer_confirm(&mut app, DialogAnswer::Confirmed);
+    assert_eq!(confirm.title, "Delete the parameter set “New Set”?");
+    assert!(project(&app, key).parameter_sets().is_empty());
+    assert_eq!(project(&app, key).parameters(), ["a"]);
 }
 
 #[test]
@@ -1567,6 +1663,84 @@ fn a_transport_error_is_shown_and_recorded() {
     assert!(response.error.is_some());
     assert_eq!(response.status, None);
     assert!(window.history()[0].error.is_some());
+}
+
+/// Adds the variable `day` and a set “A” with `day` = `value`, and makes it the project's.
+fn with_day(app: &mut App, key: ProjectKey, value: &str) -> ParameterSetId {
+    app.add_parameter(key, "day").expect("param");
+    let set = app.add_parameter_set(key).expect("set");
+    app.rename_parameter_set(key, set, "A").expect("rename");
+    app.set_parameter_value(key, set, "day", Some(value))
+        .expect("value");
+    app.choose_parameter_set(key, set).expect("choose");
+    set
+}
+
+#[test]
+fn send_fills_in_placeholders_and_keeps_them_in_the_file() {
+    let setup = Setup::new();
+    let (url, server) = server::serve_once("200 OK", OK_BODY, Duration::ZERO);
+    let (fake, mut app, key, first) = ready_to_send(&setup, &url);
+    let set = with_day(&mut app, key, "2026-02-03");
+    let text = editor_text(&app, key).replace("2026-01-01", "${day}");
+    set_text(&mut app, key, &text);
+    send_and_wait(&fake, &mut app, key);
+
+    let wire = server.join().expect("server");
+    assert!(wire.contains("2026-02-03"), "{wire}");
+    assert!(!wire.contains("${day}"), "{wire}");
+    assert!(on_disk(&app, key, first).contains("${day}"));
+    let window = project(&app, key);
+    let response = window.response().expect("response");
+    assert_eq!(response.parameter_set, Some(set));
+    assert_eq!(window.history()[0].parameter_set_id, Some(set));
+    assert_eq!(
+        window.exchange_label(response.server, &response.url, response.parameter_set),
+        "Local · A"
+    );
+}
+
+#[test]
+fn placeholders_are_checked_with_the_selected_set() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _) = ready_to_send(&setup, "http://127.0.0.1:9/");
+    let set = with_day(&mut app, key, "yesterday");
+    let text = editor_text(&app, key).replace("2026-01-01", "${day}");
+    set_text(&mut app, key, &text);
+    app.validate(key).expect("validate");
+    let issues = next_check(&fake, &mut app, key);
+    let errors: Vec<&Issue> = issues.iter().filter(|i| i.is_error()).collect();
+    assert_eq!(errors.len(), 1, "{issues:?}");
+    assert!(
+        errors[0].message.ends_with("(day = \"yesterday\" in “A”)"),
+        "{issues:?}"
+    );
+
+    // Changing the value re-validates.
+    app.set_parameter_value(key, set, "day", Some("2026-02-03"))
+        .expect("value");
+    let issues = next_check(&fake, &mut app, key);
+    assert!(!issues.iter().any(Issue::is_error), "{issues:?}");
+
+    // Pinning keeps the request on its set. Without any set the placeholder has no value.
+    app.set_parameter_set_pinned(key, true).expect("pin");
+    settle(&fake, &mut app);
+    let sel = project(&app, key).selection();
+    assert_eq!(
+        (sel.parameter_set, sel.parameter_set_pinned),
+        (Some(set), true)
+    );
+    app.delete_parameter_set(key, set).expect("delete");
+    let issues = next_check(&fake, &mut app, key);
+    let errors: Vec<&Issue> = issues.iter().filter(|i| i.is_error()).collect();
+    assert_eq!(errors.len(), 1, "{issues:?}");
+    assert_eq!(
+        errors[0].message,
+        "parameter day has no value: no parameter set selected"
+    );
+    assert_eq!(errors[0].source, DiagSource::Parameters);
+    let sel = project(&app, key).selection();
+    assert_eq!((sel.parameter_set, sel.parameter_set_pinned), (None, false));
 }
 
 #[test]

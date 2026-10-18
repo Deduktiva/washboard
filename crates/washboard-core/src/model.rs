@@ -166,8 +166,15 @@ pub struct RequestMeta {
     /// The operation the request was created for. A hint only; may go stale after a WSDL
     /// replacement. Dispatch at send time uses the Body content.
     pub operation: Option<OperationRef>,
+    /// The server this request was last sent to or chosen for. Kept for older databases and
+    /// tools; selection uses the pin and the project's active server instead
+    /// (`docs/specs/parameters.md`, "Selection").
     pub last_server: Option<ServerId>,
     pub created_at: SystemTime,
+    /// The server this request always uses, whatever the project's active server is.
+    pub pinned_server: Option<ServerId>,
+    /// The parameter set this request always uses, whatever the project's active set is.
+    pub pinned_parameter_set: Option<ParameterSetId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +189,9 @@ pub struct HistoryEntry {
     pub soap_fault: bool,
     /// Transport error (connect, TLS, timeout). `None` when a response was received.
     pub error: Option<String>,
+    /// The parameter set whose values were filled in, if any. Like `server_id`, a plain value
+    /// that outlives the set.
+    pub parameter_set_id: Option<ParameterSetId>,
 }
 
 /// One row of the project's parameter grid: a value per variable (`docs/specs/parameters.md`).
