@@ -112,19 +112,6 @@ impl Validity {
     }
 }
 
-/// Whether the editor's text is well-formed XML: the request bar's live indicator. Like the
-/// issues it comes from, it may lag the text by up to a debounce interval.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WellFormedness {
-    /// No check has finished since the request was opened.
-    Pending,
-    WellFormed,
-    /// `line` is 1-based; `None` if the parser gave no position.
-    Error {
-        line: Option<u32>,
-    },
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Check {
     /// Replaces the well-formedness issue and keeps the rest until the full check catches up,
@@ -229,8 +216,6 @@ impl App {
         if check == Check::Full {
             editor.checked = Some((version, schema));
         }
-        // Every check, the full one too, finds a well-formedness error if there is one.
-        editor.well_formedness_checked = true;
         match check {
             // Text that does not parse cannot be schema-checked: the full check will find the
             // parse error alone, so the last full check's issues go now rather than being

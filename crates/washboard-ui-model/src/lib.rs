@@ -29,7 +29,7 @@ mod tests;
 
 pub use app::{App, ModelError, ProjectKey};
 pub use assist::{CompletionItem, CompletionKind, Completions, Hover};
-pub use diagnostics::{Issue, IssuesBasis, Validity, WellFormedness};
+pub use diagnostics::{Issue, IssuesBasis, Validity};
 pub use editor::Editor;
 pub use event::Event;
 pub use format::{FormatSettings, INDENT_RANGE, Reformat};

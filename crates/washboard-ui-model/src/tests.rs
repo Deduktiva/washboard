@@ -17,7 +17,7 @@ use crate::fake::Fake;
 use crate::{
     App, CheckState, CompletionKind, Completions, DialogAnswer, Event, FormatSettings,
     HistoryDrawer, ImportTarget, Issue, IssuesBasis, ModelError, OperationNode, ProjectKey,
-    ProjectWindow, Reformat, SchemaState, Validity, WellFormedness, WsdlServer,
+    ProjectWindow, Reformat, SchemaState, Validity, WsdlServer,
 };
 
 /// Creates a project named `name` in `<tmp>/<name>` and closes it again.
@@ -1192,50 +1192,48 @@ fn well_formedness_is_checked_150_ms_after_the_last_edit() {
     assert!(invalid_marker(&app, key, first));
 }
 
-fn well_formedness(app: &App, key: ProjectKey) -> WellFormedness {
+fn validity(app: &App, key: ProjectKey) -> Validity {
     let window = project(app, key);
-    window.editor().expect("editor").well_formedness()
+    window.editor().expect("editor").validity()
 }
 
 #[test]
-fn the_request_summary_follows_checks_and_renames() {
+fn the_request_summary_follows_renames() {
     let setup = Setup::new();
-    let (fake, mut app, key) = open_loaded(&setup, "Legacy");
+    let (_fake, mut app, key) = open_loaded(&setup, "Legacy");
     let op = lookup(&app, key, "LegacyPort").operation;
     app.new_request(key, &op, None).expect("new");
-    assert_eq!(well_formedness(&app, key), WellFormedness::Pending);
     let window = project(&app, key);
     let summary = window.request_summary().expect("a request is open");
     assert_eq!(summary.name, names(&app, key)[0]);
     assert_eq!(summary.operation.as_ref(), Some(&op));
-    assert_eq!(summary.well_formedness, WellFormedness::Pending);
-    next_check(&fake, &mut app, key);
-    assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
-
-    set_text(&mut app, key, "<!-- -->\n<a>");
-    assert_eq!(
-        well_formedness(&app, key),
-        WellFormedness::WellFormed,
-        "an edit keeps the last result until its own check, so typing does not flicker"
-    );
-    fake.advance(&mut app, ms(150));
-    next_check(&fake, &mut app, key);
-    assert_eq!(
-        well_formedness(&app, key),
-        WellFormedness::Error { line: Some(2) }
-    );
-
-    // A schema error is not a well-formedness error.
-    set_text(&mut app, key, "<a/>");
-    app.validate(key).expect("validate");
-    let issues = next_check(&fake, &mut app, key);
-    assert!(issues.iter().any(Issue::is_error), "{issues:?}");
-    assert_eq!(well_formedness(&app, key), WellFormedness::WellFormed);
 
     let id = project(&app, key).selected_request().expect("selected");
     app.rename_request(key, id, "Renamed").expect("rename");
     let window = project(&app, key);
     assert_eq!(window.request_summary().expect("open").name, "Renamed");
+}
+
+#[test]
+fn errors_stay_shown_while_typing() {
+    let setup = Setup::new();
+    let (fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    assert_eq!(validity(&app, key), Validity::Valid);
+
+    set_text(&mut app, key, "<!-- -->\n<a>");
+    fake.advance(&mut app, ms(150));
+    next_check(&fake, &mut app, key);
+    let broken = Validity::Errors {
+        errors: 1,
+        warnings: 0,
+    };
+    assert_eq!(validity(&app, key), broken);
+    app.edit(key, 0..0, " ").expect("edit");
+    assert_eq!(
+        validity(&app, key),
+        broken,
+        "an edit keeps the errors until its own check, so typing does not flicker"
+    );
 }
 
 #[test]
