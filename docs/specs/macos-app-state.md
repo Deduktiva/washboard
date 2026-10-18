@@ -1,9 +1,9 @@
-# macOS app state
+# macOS app state: `AppState`
 
 What the app keeps outside project folders, and how it reopens projects.
 
 ## Open projects
-`~/Library/Application Support/Washboard/state.json`: list of open projects (path +
+`~/Library/Application Support/com.deduktiva.Washboard/state.json`: list of open projects (path +
 bookmark data, window frame autosave name, last selected request). Bookmark data is stored
 from day one so we can enable the App Sandbox later without a migration.
 

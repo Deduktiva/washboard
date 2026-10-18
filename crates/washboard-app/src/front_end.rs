@@ -219,8 +219,8 @@ fn parent_window(mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
         .filter(|w| w.attachedSheet().is_none() && w.isVisible())
 }
 
-/// Where the app keeps `state.json`: `~/Library/Application Support/Washboard`.
-pub(crate) fn default_state_dir() -> PathBuf {
+/// Folder which will hold AppState data.
+pub(crate) fn app_state_dir() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    home.join("Library/Application Support/Washboard")
+    home.join("Library/Application Support/com.deduktiva.Washboard")
 }

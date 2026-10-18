@@ -1485,7 +1485,8 @@ fn ui_state_round_trip() {
 #[test]
 fn app_state_round_trip() {
     let tmp = TempDir::new().expect("tempdir");
-    let dir = tmp.path().join("Application Support/Washboard");
+    // normally contains spaces on macOS
+    let dir = tmp.path().join("sub dir/state");
     assert_eq!(AppState::load(&dir).expect("load"), AppState::default());
 
     let mut state = AppState::default();
