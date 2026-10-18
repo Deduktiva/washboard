@@ -2013,12 +2013,12 @@ mod checks {
             project.issues().summary() == "✓ Valid"
         });
 
-        // The request bar names the open request and its operation, and says the text is
-        // well-formed.
+        // The request bar names the open request and its operation; validity is the widget's
+        // alone.
         let bar = project.request_bar();
         assert_eq!(bar.name(), selected_row(&project).title());
         assert_eq!(bar.operation().as_deref(), Some("SOAP 1.1 · Lookup"));
-        assert_eq!(bar.state(), "Well-formed");
+        assert_eq!(bar.state(), "");
         project.project_window().layoutIfNeeded();
         let chip = bar.operation_chip();
         assert!(
@@ -2026,6 +2026,36 @@ mod checks {
             "the chip shows its text: {:?}",
             chip.frame()
         );
+        // The widget sits in the editor's top-right corner, over the visible text.
+        let widget = project.issues().widget();
+        assert!(!widget.isHidden());
+        let scroll = editor.view();
+        let clip = scroll.contentView().frame();
+        let at = widget.frame();
+        assert!(
+            at.origin.x > clip.origin.x + clip.size.width / 2.0
+                && at.origin.x + at.size.width <= clip.origin.x + clip.size.width
+                && at.size.width > 50.0,
+            "the widget is right-aligned and shows its text: {at:?} in {clip:?}"
+        );
+        let top = if scroll.isFlipped() {
+            at.origin.y - clip.origin.y
+        } else {
+            clip.origin.y + clip.size.height - at.origin.y - at.size.height
+        };
+        assert!(
+            (0.0..20.0).contains(&top),
+            "the widget is at the top: {at:?} in {clip:?}"
+        );
+        // Clicking it hides the list and clicking again shows it.
+        let list = project.issues().table().view();
+        assert!(!list.isHidden());
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { project.issues().widget_button().performClick(None) };
+        assert!(list.isHidden(), "the widget hides the list");
+        // SAFETY: as above.
+        unsafe { project.issues().widget_button().performClick(None) };
+        assert!(!list.isHidden(), "and shows it again");
 
         let replace = |at: usize, len: usize, with: &str| {
             // SAFETY: replacing a range inside the text, as typing over a selection does.
@@ -2094,18 +2124,15 @@ mod checks {
             "click selects the issue: {selected:?}"
         );
 
-        // Broken XML turns the request bar's state into the error's line; the schema error
-        // before it did not.
-        assert_eq!(bar.state(), "Well-formed");
+        // Broken XML replaces the schema error with the parse error alone.
         replace(start, "someday".len(), "<");
-        wait_until("the XML error in the request bar", || {
-            bar.state() == format!("XML error, line {line}")
+        wait_until("the XML error alone", || {
+            project.issues().summary() == "⚠ 1 error"
+                && issues.rows().len() == 1
+                && issues.rows()[0][1].starts_with("not well-formed")
         });
 
         replace(start, 1, &date);
-        wait_until("the request bar to read well-formed again", || {
-            bar.state() == "Well-formed"
-        });
         let validate = std::ffi::CString::new("validateRequest:").expect("a selector name");
         // SAFETY: the window controller's actions take the sender.
         let sent = unsafe {
