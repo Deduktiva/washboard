@@ -4,6 +4,7 @@ PACKAGER_VERSION := 0.11.8
 
 .PHONY: app fmt check
 app: fmt
+	cargo build -p washboard-app
 	@cargo packager --version 2>/dev/null | grep -q '$(PACKAGER_VERSION)' \
 		|| cargo install cargo-packager --version $(PACKAGER_VERSION) --locked
 	cargo packager --release -p washboard-app
