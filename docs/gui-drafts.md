@@ -7,9 +7,9 @@ Interactive version: [`gui-draft.html`](gui-draft.html) (open in a browser).
 ┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ● ● ●  Customer API                                           [Staging ▾] [▶]                      │
 ├──────────────────────┬───────────────────────────────────────────┬─────────────────────────────────┤
-│ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCustomer     │ 200 · 143 ms · 1.2 KB · Staging │
+│ REQUESTS             │ GetCustomer 1  SOAP 1.1 · GetCusto… (⚠ 1) │ 200 · 143 ms · 1.2 KB · Staging │
 │  ▾ GetCustomer/      │ ┌───┬───────────────────────────────────┐ │        [Response] [Headers]     │
-│   ▸ GetCustomer 1    │ │  1│<soapenv:Envelope x…    (⚠ 1 error)│ │ <soap:Envelope …>               │
+│   ▸ GetCustomer 1    │ │  1│<soapenv:Envelope xmlns:soapenv=…  │ │ <soap:Envelope …>               │
 │     GetCustomer 2  • │ │  2│                  xmlns:cus=…>     │ │   <soap:Body>                   │
 │  ▾ CreateOrder/      │ │  3│  <soapenv:Header/>                │ │     <GetCustomerResponse>       │
 │     CreateOrder 1  ⚠ │ │  4│  <soapenv:Body>                   │ │       <customer>…               │
@@ -20,7 +20,7 @@ Interactive version: [`gui-draft.html`](gui-draft.html) (open in a browser).
 │                      │ line 6  '?' is not a valid value of xs:l… │ ▸ History  6 earlier    ●●●●●●◉ │
 └──────────────────────┴───────────────────────────────────────────┴─────────────────────────────────┘
    / folder   • unsaved   ⚠ fails validation   ● past exchange (red: fault or failure)   ◉ the one shown
-   (⚠ 1 error) the validity widget, over the editor's top-right corner: click shows or hides the
+   (⚠ 1) the validity widget, a pill at the request bar's right end: click shows or hides the
    issues list under the editor
 ```
 

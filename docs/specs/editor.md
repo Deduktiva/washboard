@@ -17,13 +17,15 @@
 - **Schema validation**: Validate button (⌘B), automatically before send, and live (debounced
   1 s); fast enough on large schemas per the measurements in [performance](performance.md).
   What is checked and how errors show: [validation](validation.md).
-- **Validity widget**: the one indicator, pinned to the editor's top-right corner (JetBrains'
-  inspection widget): "Checking…" while a check is due and no error is known, "✓ Valid" only
+- **Validity widget**: the one indicator, a pill at the right end of the request bar above the
+  editor (JetBrains' inspection widget, moved out of the text so it neither covers it nor
+  fights the text cursor): "Checking…" while a check is due and no error is known, "✓ Valid" only
   after a schema check of the current text, the warning count, "Well-formed · schema not
   checked" when the WSDL or its schemas failed to load, or the error count. Errors stay shown
   while typing until the next check, so it does not flicker. Clicking it shows or hides the
-  issues list under the editor. The state is the model's (`Validity`). No overview stripe
-  beside the scroller: the ruler marks the lines.
+  issues list under the editor. While an older exchange is shown it gives way to "Sent … ·
+  read-only". The state is the model's (`Validity`). No overview stripe beside the scroller:
+  the ruler marks the lines.
 
 ## Completion and hover
 - **Completion**: native `NSTextView` completion (`textView:completions:forPartialWordRange:…`)
