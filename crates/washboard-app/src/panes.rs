@@ -7,18 +7,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use objc2::rc::{Retained, Weak};
 use objc2::runtime::AnyObject;
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2::{
+    AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class,
+    msg_send, sel,
+};
 use objc2_app_kit::{
-    NSBox, NSBoxType, NSButton, NSClickGestureRecognizer, NSColor, NSControlSize, NSEvent, NSFont,
-    NSImage, NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow,
-    NSLineBreakMode, NSProgressIndicator, NSProgressIndicatorStyle, NSResponder, NSScrollView,
-    NSSplitView, NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
-    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTitlePosition, NSView,
-    NSViewController,
+    NSBox, NSBoxType, NSButton, NSCellImagePosition, NSClickGestureRecognizer, NSColor,
+    NSControlSize, NSEvent, NSFont, NSImage, NSImageSymbolConfiguration, NSImageSymbolScale,
+    NSImageView, NSLayoutConstraintOrientation, NSLayoutPriorityDefaultLow, NSLineBreakMode,
+    NSProgressIndicator, NSProgressIndicatorStyle, NSResponder, NSScrollView, NSSplitView,
+    NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
+    NSStackViewGravity, NSTabView, NSTabViewItem, NSTextField, NSTitlePosition, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewController,
 };
 use objc2_foundation::{
     NSArray, NSByteCountFormatter, NSByteCountFormatterCountStyle, NSDate, NSDateFormatter,
-    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSSize, NSString, ns_string,
+    NSDateFormatterStyle, NSObject, NSObjectProtocol, NSRect, NSSize, NSString, ns_string,
 };
 use washboard_core::model::HistoryId;
 use washboard_ui_model::{
@@ -135,6 +139,8 @@ pub struct IssuesIvars {
     open: Cell<bool>,
     /// An older exchange's request is shown in place of the editor, so the widget gives way.
     sent: Cell<bool>,
+    /// The mouse is over the widget, which tints it so it reads as clickable.
+    hover: Cell<bool>,
     summary: OnceCell<Retained<NSButton>>,
     /// The hairline above the list, shown and hidden with it.
     line: OnceCell<Retained<NSBox>>,
@@ -160,6 +166,19 @@ define_class!(
         fn toggle(&self, _sender: Option<&AnyObject>) {
             self.show_list(!self.list_shown());
         }
+
+        // The widget's tracking area, added in `new`.
+        // SAFETY: the signature matches `mouseEntered:`.
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.set_hover(true);
+        }
+
+        // SAFETY: the signature matches `mouseExited:`.
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.set_hover(false);
+        }
     }
 );
 
@@ -176,6 +195,7 @@ impl IssuesBar {
             widget: OnceCell::new(),
             open: Cell::new(false),
             sent: Cell::new(false),
+            hover: Cell::new(false),
             summary: OnceCell::new(),
             line: OnceCell::new(),
             view: OnceCell::new(),
@@ -186,6 +206,23 @@ impl IssuesBar {
         // The request bar shows it (`RequestBar::add_trailing`).
         let (widget, summary) = validity_widget(&this, mtm);
         widget.setHidden(true);
+        // Hover is tracked only in the key window, as AppKit's own controls do.
+        let options = NSTrackingAreaOptions::MouseEnteredAndExited
+            | NSTrackingAreaOptions::ActiveInKeyWindow
+            | NSTrackingAreaOptions::InVisibleRect;
+        let owner: &AnyObject = &this;
+        // SAFETY: the widget belongs to this bar, so the bar outlives the tracking area, which
+        // holds its owner weakly; `mouseEntered:` and `mouseExited:` are implemented above.
+        let area = unsafe {
+            NSTrackingArea::initWithRect_options_owner_userInfo(
+                NSTrackingArea::alloc(),
+                NSRect::ZERO,
+                options,
+                Some(owner),
+                None,
+            )
+        };
+        widget.addTrackingArea(&area);
 
         // The table belongs to this bar: a strong reference back would be a cycle.
         let bar = Weak::from(&*this);
@@ -204,6 +241,7 @@ impl IssuesBar {
         let _ = this.ivars().summary.set(summary);
         let _ = this.ivars().line.set(line);
         let _ = this.ivars().view.set(view);
+        this.show_list(true);
         this
     }
 
@@ -275,8 +313,27 @@ impl IssuesBar {
 
     fn show_widget(&self) {
         let ivars = self.ivars();
-        self.widget()
-            .setHidden(!ivars.open.get() || ivars.sent.get());
+        let hidden = !ivars.open.get() || ivars.sent.get();
+        self.widget().setHidden(hidden);
+        // A hidden view gets no `mouseExited:`; the tint must not outlive it.
+        if hidden {
+            self.set_hover(false);
+        }
+    }
+
+    fn set_hover(&self, hover: bool) {
+        self.ivars().hover.set(hover);
+        let fill = if hover {
+            NSColor::quaternarySystemFillColor()
+        } else {
+            NSColor::clearColor()
+        };
+        self.widget().setFillColor(&fill);
+    }
+
+    /// The mouse is over the widget and it is tinted.
+    pub fn hovered(&self) -> bool {
+        self.ivars().hover.get()
     }
 
     /// Shows the list if it was hidden (`ShowIssues`).
@@ -292,6 +349,30 @@ impl IssuesBar {
         if let Some(line) = self.ivars().line.get() {
             line.setHidden(!shown);
         }
+        // The History drawer's disclosure: right while closed, down while open.
+        let (symbol, label) = if shown {
+            ("chevron.down", "Hide Issues")
+        } else {
+            ("chevron.right", "Show Issues")
+        };
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(symbol),
+            Some(&NSString::from_str(label)),
+        )
+        .and_then(|image| {
+            image.imageWithSymbolConfiguration(&NSImageSymbolConfiguration::configurationWithScale(
+                NSImageSymbolScale::Small,
+            ))
+        });
+        if let Some(button) = self.ivars().summary.get() {
+            button.setImage(image.as_deref());
+        }
+    }
+
+    /// The chevron's accessibility description: "Hide Issues" or "Show Issues".
+    pub fn chevron(&self) -> Option<String> {
+        let image = self.ivars().summary.get()?.image()?;
+        Some(image.accessibilityDescription()?.to_string())
     }
 
     fn list_shown(&self) -> bool {
@@ -890,7 +971,7 @@ fn history_dot(failed: bool, shown: bool, mtm: MainThreadMarker) -> Retained<NSB
 }
 
 /// The validity widget: a borderless button that toggles the issues list, in a pill-shaped
-/// outline like the operation chip beside it.
+/// outline like the operation chip beside it. Its plate is tinted while the mouse is over it.
 fn validity_widget(
     target: &IssuesBar,
     mtm: MainThreadMarker,
@@ -899,12 +980,16 @@ fn validity_widget(
     button.setBordered(false);
     button.setFont(Some(&NSFont::systemFontOfSize(layout::STATUS_FONT_SIZE)));
     button.setToolTip(Some(ns_string!("Show or hide the issues list")));
+    // The chevron after the text says it opens something, before the mouse gets there; it
+    // takes the text's colour (`contentTintColor`).
+    button.setImagePosition(NSCellImagePosition::ImageTrailing);
     let plate = NSBox::new(mtm);
     plate.setBoxType(NSBoxType::Custom);
     plate.setTitlePosition(NSTitlePosition::NoTitle);
     // Semantic colours, so the outline follows the appearance (a CALayer border would not).
     plate.setBorderColor(&NSColor::separatorColor());
     plate.setBorderWidth(1.0);
+    plate.setFillColor(&NSColor::clearColor());
     plate.setCornerRadius(WIDGET_HEIGHT / 2.0);
     plate.setContentViewMargins(NSSize::new(0.0, 0.0));
     if let Some(content) = plate.contentView() {
