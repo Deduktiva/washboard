@@ -1,4 +1,4 @@
-# Builds target/packager/Washboard.app (no DMG, unsigned). macOS only.
+# Builds target/packager/Washboard.app (no DMG, unsigned). macOS only, with Xcode 26 for `actool`.
 # Same cargo-packager version as the macOS CI job (.github/workflows).
 PACKAGER_VERSION := 0.11.8
 
