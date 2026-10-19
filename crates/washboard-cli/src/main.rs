@@ -5,7 +5,7 @@
 //! as the app, through `washboard_core::project` and `wsdl` only: no formats or rules of its
 //! own.
 //!
-//! Commands are noun-verb (`request send`, `server add`). `-C/--project` selects the project
+//! Commands are noun-verb (`request send`, `server add`, `param set`). `-C/--project` selects the project
 //! folder (default: the current directory) for everything except `inspect` and `project new`.
 //!
 //! Exit codes: 0 ok; 1 command-level failure (send transport error, SOAP fault with
@@ -60,6 +60,59 @@ enum Command {
     /// Manage servers.
     #[command(subcommand)]
     Server(ServerCommand),
+    /// Manage parameter sets (the rows of the parameter grid).
+    #[command(subcommand)]
+    Set(SetCommand),
+    /// Manage parameters (the columns) and their values in each set.
+    #[command(subcommand)]
+    Param(ParamCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum SetCommand {
+    /// List sets with their values; `*` marks the project's set.
+    List,
+    Add {
+        name: String,
+    },
+    Rm {
+        name: String,
+    },
+    Rename {
+        name: String,
+        new_name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ParamCommand {
+    List,
+    /// Add a parameter, unset in every set.
+    Add {
+        name: String,
+    },
+    /// Delete a parameter and its value in every set.
+    Rm {
+        name: String,
+    },
+    /// Rename a parameter in every set; requests using the old name are not changed.
+    Rename {
+        name: String,
+        new_name: String,
+    },
+    /// Set the parameter's value in a set (an empty value is a value).
+    Set {
+        set: String,
+        name: String,
+        /// Values such as `-5` are values, not options.
+        #[arg(allow_hyphen_values = true)]
+        value: String,
+    },
+    /// Remove the parameter's value from a set.
+    Unset {
+        set: String,
+        name: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,6 +184,12 @@ enum RequestCommand {
     /// Print the request's XML.
     Show {
         name: String,
+        /// Print it as it would be sent, with `${...}` placeholders filled in.
+        #[arg(long)]
+        resolved: bool,
+        /// Parameter set to fill in from; defaults to the request's pin, else the project's.
+        #[arg(long, requires = "resolved")]
+        set: Option<String>,
     },
     Rename {
         name: String,
@@ -162,15 +221,22 @@ enum RequestCommand {
     /// Validate a request against the project's WSDL.
     Validate {
         name: String,
+        /// Parameter set to fill in from; defaults to the request's pin, else the project's.
+        #[arg(long)]
+        set: Option<String>,
     },
     /// Validate and send; prints the status line to stderr and the body to stdout.
     Send {
         name: String,
-        /// Server name; defaults to the request's last server.
+        /// Server name; defaults to the request's pin, else the project's server.
         #[arg(long)]
         server: Option<String>,
+        /// Parameter set to fill in from; defaults to the request's pin, else the project's.
+        #[arg(long)]
+        set: Option<String>,
         /// Send even if validation finds errors (to test how a server handles broken
-        /// requests). The errors are still printed.
+        /// requests). The errors are still printed. Placeholders that cannot be filled in
+        /// still block the send.
         #[arg(long)]
         skip_validation: bool,
         /// Exit with 1 when the response is a SOAP fault.
@@ -257,7 +323,11 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
                 name,
                 from,
             } => request::new(dir, &operation, name.as_deref(), from.as_deref()),
-            RequestCommand::Show { name } => request::show(dir, &name),
+            RequestCommand::Show {
+                name,
+                resolved,
+                set,
+            } => request::show(dir, &name, resolved, set.as_deref()),
             RequestCommand::Rename { name, new_name } => request::rename(dir, &name, &new_name),
             RequestCommand::Duplicate { name } => request::duplicate(dir, &name),
             RequestCommand::Mv { name, folder } => request::mv(dir, &name, &folder),
@@ -267,16 +337,20 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
                 indent,
                 check,
             } => request::format(dir, &name, indent, check),
-            RequestCommand::Validate { name } => validation::command(dir, &name),
+            RequestCommand::Validate { name, set } => {
+                validation::command(dir, &name, set.as_deref())
+            }
             RequestCommand::Send {
                 name,
                 server,
+                set,
                 skip_validation,
                 fail_on_fault,
             } => send::run(
                 dir,
                 &name,
                 server.as_deref(),
+                set.as_deref(),
                 skip_validation,
                 fail_on_fault,
             ),
@@ -292,6 +366,24 @@ fn run(dir: &Path, command: Command) -> anyhow::Result<ExitCode> {
             } => server::add(dir, &name, &url, &opts, ignore_tls_errors),
             ServerCommand::Edit { name, edit } => server::edit(dir, &name, &edit),
             ServerCommand::Remove { name } => server::remove(dir, &name),
+        },
+        Command::Set(cmd) => match cmd {
+            SetCommand::List => parameters::set_list(dir),
+            SetCommand::Add { name } => parameters::set_add(dir, &name),
+            SetCommand::Rm { name } => parameters::set_rm(dir, &name),
+            SetCommand::Rename { name, new_name } => parameters::set_rename(dir, &name, &new_name),
+        },
+        Command::Param(cmd) => match cmd {
+            ParamCommand::List => parameters::param_list(dir),
+            ParamCommand::Add { name } => parameters::param_add(dir, &name),
+            ParamCommand::Rm { name } => parameters::param_rm(dir, &name),
+            ParamCommand::Rename { name, new_name } => {
+                parameters::param_rename(dir, &name, &new_name)
+            }
+            ParamCommand::Set { set, name, value } => {
+                parameters::param_value(dir, &set, &name, Some(&value))
+            }
+            ParamCommand::Unset { set, name } => parameters::param_value(dir, &set, &name, None),
         },
     }
 }

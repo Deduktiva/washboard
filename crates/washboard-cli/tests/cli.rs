@@ -584,6 +584,90 @@ fn servers() {
     fails(&wb(&e, &["server", "remove", "Prod"]), 2, "no server named");
 }
 
+#[test]
+fn parameters_fill_in_placeholders_when_sent() {
+    let e = customer();
+    let (url, seen) = server::serve(vec![("200 OK", OK_RESPONSE)]);
+    ok(wb(&e, &["server", "add", "Local", &url]));
+    ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
+    let req = "GetCustomer 1";
+    fill_from_fixture(&e, req, "valid-get-customer.xml");
+    let file = request_file(&e, req);
+    let text = fs::read_to_string(&file).expect("file");
+    let with_placeholder = text.replace("100231", "${customer_id}");
+    fs::write(&file, &with_placeholder).expect("write");
+
+    // Undefined, then defined but without a set: both are errors, and nothing is sent.
+    fails(
+        &wb(&e, &["request", "validate", req]),
+        1,
+        "undefined parameter: customer_id",
+    );
+    ok(wb(&e, &["param", "add", "customer_id"]));
+    fails(
+        &wb(&e, &["request", "validate", req]),
+        1,
+        "no parameter set selected",
+    );
+    ok(wb(&e, &["set", "add", "Alice"]));
+    ok(wb(&e, &["set", "add", "Bob"]));
+    // With none chosen, the first set is used, and `set list` marks it.
+    let listed = ok(wb(&e, &["set", "list"]));
+    let marked: Vec<&str> = listed.lines().filter(|l| l.starts_with('*')).collect();
+    assert_eq!(marked.len(), 1, "{listed}");
+    assert!(marked[0].contains("Alice"), "{listed}");
+    fails(
+        &wb(&e, &["request", "validate", req]),
+        1,
+        "has no value in “Alice”",
+    );
+    fails(
+        &wb(&e, &["request", "validate", req, "--set", "alice"]),
+        1,
+        "has no value in “Alice”",
+    );
+    ok(wb(&e, &["param", "set", "Alice", "customer_id", "100231"]));
+    ok(wb(&e, &["param", "set", "Bob", "customer_id", "x"]));
+    ok(wb(&e, &["request", "validate", req, "--set", "Alice"]));
+    // Bob's value is not a valid customer id; the error points at the placeholder.
+    fails(
+        &wb(&e, &["request", "validate", req, "--set", "Bob"]),
+        1,
+        "(customer_id = \"x\" in “Bob”)",
+    );
+
+    let shown = ok(wb(
+        &e,
+        &["request", "show", req, "--resolved", "--set", "Alice"],
+    ));
+    assert_eq!(shown, text);
+    let listed = ok(wb(&e, &["set", "list"]));
+    assert!(listed.contains("customer_id=\"x\""), "{listed}");
+
+    ok(wb(&e, &["request", "send", req, "--set", "Alice"]));
+    let s = seen.recv().expect("request seen");
+    assert_eq!(s.body, text);
+    // The file keeps its placeholder.
+    assert_eq!(fs::read_to_string(&file).expect("file"), with_placeholder);
+
+    // A value may start with a hyphen.
+    ok(wb(&e, &["param", "set", "Alice", "customer_id", "-5"]));
+    let listed = ok(wb(&e, &["set", "list"]));
+    assert!(listed.contains("customer_id=\"-5\""), "{listed}");
+
+    ok(wb(&e, &["param", "unset", "Alice", "customer_id"]));
+    ok(wb(&e, &["param", "rename", "customer_id", "id"]));
+    assert_eq!(ok(wb(&e, &["param", "list"])), "id\n");
+    ok(wb(&e, &["set", "rename", "Bob", "Carol"]));
+    ok(wb(&e, &["set", "rm", "Alice"]));
+    let listed = ok(wb(&e, &["set", "list"]));
+    assert!(
+        listed.contains("Carol") && listed.contains("id=\"x\""),
+        "{listed}"
+    );
+    assert!(!listed.contains("Alice"), "{listed}");
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn password_stdin_is_refused_without_a_secret_store() {
@@ -646,7 +730,7 @@ fn send_records_history_and_last_server() {
     let sent = fs::read_to_string(request_file(&e, req)).expect("file");
     assert_eq!(s.body, sent);
 
-    // The last server is remembered, so --server is no longer needed.
+    // Without --server the project's server is used: the first one, as none was chosen.
     let json: Value =
         serde_json::from_str(&ok(wb(&e, &["request", "list", "--json"]))).expect("json");
     assert_eq!(json[0]["last_server"], "Local");
@@ -738,8 +822,22 @@ fn skip_validation_sends_broken_requests_anyway() {
     ok(wb(&e, &["server", "add", "Local", &url]));
     ok(wb(&e, &["operation", "template", "GetCustomer", "--save"]));
     let req = "GetCustomer 1";
-    fill_from_fixture(&e, req, "invalid-not-well-formed.xml");
 
+    // Placeholders that cannot be filled in are never sent, not even with --skip-validation.
+    fill_from_fixture(&e, req, "valid-get-customer.xml");
+    let file = request_file(&e, req);
+    let text = fs::read_to_string(&file).expect("file");
+    fs::write(&file, text.replace("100231", "${nope}")).expect("write");
+    let o = wb(&e, &["request", "send", req, "--skip-validation"]);
+    fails(&o, 1, "undefined parameter: nope");
+    assert!(stderr(&o).contains("not sent"), "{}", stderr(&o));
+    assert!(
+        seen.recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "sent despite an unresolved placeholder"
+    );
+
+    fill_from_fixture(&e, req, "invalid-not-well-formed.xml");
     fails(
         &wb(&e, &["request", "send", req]),
         1,

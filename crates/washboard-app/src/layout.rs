@@ -308,9 +308,20 @@ pub fn dismiss(window: &NSWindow) {
 }
 
 /// Keeps `window`'s size and position in the user defaults under `name`; the first time, it
-/// starts centred.
+/// starts centred. A saved frame smaller than the window's minimum content size, which AppKit
+/// restores as it is, grows to that minimum: a window once squeezed by a layout bug would
+/// otherwise come back squeezed for good.
 pub fn keep_frame(window: &NSWindow, name: &NSString) {
-    if !window.setFrameUsingName(name) {
+    if window.setFrameUsingName(name) {
+        let size = window.contentRectForFrameRect(window.frame()).size;
+        let min = window.contentMinSize();
+        if size.width < min.width || size.height < min.height {
+            window.setContentSize(NSSize::new(
+                size.width.max(min.width),
+                size.height.max(min.height),
+            ));
+        }
+    } else {
         window.center();
     }
     window.setFrameAutosaveName(name);

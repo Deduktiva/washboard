@@ -30,6 +30,7 @@ use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey};
 use crate::app::{ModelAccess, with_delegate};
 use crate::form;
 use crate::layout::{self, view};
+use crate::parameters_pane::ParametersPane;
 use crate::servers_pane::ServersPane;
 use crate::sheets::ImportSheetController;
 use crate::text::count;
@@ -43,18 +44,21 @@ pub enum Pane {
     ProjectGeneral(ProjectKey),
     /// A project's servers.
     Servers(ProjectKey),
+    /// A project's parameters and parameter sets.
+    Parameters(ProjectKey),
 }
 
 impl Pane {
     fn project(self) -> Option<ProjectKey> {
         match self {
             Pane::App => None,
-            Pane::ProjectGeneral(key) | Pane::Servers(key) => Some(key),
+            Pane::ProjectGeneral(key) | Pane::Servers(key) | Pane::Parameters(key) => Some(key),
         }
     }
 }
 
-/// The selected pane in the user defaults: `app`, or `general:` / `servers:` and the project's
+/// The selected pane in the user defaults: `app`, or `general:` / `servers:` / `parameters:` and
+/// the project's
 /// folder, which, unlike its key, is the same on the next launch.
 pub const PANE_KEY: &str = "SettingsPane";
 
@@ -133,6 +137,7 @@ pub struct SettingsWindowIvars {
     indent: OnceCell<Retained<NSPopUpButton>>,
     on_save: OnceCell<Retained<NSSwitch>>,
     servers: RefCell<Vec<(ProjectKey, Retained<ServersPane>)>>,
+    parameters: RefCell<Vec<(ProjectKey, Retained<ParametersPane>)>>,
     /// The shown General pane's list of WSDL files.
     wsdl_files: RefCell<Option<Retained<NSTextField>>>,
 }
@@ -395,6 +400,11 @@ impl SettingsWindowController {
                 servers.reload();
                 servers.view().clone()
             }
+            Pane::Parameters(key) => {
+                let parameters = self.parameters(key);
+                parameters.reload();
+                parameters.view().clone()
+            }
         };
         let content = self.ivars().content.get().expect("set in new()");
         for old in content.subviews().iter() {
@@ -418,6 +428,10 @@ impl SettingsWindowController {
             .servers
             .borrow_mut()
             .retain(|(key, _)| open.contains(key));
+        self.ivars()
+            .parameters
+            .borrow_mut()
+            .retain(|(key, _)| open.contains(key));
         match self.selected() {
             Some(pane) if !self.exists(pane) => self.select(Pane::App),
             Some(Pane::ProjectGeneral(key)) => self.select(Pane::ProjectGeneral(key)),
@@ -439,6 +453,33 @@ impl SettingsWindowController {
             self.ivars().servers.borrow_mut().push((key, pane.clone()));
             pane
         })
+    }
+
+    /// The model's parameters or sets changed (`ParametersChanged`).
+    pub fn reload_parameters(&self, key: ProjectKey) {
+        if let Some(pane) = self.existing_parameters(key) {
+            pane.reload();
+        }
+    }
+
+    /// The Parameters pane of project `key`, created on first use.
+    pub fn parameters(&self, key: ProjectKey) -> Retained<ParametersPane> {
+        self.existing_parameters(key).unwrap_or_else(|| {
+            let pane = ParametersPane::new(key, &self.project_name(key), self.mtm());
+            self.ivars()
+                .parameters
+                .borrow_mut()
+                .push((key, pane.clone()));
+            pane
+        })
+    }
+
+    fn existing_parameters(&self, key: ProjectKey) -> Option<Retained<ParametersPane>> {
+        let panes = self.ivars().parameters.borrow();
+        panes
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, p)| p.clone())
     }
 
     fn existing_servers(&self, key: ProjectKey) -> Option<Retained<ServersPane>> {
@@ -552,6 +593,7 @@ impl SettingsWindowController {
             Pane::App => "General".into(),
             Pane::ProjectGeneral(key) => format!("{} — General", self.project_name(key)),
             Pane::Servers(key) => format!("{} — Servers", self.project_name(key)),
+            Pane::Parameters(key) => format!("{} — Parameters", self.project_name(key)),
         }
     }
 
@@ -591,6 +633,13 @@ impl SettingsWindowController {
                     Some(Pane::Servers(key)),
                     "Servers",
                     "server.rack",
+                    vec![],
+                    mtm,
+                ),
+                PaneItem::new(
+                    Some(Pane::Parameters(key)),
+                    "Parameters",
+                    "tablecells",
                     vec![],
                     mtm,
                 ),
@@ -714,6 +763,7 @@ impl SettingsWindowController {
         match kind {
             "general" => Some(Pane::ProjectGeneral(key)),
             "servers" => Some(Pane::Servers(key)),
+            "parameters" => Some(Pane::Parameters(key)),
             _ => None,
         }
     }
@@ -724,6 +774,7 @@ impl SettingsWindowController {
             Pane::App => Some("app".to_owned()),
             Pane::ProjectGeneral(key) => folder(key).map(|f| format!("general:{f}")),
             Pane::Servers(key) => folder(key).map(|f| format!("servers:{f}")),
+            Pane::Parameters(key) => folder(key).map(|f| format!("parameters:{f}")),
         };
         let Some(value) = value else { return };
         with_delegate(self.mtm(), |d| {

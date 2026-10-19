@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 
 use super::fsutil::{IoContext, atomic_write, remove_dir_if_exists, remove_file_if_exists};
 use super::{
-    DEFAULT_HISTORY_LIMIT, HISTORY_DIR, LAST_SERVER_KEY, Project, ProjectError, Result, parse_time,
-    parse_uuid, timefmt,
+    DEFAULT_HISTORY_LIMIT, HISTORY_DIR, Project, ProjectError, Result, parse_time, parse_uuid,
+    timefmt,
 };
 use crate::http::{Exchange, RawMessage};
-use crate::model::{HistoryEntry, HistoryId, RequestId, Server, ServerId};
+use crate::model::{HistoryEntry, HistoryId, ParameterSetId, RequestId, Server, ServerId};
 
 const REQUEST_SUFFIX: &str = ".request.xml";
 const RESPONSE_SUFFIX: &str = ".response.xml";
@@ -52,7 +52,8 @@ pub struct HistoryRecord {
 }
 
 const COLUMNS: &str = "id, request_id, server_id, url, sent_at, duration_ms, http_status, \
-                       soap_fault, error, response_headers, file_stem, request_headers";
+                       soap_fault, error, response_headers, file_stem, request_headers, \
+                       parameter_set_id";
 
 struct RawRow {
     id: String,
@@ -67,6 +68,7 @@ struct RawRow {
     response_headers: Option<String>,
     file_stem: String,
     request_headers: Option<String>,
+    parameter_set_id: Option<String>,
 }
 
 fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRow> {
@@ -83,6 +85,7 @@ fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRow> {
         response_headers: r.get(9)?,
         file_stem: r.get(10)?,
         request_headers: r.get(11)?,
+        parameter_set_id: r.get(12)?,
     })
 }
 
@@ -105,6 +108,11 @@ fn to_entry(r: &RawRow) -> Result<HistoryEntry> {
         http_status: r.http_status.and_then(|s| u16::try_from(s).ok()),
         soap_fault: r.soap_fault.unwrap_or(false),
         error: r.error.clone(),
+        parameter_set_id: r
+            .parameter_set_id
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .map(ParameterSetId),
     })
 }
 
@@ -138,14 +146,17 @@ impl Project {
     }
 
     /// Stores a sent exchange for `request`: the request body and response body as files, the
-    /// metadata as a row. Also makes `server` the request's and the project's last server, and
-    /// prunes the request's history to the project limit.
+    /// metadata as a row. Also makes `server` the request's last server, and prunes the
+    /// request's history to the project limit. The project's active server is left alone: a
+    /// send through a pin must not change what every other request uses.
     ///
-    /// `soap_fault` comes from the caller (the HTTP module's fault detection).
+    /// `soap_fault` comes from the caller (the HTTP module's fault detection);
+    /// `parameter_set` is the set whose values the sent body was resolved with.
     pub fn record_exchange(
         &mut self,
         request: RequestId,
         server: &Server,
+        parameter_set: Option<ParameterSetId>,
         exchange: &Exchange,
         soap_fault: bool,
     ) -> Result<HistoryEntry> {
@@ -186,6 +197,7 @@ impl Project {
             http_status: exchange.response.as_ref().and_then(RawMessage::status_code),
             soap_fault,
             error: exchange.error.clone(),
+            parameter_set_id: parameter_set,
         };
         let encode = |e| ProjectError::Corrupt(format!("cannot encode headers: {e}"));
         let headers = exchange
@@ -199,7 +211,7 @@ impl Project {
         let inserted = (|| -> Result<()> {
             let tx = self.conn.transaction()?;
             tx.execute(
-                &format!("INSERT INTO history ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+                &format!("INSERT INTO history ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"),
                 params![
                     entry.id.to_string(),
                     request.to_string(),
@@ -212,22 +224,16 @@ impl Project {
                     entry.error,
                     headers,
                     stem,
-                    request_head
+                    request_head,
+                    parameter_set.map(|s| s.to_string())
                 ],
             )?;
             // Only servers that are (still) part of the project become "last server".
-            let known = tx.execute(
+            tx.execute(
                 "UPDATE request SET last_server_id = ?1
                  WHERE id = ?2 AND EXISTS (SELECT 1 FROM server WHERE id = ?1)",
                 params![server.id.to_string(), request.to_string()],
             )?;
-            if known > 0 {
-                tx.execute(
-                    "INSERT INTO ui_state (key, value) VALUES (?1, ?2)
-                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    params![LAST_SERVER_KEY, server.id.to_string()],
-                )?;
-            }
             tx.commit()?;
             Ok(())
         })();

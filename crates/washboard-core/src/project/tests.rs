@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use super::*;
 use crate::http::{Exchange, RawMessage};
-use crate::model::{Auth, HistoryId, OperationRef, QName, Server};
+use crate::model::{Auth, HistoryId, OperationRef, ParameterSet, ParameterSetId, QName, Server};
 use crate::secrets::{MemorySecretStore, SecretKey, SecretStore};
 use crate::test_support::{self, fixtures};
 
@@ -422,6 +422,7 @@ fn reconcile_keeps_identity_across_case_only_rename() {
         .record_exchange(
             a.id,
             &server("dev"),
+            None,
             &exchange(1000, Some("HTTP/1.1 200 OK")),
             false,
         )
@@ -441,6 +442,7 @@ fn reconcile_while_open_and_orphan_history_pruning() {
     p.record_exchange(
         a.id,
         &server("dev"),
+        None,
         &exchange(1000, Some("HTTP/1.1 200 OK")),
         false,
     )
@@ -583,6 +585,7 @@ fn delete_removes_file_rows_and_history() {
     p.record_exchange(
         a.id,
         &server("dev"),
+        None,
         &exchange(1000, Some("HTTP/1.1 200 OK")),
         false,
     )
@@ -737,6 +740,7 @@ fn reconciliation_walks_folders_and_keeps_moves() {
         .record_exchange(
             a.id,
             &server("dev"),
+            None,
             &exchange(1000, Some("HTTP/1.1 200 OK")),
             false,
         )
@@ -850,6 +854,7 @@ fn folder_commands() {
     p.record_exchange(
         a.id,
         &server("dev"),
+        None,
         &exchange(1000, Some("HTTP/1.1 200 OK")),
         false,
     )
@@ -914,6 +919,7 @@ fn folder_commands() {
     p.record_exchange(
         b.id,
         &server("dev"),
+        None,
         &exchange(2000, Some("HTTP/1.1 200 OK")),
         false,
     )
@@ -1160,7 +1166,7 @@ fn passwords_go_through_the_secret_store() {
 }
 
 #[test]
-fn deleting_a_server_clears_last_server_and_secret() {
+fn deleting_a_server_clears_pins_active_server_and_secret() {
     let (_tmp, _folder, mut p) = new_project();
     let secrets = MemorySecretStore::default();
     let dev = server("dev");
@@ -1171,17 +1177,15 @@ fn deleting_a_server_clears_last_server_and_secret() {
         .expect("pw");
 
     let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
-    assert_eq!(a.last_server, None);
-    p.set_request_last_server(a.id, Some(dev.id)).expect("last");
-    assert_eq!(p.last_used_server().expect("last"), Some(dev.id));
-    // New requests start with the most recently used server.
-    let b = p.create_request(&op("GetCustomer"), "<b/>").expect("b");
-    assert_eq!(b.last_server, Some(dev.id));
+    assert_eq!(a.pinned_server, None);
+    p.set_active_server(Some(dev.id)).expect("active");
+    p.pin_server(a.id, Some(dev.id)).expect("pin");
+    assert_eq!(p.active_server().expect("active"), Some(dev.id));
+    assert_eq!(p.request(a.id).expect("a").pinned_server, Some(dev.id));
 
     p.delete_server(dev.id, &secrets).expect("delete");
-    assert_eq!(p.request(a.id).expect("a").last_server, None);
-    assert_eq!(p.request(b.id).expect("b").last_server, None);
-    assert_eq!(p.last_used_server().expect("last"), None);
+    assert_eq!(p.request(a.id).expect("a").pinned_server, None);
+    assert_eq!(p.active_server().expect("active"), None);
     assert_eq!(secrets.get(&p.secret_key(dev.id)).expect("get"), None);
     assert_eq!(p.servers().expect("list"), [prod]);
     assert!(matches!(
@@ -1191,35 +1195,292 @@ fn deleting_a_server_clears_last_server_and_secret() {
 }
 
 #[test]
-fn default_server_is_the_requests_else_the_projects_last() {
+fn selection_is_the_pin_else_the_project_choice() {
     let (_tmp, _folder, mut p) = new_project();
     let secrets = MemorySecretStore::default();
+    assert_eq!(p.selection(None).expect("sel"), Selection::default());
+
     let dev = server("dev");
     let prod = server("prod");
     p.add_server(&dev).expect("add");
     p.add_server(&prod).expect("add");
     let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
-    assert_eq!(p.default_server(Some(&a)).expect("default"), None);
-    assert_eq!(p.default_server(None).expect("default"), None);
+    // Nothing chosen: the first server, no set.
+    let first = Selection {
+        server: Some(dev.id),
+        ..Selection::default()
+    };
+    assert_eq!(p.selection(Some(&a)).expect("sel"), first);
 
-    p.set_request_last_server(a.id, Some(dev.id)).expect("last");
-    let b = p.create_request(&op("GetCustomer"), "<b/>").expect("b");
-    p.set_request_last_server(b.id, Some(prod.id))
-        .expect("last");
-    let a = p.request(a.id).expect("a");
-    assert_eq!(p.default_server(Some(&a)).expect("default"), Some(dev.id));
-    assert_eq!(p.default_server(None).expect("default"), Some(prod.id));
-
-    // A stale `RequestMeta` naming a deleted server falls back to the project's last.
-    p.set_request_last_server(b.id, Some(dev.id)).expect("last");
-    p.set_request_last_server(a.id, Some(prod.id))
-        .expect("last");
-    let stale = p.request(b.id).expect("b");
-    p.delete_server(dev.id, &secrets).expect("delete");
+    p.add_parameter("id").expect("param");
+    let set = set("A", &[("id", "1")]);
+    p.add_parameter_set(&set).expect("set");
+    let other = self::set("B", &[]);
+    p.add_parameter_set(&other).expect("set");
+    // Like the servers: with sets but none chosen, the first set.
     assert_eq!(
-        p.default_server(Some(&stale)).expect("default"),
-        Some(prod.id)
+        p.selection(Some(&a)).expect("sel").parameter_set,
+        Some(set.id)
     );
+    p.set_active_server(Some(prod.id)).expect("active");
+    p.set_active_parameter_set(Some(set.id))
+        .expect("active set");
+    let project = Selection {
+        server: Some(prod.id),
+        parameter_set: Some(set.id),
+        ..Selection::default()
+    };
+    assert_eq!(p.selection(Some(&a)).expect("sel"), project);
+    assert_eq!(p.selection(None).expect("sel"), project);
+
+    p.pin_server(a.id, Some(dev.id)).expect("pin");
+    p.pin_parameter_set(a.id, Some(set.id)).expect("pin set");
+    let a = p.request(a.id).expect("a");
+    assert_eq!(
+        p.selection(Some(&a)).expect("sel"),
+        Selection {
+            server: Some(dev.id),
+            server_pinned: true,
+            parameter_set: Some(set.id),
+            parameter_set_pinned: true,
+        }
+    );
+    // Duplicates keep the pins; new requests have none.
+    let copy = p.duplicate_request(a.id).expect("dup");
+    assert_eq!(copy.pinned_server, Some(dev.id));
+    assert_eq!(copy.pinned_parameter_set, Some(set.id));
+    let b = p.create_request(&op("GetCustomer"), "<b/>").expect("b");
+    assert_eq!(p.selection(Some(&b)).expect("sel"), project);
+
+    // A stale `RequestMeta` whose pins are gone follows the project again, which falls back
+    // to the remaining set.
+    p.delete_server(dev.id, &secrets).expect("delete");
+    p.delete_parameter_set(set.id).expect("delete set");
+    assert_eq!(
+        p.selection(Some(&a)).expect("sel"),
+        Selection {
+            server: Some(prod.id),
+            parameter_set: Some(other.id),
+            ..Selection::default()
+        }
+    );
+    assert_eq!(p.active_parameter_set().expect("active"), None);
+
+    p.pin_server(a.id, None).expect("unpin");
+    assert!(matches!(
+        p.pin_server(a.id, Some(dev.id)),
+        Err(ProjectError::UnknownServer(_))
+    ));
+}
+
+/// Undoes migrations 2 and 3. SQLite cannot drop a column with a foreign key, so `request` is
+/// rebuilt as v1 created it, with foreign keys off so dropping it cascades nowhere.
+fn downgrade_to_v1(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "PRAGMA foreign_keys = OFF;
+         DROP TABLE parameter_value; DROP TABLE parameter; DROP TABLE parameter_set;
+         ALTER TABLE history DROP COLUMN parameter_set_id;
+         ALTER TABLE history DROP COLUMN request_headers;
+         CREATE TABLE request_v1 (id TEXT PRIMARY KEY, file_name TEXT NOT NULL UNIQUE,
+                                  operation TEXT,
+                                  last_server_id TEXT REFERENCES server(id) ON DELETE SET NULL,
+                                  created_at TEXT NOT NULL, sort_order INTEGER NOT NULL);
+         INSERT INTO request_v1
+           SELECT id, file_name, operation, last_server_id, created_at, sort_order FROM request;
+         DROP TABLE request;
+         ALTER TABLE request_v1 RENAME TO request;
+         PRAGMA user_version = 1;",
+    )
+    .expect("downgrade");
+}
+
+#[test]
+fn upgrade_keeps_the_last_server_as_active_and_pins_nothing() {
+    let (_tmp, folder, mut p) = new_project();
+    let dev = server("dev");
+    let prod = server("prod");
+    p.add_server(&dev).expect("add");
+    p.add_server(&prod).expect("add");
+    let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
+    p.set_active_server(Some(prod.id)).expect("active");
+    drop(p);
+
+    let conn = rusqlite::Connection::open(folder.join(DB_FILE)).expect("conn");
+    downgrade_to_v1(&conn);
+    conn.execute(
+        "UPDATE request SET last_server_id = ?1",
+        params![dev.id.to_string()],
+    )
+    .expect("last");
+    drop(conn);
+
+    let p = Project::open(&folder).expect("open");
+    let a = p.request(a.id).expect("a");
+    assert_eq!(a.last_server, Some(dev.id));
+    assert_eq!(a.pinned_server, None);
+    assert_eq!(p.selection(Some(&a)).expect("sel").server, Some(prod.id));
+    assert_eq!(p.parameter_sets().expect("sets"), []);
+}
+
+fn set(name: &str, values: &[(&str, &str)]) -> ParameterSet {
+    ParameterSet {
+        id: ParameterSetId::new(),
+        name: name.into(),
+        values: values
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect(),
+    }
+}
+
+#[test]
+fn parameters_and_sets() {
+    let (_tmp, _folder, mut p) = new_project();
+    p.add_parameter("customer_id").expect("add");
+    p.add_parameter("customer_name").expect("add");
+    for bad in ["", "1x", "a.b", "a-b"] {
+        assert!(
+            matches!(
+                p.add_parameter(bad),
+                Err(ProjectError::InvalidParameter(ParameterError::InvalidName(
+                    _
+                )))
+            ),
+            "{bad:?}"
+        );
+    }
+    assert!(matches!(
+        p.add_parameter("customer_id"),
+        Err(ProjectError::InvalidParameter(ParameterError::NameTaken(_)))
+    ));
+
+    let a = set("Customer A", &[("customer_id", "1"), ("customer_name", "")]);
+    let b = set("Customer B", &[("customer_id", "2")]);
+    p.add_parameter_set(&a).expect("a");
+    p.add_parameter_set(&b).expect("b");
+    assert_eq!(p.parameter_sets().expect("sets"), [a.clone(), b.clone()]);
+    assert!(matches!(
+        p.add_parameter_set(&set("customer a", &[])),
+        Err(ProjectError::InvalidParameter(
+            ParameterError::SetNameTaken(_)
+        ))
+    ));
+    assert!(matches!(
+        p.add_parameter_set(&set(" ", &[])),
+        Err(ProjectError::InvalidParameter(ParameterError::EmptySetName))
+    ));
+    assert!(matches!(
+        p.add_parameter_set(&set("C", &[("nope", "x")])),
+        Err(ProjectError::InvalidParameter(ParameterError::UnknownName(
+            _
+        )))
+    ));
+
+    // Renaming a variable renames it in every set; deleting removes its values.
+    p.rename_parameter("customer_id", "id").expect("rename");
+    assert_eq!(p.parameters().expect("params"), ["id", "customer_name"]);
+    let got = p.parameter_set(b.id).expect("b");
+    assert_eq!(got.values.get("id").map(String::as_str), Some("2"));
+
+    p.set_parameter_value(b.id, "customer_name", Some("Bob"))
+        .expect("set");
+    p.set_parameter_value(a.id, "customer_name", None)
+        .expect("unset");
+    let values = p.parameter_values(Some(a.id)).expect("values");
+    assert_eq!(values.variables, ["id", "customer_name"]);
+    let got_a = values.set.expect("set");
+    assert_eq!(got_a.values.get("customer_name"), None);
+    assert_eq!(
+        p.parameter_set(b.id)
+            .expect("b")
+            .values
+            .get("customer_name"),
+        Some(&"Bob".to_owned())
+    );
+
+    p.set_parameter_order(&["customer_name".into()])
+        .expect("order");
+    assert_eq!(p.parameters().expect("params"), ["customer_name", "id"]);
+    p.set_parameter_set_order(&[b.id]).expect("order");
+    p.rename_parameter_set(a.id, "First").expect("rename");
+    let names: Vec<String> = p
+        .parameter_sets()
+        .expect("sets")
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(names, ["Customer B", "First"]);
+
+    // A duplicate copies the values and sits right after its original.
+    let copy = p.duplicate_parameter_set(b.id).expect("duplicate");
+    assert_eq!(copy.name, "Customer B copy");
+    assert_eq!(copy.values, p.parameter_set(b.id).expect("b").values);
+    let again = p.duplicate_parameter_set(b.id).expect("duplicate");
+    assert_eq!(again.name, "Customer B copy 2");
+    let names: Vec<String> = p
+        .parameter_sets()
+        .expect("sets")
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Customer B",
+            "Customer B copy 2",
+            "Customer B copy",
+            "First"
+        ]
+    );
+    p.delete_parameter_set(copy.id).expect("delete");
+    p.delete_parameter_set(again.id).expect("delete");
+
+    // Copying and placing the copy is one step: if placing fails, there is no copy.
+    p.conn
+        .execute_batch(
+            "CREATE TEMP TRIGGER no_reorder BEFORE UPDATE OF sort_order ON parameter_set
+             BEGIN SELECT RAISE(ABORT, 'no reordering'); END;",
+        )
+        .expect("trigger");
+    assert!(p.duplicate_parameter_set(b.id).is_err());
+    assert_eq!(p.parameter_sets().expect("sets").len(), 2);
+    p.conn
+        .execute_batch("DROP TRIGGER no_reorder;")
+        .expect("drop trigger");
+
+    p.delete_parameter("id").expect("delete");
+    assert!(!p.parameter_set(b.id).expect("b").values.contains_key("id"));
+    assert!(matches!(
+        p.set_parameter_value(b.id, "id", Some("x")),
+        Err(ProjectError::InvalidParameter(ParameterError::UnknownName(
+            _
+        )))
+    ));
+}
+
+#[test]
+fn history_records_the_parameter_set_and_leaves_the_active_server() {
+    let (_tmp, _folder, mut p) = new_project();
+    let dev = server("dev");
+    let prod = server("prod");
+    p.add_server(&dev).expect("add");
+    p.add_server(&prod).expect("add");
+    p.set_active_server(Some(prod.id)).expect("active");
+    let a = p.create_request(&op("GetCustomer"), "<a/>").expect("a");
+    let set_id = ParameterSetId::new();
+    let entry = p
+        .record_exchange(
+            a.id,
+            &dev,
+            Some(set_id),
+            &exchange(1000, Some("HTTP/1.1 200 OK")),
+            false,
+        )
+        .expect("record");
+    assert_eq!(entry.parameter_set_id, Some(set_id));
+    assert_eq!(p.history(a.id).expect("history"), [entry]);
+    assert_eq!(p.request(a.id).expect("a").last_server, Some(dev.id));
+    assert_eq!(p.active_server().expect("active"), Some(prod.id));
 }
 
 // ---- history -----------------------------------------------------------------------------
@@ -1235,19 +1496,19 @@ fn record_list_load_history() {
         .record_exchange(
             a.id,
             &dev,
+            None,
             &exchange(1_791_295_392, Some("HTTP/1.1 500 Internal")),
             true,
         )
         .expect("record");
     let failed = p
-        .record_exchange(a.id, &dev, &exchange(1_791_295_400, None), false)
+        .record_exchange(a.id, &dev, None, &exchange(1_791_295_400, None), false)
         .expect("record");
     assert_eq!(ok.http_status, Some(500));
     assert!(ok.soap_fault);
     assert_eq!(ok.duration, Some(Duration::from_millis(123)));
     assert_eq!(failed.error.as_deref(), Some("connection refused"));
     assert_eq!(p.request(a.id).expect("a").last_server, Some(dev.id));
-    assert_eq!(p.last_used_server().expect("last"), Some(dev.id));
 
     let list = p.history(a.id).expect("history");
     assert_eq!(list, [failed.clone(), ok.clone()]);
@@ -1292,7 +1553,9 @@ fn history_keeps_the_request_head_masked() {
     sent.request
         .headers
         .push(("authorization".into(), "Basic YWxpY2U6c2VjcmV0".into()));
-    let old = p.record_exchange(a.id, &dev, &sent, false).expect("record");
+    let old = p
+        .record_exchange(a.id, &dev, None, &sent, false)
+        .expect("record");
     let head = p.load_history(old.id).expect("load").request_head;
     assert_eq!(
         head,
@@ -1308,13 +1571,12 @@ fn history_keeps_the_request_head_masked() {
 
     // A v1 database: the column is added on open, and rows from before show no head.
     let conn = rusqlite::Connection::open(folder.join(DB_FILE)).expect("conn");
-    conn.execute_batch("ALTER TABLE history DROP COLUMN request_headers; PRAGMA user_version = 1;")
-        .expect("downgrade");
+    downgrade_to_v1(&conn);
     drop(conn);
     let mut p = Project::open(&folder).expect("open");
     assert_eq!(p.load_history(old.id).expect("load").request_head, None);
     let new = p
-        .record_exchange(a.id, &dev, &exchange(1_791_295_400, None), false)
+        .record_exchange(a.id, &dev, None, &exchange(1_791_295_400, None), false)
         .expect("record");
     assert!(p.load_history(new.id).expect("load").request_head.is_some());
 }
@@ -1327,6 +1589,7 @@ fn same_second_sends_get_distinct_files() {
         .record_exchange(
             a.id,
             &server("dev"),
+            None,
             &exchange(1000, Some("HTTP/1.1 200 OK")),
             false,
         )
@@ -1335,6 +1598,7 @@ fn same_second_sends_get_distinct_files() {
         .record_exchange(
             a.id,
             &server("dev"),
+            None,
             &exchange(1000, Some("HTTP/1.1 200 OK")),
             false,
         )
@@ -1359,6 +1623,7 @@ fn history_is_pruned_to_the_limit() {
             p.record_exchange(
                 a.id,
                 &dev,
+                None,
                 &exchange(1000 + i, Some("HTTP/1.1 200 OK")),
                 false,
             )
@@ -1366,8 +1631,14 @@ fn history_is_pruned_to_the_limit() {
             .id,
         );
     }
-    p.record_exchange(b.id, &dev, &exchange(5000, Some("HTTP/1.1 200 OK")), false)
-        .expect("record");
+    p.record_exchange(
+        b.id,
+        &dev,
+        None,
+        &exchange(5000, Some("HTTP/1.1 200 OK")),
+        false,
+    )
+    .expect("record");
     let kept: Vec<HistoryId> = p.history(a.id).expect("h").iter().map(|e| e.id).collect();
     assert_eq!(kept, [ids[4], ids[3], ids[2]]);
     assert_eq!(

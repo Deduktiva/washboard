@@ -49,6 +49,8 @@ pub enum DiagSource {
     Schema,
     /// WSDL/XSD import resolution (project creation, WSDL replacement).
     Import,
+    /// A `${...}` placeholder that cannot be filled in (`docs/specs/parameters.md`).
+    Parameters,
 }
 
 /// What libxml2 said about a schema error, as data rather than message text

@@ -16,6 +16,7 @@ mod event;
 mod format;
 mod front_end;
 mod import;
+mod parameters;
 mod picker;
 mod send;
 mod timers;

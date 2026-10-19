@@ -3,7 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
-use washboard_core::model::{OperationRef, QName, RequestMeta, Server};
+use washboard_core::interpolate::Values;
+use washboard_core::model::{
+    OperationRef, ParameterSet, ParameterSetId, QName, RequestMeta, Server,
+};
 use washboard_core::project::{self, CheckedImport, Project, ProjectError, ProjectSchema};
 use washboard_core::wsdl::{Binding, Operation, Protocol, Style, Wsdl};
 
@@ -75,6 +78,35 @@ pub fn find_server(project: &Project, name: &str) -> anyhow::Result<Server> {
         1 => Ok(matches.remove(0)),
         n => bail!("{n} servers are named {name:?}; rename one of them in the app"),
     }
+}
+
+/// Sets are matched by name ignoring case and surrounding space, as the project compares them.
+pub fn find_parameter_set(project: &Project, name: &str) -> anyhow::Result<ParameterSet> {
+    let folded = name.trim().to_lowercase();
+    let mut matches: Vec<ParameterSet> = project
+        .parameter_sets()?
+        .into_iter()
+        .filter(|s| s.name.trim().to_lowercase() == folded)
+        .collect();
+    match matches.len() {
+        0 => bail!("no parameter set named {name:?}"),
+        1 => Ok(matches.remove(0)),
+        n => bail!("{n} parameter sets are named {name:?}; rename one of them in the app"),
+    }
+}
+
+/// What `request`'s placeholders resolve against: `--set`, else the request's pin, else the
+/// project's active set (`docs/specs/parameters.md`, "Selection").
+pub fn parameter_values(
+    project: &Project,
+    request: &RequestMeta,
+    set: Option<&str>,
+) -> anyhow::Result<(Option<ParameterSetId>, Values)> {
+    let id = match set {
+        Some(name) => Some(find_parameter_set(project, name)?.id),
+        None => project.selection(Some(request))?.parameter_set,
+    };
+    Ok((id, project.parameter_values(id)?))
 }
 
 /// Reads and analyzes the project's current WSDL set (`wsdl/`, without `.previous`); the schema

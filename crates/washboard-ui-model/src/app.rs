@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use thiserror::Error;
-use washboard_core::model::{RequestId, ServerId};
+use washboard_core::model::{ParameterSetId, RequestId, ServerId};
 use washboard_core::project::{
     AppState, AppStateError, OpenProject, Project, ProjectError, same_folder,
 };
@@ -85,6 +85,14 @@ pub(crate) enum PendingDialog {
     DeleteServer {
         project: ProjectKey,
         server: ServerId,
+    },
+    DeleteParameter {
+        project: ProjectKey,
+        name: String,
+    },
+    DeleteParameterSet {
+        project: ProjectKey,
+        set: ParameterSetId,
     },
     /// Reload or Keep Edits, for a request changed on disk.
     ReloadRequest {
@@ -346,6 +354,18 @@ impl App {
                     Err(e) => self.alert_error("Could not delete the server", &e),
                 }
             }
+            (PendingDialog::DeleteParameter { project, name }, DialogAnswer::Confirmed) => {
+                match self.delete_parameter(project, &name) {
+                    Ok(()) | Err(ModelError::UnknownProject) => {}
+                    Err(e) => self.alert_error("Could not delete the parameter", &e),
+                }
+            }
+            (PendingDialog::DeleteParameterSet { project, set }, DialogAnswer::Confirmed) => {
+                match self.delete_parameter_set(project, set) {
+                    Ok(()) | Err(ModelError::UnknownProject) => {}
+                    Err(e) => self.alert_error("Could not delete the parameter set", &e),
+                }
+            }
             (PendingDialog::ReloadRequest { project, request }, answer) => {
                 self.reload_answered(project, request, answer);
             }
@@ -374,6 +394,8 @@ impl App {
             schema: SchemaState::Loading,
             sidebar: Sidebar::default(),
             servers: Vec::new(),
+            parameters: Vec::new(),
+            parameter_sets: Vec::new(),
             editor: None,
             history: Vec::new(),
             response: None,
@@ -386,6 +408,7 @@ impl App {
         // A database that fails here fails again on the first command, which reports it.
         let _ = window.reload_requests();
         let _ = window.reload_servers();
+        let _ = window.reload_parameters();
         window.load_collapsed();
         if window.selected_request().is_none() {
             window.restore.last_selected_request = window.sidebar.request_order().first().copied();

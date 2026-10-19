@@ -16,12 +16,19 @@ use super::fsutil::{
 };
 use super::names;
 use super::{
-    HISTORY_DIR, LAST_SERVER_KEY, Project, ProjectError, REQUESTS_DIR, Result, parse_time,
-    parse_uuid, timefmt,
+    HISTORY_DIR, Project, ProjectError, REQUESTS_DIR, Result, parse_time, parse_uuid, timefmt,
 };
-use crate::model::{OperationRef, RequestId, RequestMeta, ServerId};
+use crate::model::{OperationRef, ParameterSetId, RequestId, RequestMeta, ServerId};
 use crate::wsdl::Wsdl;
 use crate::xml;
+
+/// The server metadata a new request row starts with.
+#[derive(Default)]
+struct NewRequest {
+    last_server: Option<ServerId>,
+    pinned_server: Option<ServerId>,
+    pinned_parameter_set: Option<ParameterSetId>,
+}
 
 /// The name New Folder gives, numbered from 2 when taken, as in Finder.
 const UNTITLED_FOLDER: &str = "New Folder";
@@ -116,15 +123,34 @@ pub fn operation_folder(wsdl: &Wsdl, operation: &OperationRef) -> String {
     }
 }
 
-const COLUMNS: &str = "id, file_name, operation, last_server_id, created_at";
+const COLUMNS: &str = "id, file_name, operation, last_server_id, created_at, pinned_server_id,
+                       pinned_parameter_set_id";
 
-type RawRow = (String, String, Option<String>, Option<String>, String);
+type RawRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    String,
+    Option<String>,
+    Option<String>,
+);
 
 fn raw_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawRow> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+    ))
 }
 
-fn to_meta((id, file_name, operation, last_server, created_at): RawRow) -> Result<RequestMeta> {
+fn to_meta(
+    (id, file_name, operation, last_server, created_at, pinned_server, pinned_set): RawRow,
+) -> Result<RequestMeta> {
     let (folder, file) = names::split(&file_name);
     let name = names::stem_of(file)
         .ok_or_else(|| ProjectError::Corrupt(format!("bad request file name {file_name:?}")))?;
@@ -139,6 +165,14 @@ fn to_meta((id, file_name, operation, last_server, created_at): RawRow) -> Resul
             .map(|s| parse_uuid(s, "server").map(ServerId))
             .transpose()?,
         created_at: parse_time(&created_at)?,
+        pinned_server: pinned_server
+            .as_deref()
+            .map(|s| parse_uuid(s, "server").map(ServerId))
+            .transpose()?,
+        pinned_parameter_set: pinned_set
+            .as_deref()
+            .map(|s| parse_uuid(s, "parameter set").map(ParameterSetId))
+            .transpose()?,
     })
 }
 
@@ -274,8 +308,11 @@ impl Project {
     ) -> Result<RequestMeta> {
         self.check_new_name(name, &self.taken_names()?)?;
         let folder = self.ensure_folder(folder)?;
-        let last_server = self.last_used_server()?;
-        self.insert_request(&folder, name, operation, last_server, text.as_bytes(), None)
+        let new = NewRequest {
+            last_server: self.active_server()?,
+            ..NewRequest::default()
+        };
+        self.insert_request(&folder, name, operation, new, text.as_bytes(), None)
     }
 
     /// Writes the file, then the row; removes the file again if the row fails.
@@ -285,7 +322,7 @@ impl Project {
         folder: &str,
         name: &str,
         operation: Option<&OperationRef>,
-        last_server: Option<ServerId>,
+        new: NewRequest,
         bytes: &[u8],
         after: Option<RequestId>,
     ) -> Result<RequestMeta> {
@@ -317,15 +354,17 @@ impl Project {
             };
             tx.execute(
                 "INSERT INTO request (id, file_name, operation, last_server_id, created_at,
-                                      sort_order)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                      sort_order, pinned_server_id, pinned_parameter_set_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     id.to_string(),
                     file_name,
                     operation.map(OperationRef::to_string),
-                    last_server.map(|s| s.to_string()),
+                    new.last_server.map(|s| s.to_string()),
                     timefmt::format(created_at),
-                    order
+                    order,
+                    new.pinned_server.map(|s| s.to_string()),
+                    new.pinned_parameter_set.map(|s| s.to_string())
                 ],
             )?;
             tx.commit()?;
@@ -357,8 +396,8 @@ impl Project {
     }
 
     /// Copies the request (file bytes unchanged, so a BOM survives) as `<name> copy`,
-    /// `<name> copy 2`, …, in the original's folder and right after it. History is not
-    /// copied.
+    /// `<name> copy 2`, …, in the original's folder and right after it, with its pins. History
+    /// is not copied.
     pub fn duplicate_request(&mut self, id: RequestId) -> Result<RequestMeta> {
         let src = self.request(id)?;
         let path = self.request_path(id)?;
@@ -369,7 +408,11 @@ impl Project {
             &src.folder,
             &name,
             src.operation.as_ref(),
-            src.last_server,
+            NewRequest {
+                last_server: src.last_server,
+                pinned_server: src.pinned_server,
+                pinned_parameter_set: src.pinned_parameter_set,
+            },
             &bytes,
             Some(id),
         )
@@ -633,63 +676,6 @@ impl Project {
             return Err(e.into());
         }
         Ok(())
-    }
-
-    /// Remembers the server chosen for the request; also becomes the project's most recently
-    /// used server, which new requests start with.
-    pub fn set_request_last_server(
-        &mut self,
-        id: RequestId,
-        server: Option<ServerId>,
-    ) -> Result<()> {
-        let n = self.conn.execute(
-            "UPDATE request SET last_server_id = ?1 WHERE id = ?2",
-            params![server.map(|s| s.to_string()), id.to_string()],
-        )?;
-        if n == 0 {
-            return Err(ProjectError::UnknownRequest(id));
-        }
-        if let Some(s) = server {
-            self.set_ui_state(LAST_SERVER_KEY, Some(&s.to_string()))?;
-        }
-        Ok(())
-    }
-
-    /// The most recently used server, if it still exists.
-    pub fn last_used_server(&self) -> Result<Option<ServerId>> {
-        let Some(s) = self.ui_state(LAST_SERVER_KEY)? else {
-            return Ok(None);
-        };
-        let Ok(u) = uuid::Uuid::parse_str(&s) else {
-            return Ok(None);
-        };
-        let id = ServerId(u);
-        Ok(self.server_exists(id)?.then_some(id))
-    }
-
-    /// The server a request is sent to when nobody chooses one: its last server, else the
-    /// project's most recently used one; servers deleted since are skipped. With no request,
-    /// the most recently used one. `None` leaves the choice to the front end: the app selects
-    /// its first server, the CLI asks for `--server` when there are several.
-    pub fn default_server(&self, request: Option<&RequestMeta>) -> Result<Option<ServerId>> {
-        if let Some(id) = request.and_then(|r| r.last_server)
-            && self.server_exists(id)?
-        {
-            return Ok(Some(id));
-        }
-        self.last_used_server()
-    }
-
-    fn server_exists(&self, id: ServerId) -> Result<bool> {
-        let exists: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT 1 FROM server WHERE id = ?1",
-                params![id.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Ok(exists.is_some())
     }
 
     /// Sets the sidebar order. Requests not listed keep their relative order after the

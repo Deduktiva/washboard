@@ -47,7 +47,7 @@ left alone.
   With "Format on save" on (off by default), Save All first formats the open request, as the
   same undo step as ⌃I. Autosave never formats (it would rewrite the text under the cursor),
   and neither does Send: a request is sent as written.
-- Metadata changes (servers, renames, last server) go straight to SQLite.
+- Metadata changes (servers, parameters, renames, pins) go straight to SQLite.
 
 ## Edited outside the app
 Request files are watched (`notify`, FSEvents on macOS), recursively under `requests/`. A

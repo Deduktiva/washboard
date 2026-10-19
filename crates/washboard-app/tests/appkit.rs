@@ -37,6 +37,7 @@ fn main() {
         ("replace_wsdl", checks::replace_wsdl),
         ("new_project_sheet", checks::new_project_sheet),
         ("settings_window", checks::settings_window),
+        ("parameters", checks::parameters),
         ("wrapped_table", checks::wrapped_table),
     ];
     for (name, check) in checks {
@@ -69,10 +70,11 @@ mod checks {
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
         NSApplication, NSApplicationDidFinishLaunchingNotification, NSBackingStoreType, NSButton,
         NSColor, NSColorSpace, NSControl, NSControlStateValueOn, NSEvent, NSEventModifierFlags,
-        NSEventType, NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSResponder, NSScrollView,
-        NSSplitViewItemBehavior, NSStackView, NSTableCellView, NSTextField, NSTextInputClient,
-        NSTextView, NSToolbarDisplayMode, NSUserInterfaceItemIdentification, NSView, NSWindow,
-        NSWindowOrderingMode, NSWindowStyleMask, NSWindowTabbingMode, NSWritingToolsBehavior,
+        NSEventType, NSForegroundColorAttributeName, NSMenu, NSMenuItem, NSPopUpButton,
+        NSResponder, NSScrollView, NSSplitViewItemBehavior, NSStackView, NSTableCellView,
+        NSTextField, NSTextInputClient, NSTextView, NSToolbarDisplayMode,
+        NSUserInterfaceItemIdentification, NSView, NSWindow, NSWindowOrderingMode,
+        NSWindowStyleMask, NSWindowTabbingMode, NSWritingToolsBehavior,
     };
     use objc2_foundation::{
         NSArray, NSDate, NSIndexSet, NSInteger, NSNotification, NSNotificationCenter,
@@ -85,8 +87,8 @@ mod checks {
         ProjectWindowController, SidebarNode, TextTable,
     };
     use washboard_app::{
-        GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, Pane, ROW_INSET, ServersPane,
-        SettingsWindowController, TEXT_ID,
+        EMPTY_PLACEHOLDER, GROUP_ID, HEADER_ID, MAX_WIDTH, PAGE_MARGIN, Pane, ROW_INSET,
+        ServersPane, SettingsWindowController, TEXT_ID, UNSET_PLACEHOLDER,
     };
     use washboard_core::model::{Auth, Server, ServerId};
     use washboard_core::project::{AppState, OpenProject, Project, WsdlFile, WsdlSet};
@@ -868,7 +870,7 @@ mod checks {
     }
 
     /// New, rename, duplicate and delete through the window's actions change the rows and the
-    /// folder; the server popup follows the selected request.
+    /// folder; the server popup shows the selected request's pin, else the project's server.
     pub fn sidebar_commands(ctx: &Ctx) {
         let project = ctx.open();
         wait_loaded(&project);
@@ -895,13 +897,15 @@ mod checks {
 
         let popup = project.server_popup();
         assert!(popup.isEnabled());
-        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
-        assert_eq!(titles, ["Staging", "Production"]);
+        assert_eq!(choices(popup), ["Staging", "Production"]);
+        let pin = project.server_pin_button();
+        assert!(!pin.isEnabled(), "no request to pin to");
+        assert!(!pinned_shown(pin));
         // A long server name widens the picker only so far; the title truncates.
         popup.addItemWithTitle(&NSString::from_str(
             "Production cluster behind the second load balancer in Frankfurt",
         ));
-        popup.selectItemAtIndex(2);
+        popup.selectItemAtIndex(popup.numberOfItems() - 1);
         window
             .contentView()
             .expect("content")
@@ -912,9 +916,8 @@ mod checks {
             popup.frame()
         );
         project.reload_servers();
-        let titles: Vec<String> = popup.itemTitles().iter().map(|t| t.to_string()).collect();
         assert_eq!(
-            titles,
+            choices(popup),
             ["Staging", "Production"],
             "reload restores the list"
         );
@@ -1017,10 +1020,17 @@ mod checks {
         assert_eq!(request_names(&project), ["Lookup/", "  Find customer"]);
         assert_eq!(ctx.alerts().len(), 1, "a refused name is an alert");
 
-        // The popup remembers the server per request.
+        // A pinned request keeps its server; a duplicate copies the pin.
         popup.selectItemAtIndex(1);
         send("chooseServer:");
         assert_eq!(popup.indexOfSelectedItem(), 1);
+        assert!(
+            pin.isEnabled() && !pinned_shown(pin),
+            "the project's server"
+        );
+        click(pin);
+        assert_eq!(popup.indexOfSelectedItem(), 1, "pinned to what it showed");
+        assert!(pinned_shown(pin), "the pin shows it");
         send("duplicateRequest:");
         assert_eq!(
             request_names(&project),
@@ -1035,6 +1045,8 @@ mod checks {
             Some(outline.selectedRow()),
             "the copy is selected"
         );
+        assert!(pinned_shown(pin), "the copy is pinned too");
+        // Pinned, choosing a server changes the pin.
         popup.selectItemAtIndex(0);
         send("chooseServer:");
         let original = request_row(&project, "Find customer");
@@ -1047,7 +1059,7 @@ mod checks {
             Some(original),
             "selecting a row selects its request"
         );
-        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's server");
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the original's pin");
 
         send("deleteRequest:");
         let (id, confirm) = ctx
@@ -1065,7 +1077,11 @@ mod checks {
             Some(outline.selectedRow()),
             "the next one is selected"
         );
-        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's server");
+        assert_eq!(popup.indexOfSelectedItem(), 0, "the copy's pin");
+        // Unpinning returns the copy to the project's server.
+        click(pin);
+        assert_eq!(popup.indexOfSelectedItem(), 1, "the project's server");
+        assert!(!pinned_shown(pin));
         assert!(ctx.alerts().is_empty());
 
         // The context menu acts on the clicked row. A folder's New Request… creates in that
@@ -2359,6 +2375,18 @@ mod checks {
             project.older_text()
         );
         assert!(project.editor().view().isHidden(), "the editor gives way");
+        // A parameter change while it is shown keeps the selection items hidden.
+        let set = ctx
+            .delegate
+            .command("add a set", |app| app.add_parameter_set(key))
+            .expect("added");
+        assert!(
+            !project.shows_parameter_sets(),
+            "the set popup stays hidden over an older exchange"
+        );
+        ctx.delegate
+            .command("delete the set", |app| app.delete_parameter_set(key, set))
+            .expect("deleted");
         assert!(!project.sent_request().view().isHidden());
         assert_eq!(
             project.sent_request().text_view().string().to_string(),
@@ -2685,6 +2713,30 @@ mod checks {
             (mid(content) - mid(outer)).abs() < 2.0,
             "{what} centred vertically: {content:?} in {outer:?}"
         );
+    }
+
+    /// A toolbar popup's servers or sets, without a "No Servers" placeholder.
+    fn choices(popup: &NSPopUpButton) -> Vec<String> {
+        popup
+            .itemArray()
+            .iter()
+            .filter(|i| i.tag() >= 0 && !i.isSeparatorItem())
+            .map(|i| i.title().to_string())
+            .collect()
+    }
+
+    /// Clicks a toolbar pin button.
+    fn click(button: &NSButton) {
+        assert!(button.isEnabled(), "the pin can be clicked");
+        // SAFETY: `performClick:` takes any sender.
+        unsafe { button.performClick(None) };
+    }
+
+    /// Whether a toolbar pin button shows its popup as pinned.
+    fn pinned_shown(button: &NSButton) -> bool {
+        button
+            .toolTip()
+            .is_some_and(|t| t.to_string().starts_with("Pinned"))
     }
 
     /// The shown Settings pane keeps `form.rs`'s rules: groups inside the page margins, centred
@@ -3223,9 +3275,36 @@ mod checks {
         assert_form_layout(settings, "the app's General");
         assert_eq!(
             settings.sidebar_titles(),
-            ["Washboard", "General", "Customer API", "General", "Servers"],
+            [
+                "Washboard",
+                "General",
+                "Customer API",
+                "General",
+                "Servers",
+                "Parameters"
+            ],
             "the app's section, then one per open project"
         );
+
+        // A saved frame below the minimum size, as a layout bug once left one, is not restored
+        // as it is. `setFrame` bypasses the minimum; the autosave stores the frame.
+        let kept = settings_window.frame();
+        let mut squeezed = kept;
+        squeezed.size.width = 400.0;
+        settings_window.setFrame_display(squeezed, false);
+        settings_window.saveFrameUsingName(ns_string!("Settings"));
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let fresh = SettingsWindowController::new(mtm);
+        let min = fresh.window().contentMinSize();
+        let size = fresh
+            .window()
+            .contentRectForFrameRect(fresh.window().frame())
+            .size;
+        assert!(size.width >= min.width, "{size:?}, at least {min:?}");
+        fresh.window().close();
+        drop(fresh);
+        settings_window.setFrame_display(kept, false);
+        settings_window.saveFrameUsingName(ns_string!("Settings"));
 
         settings.show(Some(Pane::Servers(key)));
         assert_eq!(settings.selected(), Some(Pane::Servers(key)));
@@ -3271,14 +3350,7 @@ mod checks {
                 );
             }
         }
-        let popup_titles = || -> Vec<String> {
-            project
-                .server_popup()
-                .itemTitles()
-                .iter()
-                .map(|t| t.to_string())
-                .collect()
-        };
+        let popup_titles = || choices(project.server_popup());
         assert_eq!(popup_titles(), names, "only servers can be sent to");
 
         // Edit… opens the server in a sheet; Save writes it.
@@ -3493,6 +3565,397 @@ mod checks {
         });
         assert_eq!(password(ctx, project.key()), None);
         assert_eq!(servers.servers()[1].auth, Auth::None);
+        autoreleasepool(|_| settings_window.performClose(None));
+        autoreleasepool(|_| window.performClose(None));
+    }
+
+    /// The Parameters pane edits the grid through the model: a parameter added through its
+    /// sheet, a set with a value, an empty value and an unset one drawn differently. The
+    /// toolbar's set popup appears with the first set, and a pinned set tints it.
+    pub fn parameters(ctx: &Ctx) {
+        let project = ctx.open();
+        wait_loaded(&project);
+        let key = project.key();
+        let window = project.project_window();
+        assert!(!project.shows_parameter_sets(), "no sets, no popup");
+
+        // Measured on another pane first: the window once narrowed as this pane first showed
+        // and stayed narrow, so a comparison between panes afterwards saw no change.
+        let settings = ctx.delegate.show_settings(Some(Pane::App));
+        let settings_window = settings.window().retain();
+        let display_pass = || {
+            let started = Instant::now();
+            wait_until("a display pass", || {
+                started.elapsed() > Duration::from_millis(300)
+            });
+        };
+        display_pass();
+        let wide = settings_window.frame().size.width;
+        settings.show(Some(Pane::Parameters(key)));
+        assert_eq!(
+            settings_window.title().to_string(),
+            "Customer API — Parameters"
+        );
+        let pane = settings.parameters(key);
+        assert_form_layout(settings, "Parameters, empty");
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        // The pane takes the window's width; the grid's own width once shrank the window.
+        let width = || {
+            settings_window.layoutIfNeeded();
+            settings_window.frame().size.width
+        };
+        // AppKit fits a window to its constraints in a display pass, not in `layoutIfNeeded`.
+        display_pass();
+        assert_eq!(
+            width(),
+            wide,
+            "the Parameters pane keeps the window's width"
+        );
+        // The grid takes the height left over, so the page fits the window and the text under
+        // the grid shows, also after the window gets wider and that text takes fewer lines.
+        let page_fits = |what: &str| {
+            let page = settings
+                .pane_view()
+                .and_then(|v| v.downcast::<NSScrollView>().ok())
+                .expect("the page scrolls");
+            let document = page.documentView().expect("the page").frame().size.height;
+            let visible = page.contentView().bounds().size.height;
+            assert!(
+                document <= visible + 0.5,
+                "{what}: the page is {document} pt tall, {visible} pt show"
+            );
+        };
+        page_fits("as shown");
+        let mut wider = settings_window.frame();
+        wider.size.width += 200.0;
+        settings_window.setFrame_display(wider, true);
+        display_pass();
+        assert_eq!(width(), wider.size.width, "the window can get wider");
+        page_fits("wider");
+        settings_window.setFrame_display(
+            NSRect::new(wider.origin, NSSize::new(wide, wider.size.height)),
+            true,
+        );
+        display_pass();
+
+        pane.begin_add_parameter();
+        wait_until("the name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        let alerts = ctx.alerts().len();
+        pane.name_field().setStringValue(ns_string!("1st"));
+        pane.save_name();
+        assert_eq!(
+            ctx.alerts().len(),
+            alerts + 1,
+            "an invalid name is an alert"
+        );
+        assert!(pane.is_editing_name(), "and the sheet stays open");
+        pane.name_field().setStringValue(ns_string!("customer_id"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+        // A parameter is renamed in place; an invalid name is an alert and changes nothing.
+        pane.cell_edited(0, 0, "1st");
+        assert_eq!(ctx.alerts().len(), 1, "the refused rename is an alert");
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+
+        // Add Set adds a column and opens the sheet to name it.
+        pane.add_set();
+        assert_eq!(pane.column_titles(), ["Parameter", "New Set"]);
+        wait_until("the set's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        pane.name_field().setStringValue(ns_string!("Alice"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice"]);
+        pane.cell_edited(0, 1, "4711");
+        assert_eq!(
+            pane.rows(),
+            [[Some("customer_id".to_owned()), Some("4711".to_owned())]]
+        );
+        assert_eq!(width(), wide, "a set column does not widen the window");
+        assert!(
+            project.shows_parameter_sets(),
+            "the first set shows the popup"
+        );
+        assert_form_layout(settings, "Parameters, one set");
+
+        let placeholder = |row: NSInteger, column: NSInteger| -> Option<String> {
+            pane.table().layoutSubtreeIfNeeded();
+            let cell = pane
+                .table()
+                .viewAtColumn_row_makeIfNecessary(column, row, true)?;
+            let field = cell
+                .subviews()
+                .iter()
+                .find_map(|v| v.downcast::<NSTextField>().ok())?;
+            field.placeholderString().map(|p| p.to_string())
+        };
+        // Clearing a cell unsets it; Set Empty Value stores "".
+        pane.cell_edited(0, 1, "");
+        assert_eq!(pane.rows()[0][1], None);
+        assert_eq!(placeholder(0, 1).as_deref(), Some(UNSET_PLACEHOLDER));
+        let menu = pane.menu_items(0, 1);
+        assert!(
+            menu.contains(&("Rename Parameter “customer_id”".to_owned(), true)),
+            "{menu:?}"
+        );
+        assert!(
+            menu.contains(&("Set Empty Value".to_owned(), true)),
+            "{menu:?}"
+        );
+        assert!(
+            menu.contains(&("Unset Value".to_owned(), false)),
+            "{menu:?}"
+        );
+        ctx.delegate
+            .command("empty", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[0].id;
+                app.set_parameter_value(key, set, "customer_id", Some(""))
+            })
+            .expect("empty value");
+        assert_eq!(pane.rows()[0][1].as_deref(), Some(""));
+        assert_eq!(placeholder(0, 1).as_deref(), Some(EMPTY_PLACEHOLDER));
+        let header_menu = pane.menu_items(-1, 1);
+        assert_eq!(
+            header_menu,
+            [
+                ("Rename Set “Alice”…".to_owned(), true),
+                ("Duplicate Set “Alice”".to_owned(), true),
+                ("Delete Set “Alice”…".to_owned(), true)
+            ]
+        );
+
+        // The toolbar's set popup: the project's set, then pinned to the request.
+        let popup = project.parameter_set_popup();
+        assert_eq!(choices(popup), ["Alice"]);
+        // The pin's glyph is centred on its popup's title, measured on the drawn pixels: frames
+        // and cell rects include padding that the eye does not see. "Alice" has no descenders,
+        // so the title's ink runs from the capitals' top to the baseline.
+        window.layoutIfNeeded();
+        let pin = project.parameter_set_pin_button();
+        let item = window
+            .toolbar()
+            .expect("toolbar")
+            .items()
+            .iter()
+            .find(|i| i.label().to_string() == "Parameter Set")
+            .and_then(|i| i.view())
+            .expect("the set item's view");
+        let bounds = item.bounds();
+        let rep = item
+            .bitmapImageRepForCachingDisplayInRect(bounds)
+            .expect("a bitmap");
+        item.cacheDisplayInRect_toBitmapImageRep(bounds, &rep);
+        let scale = rep.pixelsWide() as f64 / bounds.size.width;
+        // The middle of the dark pixels between `x`, in points from the item's top.
+        let ink_middle = |x: std::ops::Range<f64>| {
+            let rows: Vec<NSInteger> = (0..rep.pixelsHigh())
+                .filter(|&py| {
+                    ((x.start * scale) as NSInteger..(x.end * scale) as NSInteger).any(|px| {
+                        rep.colorAtX_y(px, py)
+                            .is_some_and(|c| c.alphaComponent() > 0.1 && c.redComponent() < 0.7)
+                    })
+                })
+                .collect();
+            let (Some(top), Some(bottom)) = (rows.first(), rows.last()) else {
+                panic!("nothing drawn in {x:?}");
+            };
+            (*top + *bottom + 1) as f64 / 2.0 / scale
+        };
+        let pin_frame = pin.frame();
+        let glyph = ink_middle(pin_frame.origin.x..pin_frame.origin.x + pin_frame.size.width);
+        let Some(popup_cell) = popup.cell() else {
+            panic!("popups have cells");
+        };
+        let title_rect =
+            popup.convertRect_toView(popup_cell.titleRectForBounds(popup.bounds()), Some(&item));
+        let title = ink_middle(title_rect.origin.x..title_rect.origin.x + title_rect.size.width);
+        print!("(pin {glyph:.1}, title {title:.1}) ");
+        assert!((glyph - title).abs() <= 1.0, "pin {glyph}, title {title}");
+        // The glass background follows the item's bounds, so the pin's glyph stands as far in
+        // from the left as the popup's arrow from the right.
+        let inked: Vec<NSInteger> = (0..rep.pixelsWide())
+            .filter(|&px| {
+                (0..rep.pixelsHigh()).any(|py| {
+                    rep.colorAtX_y(px, py)
+                        .is_some_and(|c| c.alphaComponent() > 0.1 && c.redComponent() < 0.7)
+                })
+            })
+            .collect();
+        let (Some(first), Some(last)) = (inked.first(), inked.last()) else {
+            panic!("nothing drawn in the set item");
+        };
+        let left = *first as f64 / scale;
+        let right = bounds.size.width - (*last + 1) as f64 / scale;
+        print!("(left {left:.1}, right {right:.1}) ");
+        assert!(
+            (left - right).abs() <= 1.0,
+            "pin {left} in, arrow {right} in"
+        );
+        // A space after each popup gives the items a glass background each.
+        let toolbar_ids = |project: &ProjectWindowController| -> Vec<String> {
+            let toolbar = project.project_window().toolbar().expect("toolbar");
+            toolbar
+                .items()
+                .iter()
+                .filter(|i| !i.isHidden())
+                .map(|i| i.itemIdentifier().to_string())
+                .collect()
+        };
+        let shown = toolbar_ids(&project);
+        let spaces = shown.iter().filter(|id| id.contains("Space")).count();
+        assert_eq!(spaces, 2, "{shown:?}");
+        assert_eq!(
+            popup.selectedTag(),
+            0,
+            "with none chosen, the first set is used"
+        );
+        let action = |name: &std::ffi::CStr| {
+            // SAFETY: the window controller's actions take the sender.
+            let sent = unsafe {
+                ctx.app
+                    .sendAction_to_from(Sel::register(name), Some(&project), None)
+            };
+            assert!(sent, "{name:?} reached the window controller");
+        };
+        popup.selectItemWithTag(0);
+        action(c"chooseParameterSet:");
+        assert_eq!(popup.selectedTag(), 0);
+        assert_eq!(
+            popup
+                .titleOfSelectedItem()
+                .map(|t| t.to_string())
+                .as_deref(),
+            Some("Alice"),
+            "the popup shows the chosen set's name"
+        );
+        assert_eq!(popup.numberOfItems(), 1, "only the sets, no \"none\" item");
+        if project.selected_request().is_some() {
+            let pin = project.parameter_set_pin_button();
+            click(pin);
+            assert!(pinned_shown(pin), "the set is pinned");
+            click(pin);
+            assert!(!pinned_shown(pin));
+        }
+
+        // A value still being typed is stored before an action changes the grid.
+        settings_window.makeKeyAndOrderFront(None);
+        let field = pane
+            .table()
+            .viewAtColumn_row_makeIfNecessary(1, 0, true)
+            .and_then(|v| v.downcast::<NSTableCellView>().ok())
+            // SAFETY: the pane's cells keep their text field alive for the row's lifetime.
+            .and_then(|c| unsafe { c.textField() })
+            .expect("the value cell's text field");
+        assert!(settings_window.makeFirstResponder(Some(&field)));
+        let editor = field.currentEditor().expect("a cell is being edited");
+        editor.setString(ns_string!("42"));
+        pane.move_parameter(0, 1);
+        assert_eq!(
+            pane.rows()[0][1].as_deref(),
+            Some("42"),
+            "the edit was stored"
+        );
+        ctx.delegate
+            .command("empty again", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[0].id;
+                app.set_parameter_value(key, set, "customer_id", Some(""))
+            })
+            .expect("empty value");
+        // Move Up and Move Down reorder the rows.
+        ctx.delegate
+            .command("another parameter", |app| app.add_parameter(key, "b"))
+            .expect("added");
+        pane.move_parameter(1, -1);
+        let names: Vec<_> = pane.rows().into_iter().map(|r| r[0].clone()).collect();
+        assert_eq!(
+            names,
+            [Some("b".to_owned()), Some("customer_id".to_owned())]
+        );
+        let menu = pane.menu_items(0, 0);
+        assert!(menu.contains(&("Move Up".to_owned(), false)), "{menu:?}");
+        assert!(menu.contains(&("Move Down".to_owned(), true)), "{menu:?}");
+        ctx.delegate
+            .command("delete b", |app| app.delete_parameter(key, "b"))
+            .expect("deleted");
+
+        // The window, not the rows, decides the grid's height.
+        let grid = pane
+            .table()
+            .enclosingScrollView()
+            .expect("the grid scrolls");
+        let grid_height = || {
+            settings_window.layoutIfNeeded();
+            grid.frame().size.height
+        };
+        // Shorter rather than taller: the CI runner's screen is no bigger than the window.
+        let before = grid_height();
+        let mut frame = settings_window.frame();
+        frame.size.height -= 60.0;
+        frame.origin.y += 60.0;
+        settings_window.setFrame_display(frame, false);
+        let after = grid_height();
+        assert!(after >= 119.5, "at least its minimum: {after}");
+        assert!(
+            (before - after - 60.0).abs() < 1.0,
+            "the window's height goes to the grid: {before} → {after}"
+        );
+        frame.size.height += 60.0;
+        frame.origin.y -= 60.0;
+        settings_window.setFrame_display(frame, false);
+
+        // Duplicate Set copies the values beside the original and opens the sheet to name it.
+        pane.duplicate_set(0);
+        wait_until("the copy's name sheet", || {
+            settings_window.attachedSheet().is_some()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Alice copy"]);
+        pane.name_field().setStringValue(ns_string!("Bob"));
+        pane.save_name();
+        wait_until("the sheet to close", || {
+            settings_window.attachedSheet().is_none()
+        });
+        assert_eq!(pane.column_titles(), ["Parameter", "Alice", "Bob"]);
+        assert_eq!(pane.rows()[0][2].as_deref(), Some(""));
+        ctx.delegate
+            .command("delete copy", |app| {
+                let set = app.project(key).expect("open").parameter_sets()[1].id;
+                app.delete_parameter_set(key, set)
+            })
+            .expect("deleted");
+
+        // Deleting the set asks first, as it has a value; the popup goes with the last set.
+        pane.delete_set(0);
+        let (id, confirm) = ctx
+            .dialogs
+            .borrow_mut()
+            .confirms
+            .pop()
+            .expect("delete asks first");
+        assert!(confirm.title.contains("Alice"), "{confirm:?}");
+        ctx.delegate.dialog_answered(id, DialogAnswer::Confirmed);
+        assert_eq!(pane.column_titles(), ["Parameter"]);
+        assert_eq!(pane.rows(), [[Some("customer_id".to_owned())]]);
+        assert!(!project.shows_parameter_sets());
+        let shown = toolbar_ids(&project);
+        let spaces = shown.iter().filter(|id| id.contains("Space")).count();
+        assert_eq!(
+            spaces, 1,
+            "one space between the server and Send: {shown:?}"
+        );
+        ctx.delegate
+            .command("delete", |app| app.delete_parameter(key, "customer_id"))
+            .expect("deleted");
+        assert!(pane.rows().is_empty());
+        ctx.dialogs.borrow_mut().alerts.truncate(alerts);
         autoreleasepool(|_| settings_window.performClose(None));
         autoreleasepool(|_| window.performClose(None));
     }

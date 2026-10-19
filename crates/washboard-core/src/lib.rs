@@ -8,6 +8,7 @@
 
 pub mod diag;
 pub mod http;
+pub mod interpolate;
 pub mod model;
 pub mod project;
 pub mod schema;
