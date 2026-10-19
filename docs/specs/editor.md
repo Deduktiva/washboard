@@ -22,7 +22,9 @@
   after a schema check of the current text, the warning count, "Well-formed · schema not
   checked" when the WSDL or its schemas failed to load, or the error count. Errors stay shown
   while typing until the next check, so it does not flicker. Clicking it shows or hides the
-  issues list under the editor. While an older exchange is shown it gives way to "Sent … ·
+  issues list under the editor; a chevron after the text says which (right: hidden, down:
+  shown, as on the History drawer), and the pill is tinted while the mouse is over it, so it
+  reads as clickable without a pointing-hand cursor, which macOS keeps for links. While an older exchange is shown it gives way to "Sent … ·
   read-only". The state is the model's (`Validity`). No overview stripe beside the scroller:
   the ruler marks the lines.
 
