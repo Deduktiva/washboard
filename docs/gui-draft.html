@@ -121,6 +121,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
 .issues a code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); margin-right: 6px; }
 /* The validity widget: a pill at the request bar's right end, click shows or hides the issues list. */
 .vwidget { font: 600 12px var(--ui); padding: 1px 9px; border: 1px solid var(--line); border-radius: 10px; background: none; cursor: default; }
+.vwidget:hover { background: var(--chrome); }
 
 .resp { display: grid; grid-template-rows: 30px auto minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
 .resphead { display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; }
@@ -494,7 +495,7 @@ header p { margin: 0; color: var(--muted); max-width: 70ch; }
     st.textContent = ro ? `Sent ${HIST[shown].day} ${HIST[shown].t} · read-only` : "";
     const w = $("vWidget"), n = r.errors.length;
     w.hidden = ro;
-    w.textContent = n ? `⚠ ${n} error${n > 1 ? "s" : ""}` : "✓ Valid";
+    w.textContent = (n ? `⚠ ${n} error${n > 1 ? "s" : ""}` : "✓ Valid") + (issuesHidden || n === 0 ? " ›" : " ⌄");
     w.style.color = n ? "var(--err)" : "var(--ok)";
     showIssues(r.errors);
     $("issues").hidden = ro || n === 0 || issuesHidden;
