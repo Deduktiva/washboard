@@ -12,7 +12,7 @@
 //! on `TokensChanged`. An unbound editor (the response body) keeps its own `TokenBuffer`.
 //!
 //! A bound editor also completes and explains from the model's schema: `complete:` (⌥⎋, or
-//! typing `<`, a space in a tag or `="`) asks `App::completions` for the range and the
+//! typing `<`, `</`, a space in a tag or `="`) asks `App::completions` for the range and the
 //! items, and resting the mouse on an element name shows `App::hover` as a tool tip. On an
 //! underlined error the tool tip starts with the error's message.
 
@@ -811,8 +811,8 @@ impl EditorController {
         }
     }
 
-    /// Opens the completion list after `<`, a space in a tag or `="` was typed at `at`, if the
-    /// model has completions of the matching kind there. Not on undo or redo.
+    /// Opens the completion list after `<`, `</`, a space in a tag or `="` was typed at `at`, if
+    /// the model has completions of the matching kind there. Not on undo or redo.
     fn complete_after_typing(&self, at: usize, typed: &str) {
         let text_view = self.text_view();
         if text_view
