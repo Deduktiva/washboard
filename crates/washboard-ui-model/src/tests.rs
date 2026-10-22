@@ -2298,6 +2298,36 @@ fn a_fresh_end_tag_offers_the_open_element() {
     assert_eq!(texts(&c), ["cus:status"]);
 }
 
+#[test]
+fn an_end_tag_is_offered_without_a_schema() {
+    let setup = Setup::new();
+    let folder = make_project(&setup.tmp, "Legacy");
+    {
+        let (fake, mut app) = setup.launch();
+        let key = app.open_project(&folder).expect("open");
+        fake.pump_until(&mut app, |app| loaded(app, key));
+        new_lookup(&mut app, key);
+        assert!(app.quit().expect("quit"));
+    }
+    fs::remove_file(folder.join("wsdl/Legacy.wsdl")).expect("remove");
+
+    let (fake, mut app) = setup.launch();
+    let key = app.projects().next().expect("open").0;
+    fake.pump_until(&mut app, |app| loaded(app, key));
+    let text = "<p:a xmlns:p=\"urn:x\"><p:b>x</p:b><";
+    set_text(&mut app, key, text);
+    assert_eq!(
+        app.completions(key, text.len()),
+        None,
+        "children need a schema"
+    );
+    let text = format!("{text}/");
+    set_text(&mut app, key, &text);
+    let c = app.completions(key, text.len()).expect("end tag");
+    assert_eq!(texts(&c), ["p:a"]);
+    assert_eq!(c.replace, text.len()..text.len());
+}
+
 // ---------------------------------------------------------------- Format XML
 
 fn formatted(app: &App, key: ProjectKey, selection: std::ops::Range<usize>) -> Option<Reformat> {

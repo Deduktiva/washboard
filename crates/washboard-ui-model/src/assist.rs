@@ -54,17 +54,36 @@ pub struct Hover {
 impl App {
     /// Completions at UTF-16 offset `at` in the project's editor. `None` where there is
     /// nothing to offer (no schema yet, outside a header or body block, in a comment, …).
+    /// An end tag needs no schema: it offers the element it closes, as written in its start
+    /// tag, so the prefix matches whatever the request binds.
     pub fn completions(&self, key: ProjectKey, at: usize) -> Option<Completions> {
-        let (text, model) = self.assist_input(key)?;
+        let text = self.project(key)?.editor()?.text();
         let byte = utf16_to_byte(text, at);
         let ctx = cursor_context(text, byte);
         let span = |r: Range<usize>| Utf16Cursor::new(text).utf16_range(r);
+        if let CursorLocation::ElementName {
+            closing: true,
+            name,
+        } = &ctx.location
+        {
+            // In a tag, the path ends with the element the tag belongs to: for an end tag,
+            // the one it closes.
+            let open = ctx.tag_element()?;
+            let item = CompletionItem {
+                text: open.raw_name.clone(),
+                kind: CompletionKind::Element,
+                detail: None,
+                documentation: None,
+            };
+            return Some(Completions {
+                replace: span(name.clone()),
+                items: vec![item],
+            });
+        }
+        let (_, model) = self.assist_input(key)?;
         let scope = ctx.path.last().map(|e| &e.namespaces)?;
         let (replace, items) = match &ctx.location {
-            CursorLocation::ElementName {
-                closing: false,
-                name,
-            } => {
+            CursorLocation::ElementName { name, .. } => {
                 let path = block_path(ctx.parent_path())?;
                 let items = model
                     .child_elements(&path)
@@ -83,21 +102,6 @@ impl App {
                     })
                     .collect();
                 (span(name.clone()), items)
-            }
-            CursorLocation::ElementName {
-                closing: true,
-                name,
-            } => {
-                // In a tag, the path ends with the element the tag belongs to: for an end tag,
-                // the one it closes.
-                let open = ctx.path.last()?;
-                let item = CompletionItem {
-                    text: open.raw_name.clone(),
-                    kind: CompletionKind::Element,
-                    detail: None,
-                    documentation: None,
-                };
-                (span(name.clone()), vec![item])
             }
             CursorLocation::AttributeName { name } => {
                 let path = block_path(&ctx.path)?;
