@@ -29,7 +29,8 @@
 ## Completion and hover
 - **Completion**: native `NSTextView` completion (`textView:completions:forPartialWordRange:…`)
   fed by the Rust schema model: element names allowed at the cursor path, attribute names,
-  enumeration values. Triggered on `<`, space inside a tag, `="`, and ⌥⎋. What the model offers
+  enumeration values; in an end tag, the element it closes, as written in its start tag (no
+  schema needed). Triggered on `<`, `</`, space inside a tag, `="`, and ⌥⎋. What the model offers
   for `xsi:type`, abstract declarations and `xs:any`: [schema model](schema-model.md).
 - **Hover** on an element name: type name, cardinality, `xs:documentation` (tooltip).
 

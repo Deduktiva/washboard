@@ -145,11 +145,12 @@ pub(crate) fn count(n: usize, noun: &str) -> String {
 }
 
 /// Which completions typing `inserted` after `before` (the character in front of it) opens
-/// the list for: elements after `<`, attributes after a space, values after `="`. The
-/// model decides whether there are any; a space outside a tag offers no attributes.
+/// the list for: elements after `<`, the element to close after `</`, attributes after a
+/// space, values after `="`. The model decides whether there are any; a space outside a tag
+/// offers no attributes.
 pub(crate) fn completion_kinds(before: Option<char>, inserted: &str) -> &'static [CompletionKind] {
     match (before, inserted) {
-        (_, "<") => &[CompletionKind::Element],
+        (_, "<") | (Some('<'), "/") => &[CompletionKind::Element],
         (_, " ") => &[CompletionKind::Attribute],
         (Some('='), "\"") => &[CompletionKind::Value, CompletionKind::Type],
         _ => &[],
@@ -274,8 +275,10 @@ mod tests {
     }
 
     #[test]
-    fn completion_opens_after_lt_space_and_eq_quote() {
+    fn completion_opens_after_lt_lt_slash_space_and_eq_quote() {
         assert_eq!(completion_kinds(Some('>'), "<"), [CompletionKind::Element]);
+        assert_eq!(completion_kinds(Some('<'), "/"), [CompletionKind::Element]);
+        assert!(completion_kinds(Some('a'), "/").is_empty());
         assert_eq!(
             completion_kinds(Some('a'), " "),
             [CompletionKind::Attribute]
