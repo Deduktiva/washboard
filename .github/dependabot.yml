@@ -1,0 +1,21 @@
+# Version updates for the Cargo workspace and the CI actions. The libxml2 submodule is updated by
+# hand: Dependabot follows branch heads only, and libxml2 should move only to release tags.
+# Tool versions pinned as `with:` inputs in ci.yml (cargo-deny, cargo-packager) and the toolchain
+# in rust-toolchain.toml are not covered either.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
