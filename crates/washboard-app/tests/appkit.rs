@@ -3535,6 +3535,23 @@ mod checks {
             "Customer API — General"
         );
         assert_form_layout(settings, "the project's General");
+        // Its history limit is the project's, stored in its database.
+        assert_eq!(settings.history_limit_shown(), Some(20));
+        settings
+            .history_limit_popup()
+            .expect("the popup")
+            .selectItemAtIndex(1);
+        // SAFETY: `historyLimitChanged:` takes the sender.
+        let _: () = unsafe { msg_send![settings, historyLimitChanged: None::<&AnyObject>] };
+        let stored = ctx
+            .delegate
+            .read(|app| app.project(key).map(|w| w.project().history_limit().ok()))
+            .flatten()
+            .flatten();
+        assert_eq!(stored, Some(10));
+        ctx.delegate
+            .command("limit", |app| app.set_history_limit(key, 20))
+            .expect("back to 20");
         settings.select(Pane::Servers(key));
         // SAFETY: `showSettings:` takes the sender.
         let _: () = unsafe { msg_send![&*ctx.delegate, showSettings: None::<&AnyObject>] };

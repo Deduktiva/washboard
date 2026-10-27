@@ -486,7 +486,7 @@ pub struct ResponseIvars {
     disclosure: Retained<NSImageView>,
     /// "3 earlier exchanges".
     earlier: Retained<NSTextField>,
-    /// One dot per stored exchange, oldest left.
+    /// One dot per stored exchange, oldest left, for the newest [`MAX_DOTS`].
     dots: Retained<NSStackView>,
     drawer_split: Retained<DrawerSplit>,
     drawer: OnceCell<Retained<NSSplitViewController>>,
@@ -916,7 +916,7 @@ impl ResponsePane {
             dots.removeView(&dot);
         }
         let mtm = self.mtm();
-        for (i, (e, _)) in entries.iter().enumerate().rev() {
+        for (i, (e, _)) in entries.iter().enumerate().take(MAX_DOTS).rev() {
             let failed = e.error.is_some() || e.soap_fault;
             let dot = history_dot(failed, i == shown, mtm);
             dot.setToolTip(Some(&NSString::from_str(&date_text(&formatter, e.sent_at))));
@@ -943,6 +943,9 @@ const MIN_HISTORY_HEIGHT: f64 = 60.0;
 /// The History table's height until the user drags it: its header and about five rows.
 const DEFAULT_HISTORY_HEIGHT: f64 = 150.0;
 const DOT_SIZE: f64 = 7.0;
+/// Dots for the newest exchanges only: with a larger history limit, one per entry would not fit
+/// beside the title. The count and the table still cover every entry.
+const MAX_DOTS: usize = 20;
 
 /// One stored exchange in the drawer's header: green, red for a SOAP Fault or a transport
 /// failure, ringed in the accent colour while shown. An `NSBox` rather than a drawn view, so

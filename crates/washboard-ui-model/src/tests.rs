@@ -7,7 +7,9 @@ use std::time::Duration;
 use tempfile::TempDir;
 use washboard_core::diag::{DiagSource, Severity};
 use washboard_core::model::{Auth, ParameterSetId, RequestId, Server, ServerId};
-use washboard_core::project::{Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet};
+use washboard_core::project::{
+    DEFAULT_HISTORY_LIMIT, Project, REQUESTS_DIR, STATE_FILE, WsdlFile, WsdlSet,
+};
 use washboard_core::project::{ProjectError, ServerError};
 use washboard_core::wsdl::Protocol;
 use washboard_core::xml::TokenKind;
@@ -1855,6 +1857,44 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
         app.restore_request(key),
         Err(ModelError::NoOlderExchange)
     ));
+}
+
+#[test]
+fn the_history_limit_prunes_and_drops_a_gone_older_exchange() {
+    let setup = Setup::new();
+    let (_fake, mut app, key, first, _) = sent_twice(&setup);
+    assert_eq!(project(&app, key).history_limit(), DEFAULT_HISTORY_LIMIT);
+    let (newest, older) = {
+        let h = project(&app, key).history();
+        (h[0].id, h[1].id)
+    };
+    app.show_history(key, older).expect("show");
+    app.take_events();
+
+    app.set_history_limit(key, 0).expect("limit");
+    let events = app.take_events();
+    for e in [
+        Event::HistoryChanged { project: key },
+        Event::ShownExchangeChanged { project: key },
+        Event::ResponseChanged { project: key },
+    ] {
+        assert!(events.contains(&e), "{e:?} in {events:?}");
+    }
+    let window = project(&app, key);
+    assert_eq!(window.history_limit(), 1, "at least one");
+    assert_eq!(
+        window.history().iter().map(|e| e.id).collect::<Vec<_>>(),
+        [newest]
+    );
+    assert!(window.older_exchange().is_none(), "back to the latest");
+    assert!(window.response().expect("response").error.is_some());
+    let stored = window.project();
+    assert_eq!(stored.history_limit().expect("limit"), 1, "in the project");
+    assert_eq!(stored.history(first).expect("history").len(), 1);
+
+    // Unchanged: nothing to report.
+    app.set_history_limit(key, 1).expect("limit");
+    assert!(app.take_events().is_empty());
 }
 
 #[test]
