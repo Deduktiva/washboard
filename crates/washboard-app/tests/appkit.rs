@@ -2056,14 +2056,20 @@ mod checks {
             "the widget is in the bar, right of the chip: {at:?} in {bar_rect:?}"
         );
         // Clicking it hides the list and clicking again shows it.
+        // Its chevron says what a click does, and the mouse over it tints it.
         let list = project.issues().table().view();
         assert!(!list.isHidden());
+        assert_eq!(project.issues().chevron().as_deref(), Some("Hide Issues"));
+        assert_eq!(widget.trackingAreas().count(), 1, "hover is tracked");
+        assert!(!project.issues().hovered());
         // SAFETY: `performClick:` takes any sender.
         unsafe { project.issues().widget_button().performClick(None) };
         assert!(list.isHidden(), "the widget hides the list");
+        assert_eq!(project.issues().chevron().as_deref(), Some("Show Issues"));
         // SAFETY: as above.
         unsafe { project.issues().widget_button().performClick(None) };
         assert!(!list.isHidden(), "and shows it again");
+        assert_eq!(project.issues().chevron().as_deref(), Some("Hide Issues"));
 
         let replace = |at: usize, len: usize, with: &str| {
             // SAFETY: replacing a range inside the text, as typing over a selection does.
