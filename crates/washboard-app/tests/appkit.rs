@@ -2207,9 +2207,41 @@ mod checks {
             assert!(sent, "{name:?} reached the window controller");
         };
         let send_label = || project.send_item().map(|i| i.label().to_string());
+        let key = project.key();
+
+        // Without servers Send is disabled, in the toolbar too, rather than refused when used.
+        let send_item = project.send_item().expect("a Send item");
+        // SAFETY: `validateToolbarItem:` takes a toolbar item and returns `BOOL`.
+        let toolbar_send =
+            || -> bool { unsafe { msg_send![&*project, validateToolbarItem: &*send_item] } };
+        assert!(toolbar_send(), "a request and servers");
+        let servers = ctx
+            .delegate
+            .read(|app| Some(app.project(key)?.servers().to_vec()))
+            .flatten()
+            .expect("the project's servers");
+        for server in &servers {
+            ctx.delegate
+                .command("delete a server", |app| app.delete_server(key, server.id))
+                .expect("server deleted");
+        }
+        assert!(!toolbar_send(), "no servers");
+        assert!(!send_item.isEnabled(), "validated as the servers changed");
+        let send_menu = menu_item(ctx, "Send");
+        // SAFETY: `validateMenuItem:` takes a menu item and returns `BOOL`.
+        let enabled: bool = unsafe { msg_send![&*project, validateMenuItem: &*send_menu] };
+        assert!(!enabled, "the menu's Send too");
+        // Back as they were, in their order, for the later checks.
+        for server in &servers {
+            ctx.delegate
+                .command("add the server back", |app| {
+                    app.add_server(key, server, None)
+                })
+                .expect("server added");
+        }
+        assert!(send_item.isEnabled(), "enabled with servers again");
 
         // A server on this machine, with Basic auth so the log has an `Authorization` header.
-        let key = project.key();
         let (url, server) = serve_once("200 OK", LOOKUP_RESPONSE, Duration::ZERO);
         let id = ServerId::new();
         ctx.delegate

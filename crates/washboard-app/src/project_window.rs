@@ -22,9 +22,9 @@ use objc2_app_kit::{
     NSSplitViewController, NSSplitViewDividerStyle, NSSplitViewItem, NSStackView,
     NSStackViewGravity, NSTextField, NSTextView, NSTitlePosition,
     NSTitlebarAccessoryViewController, NSToolbar, NSToolbarDelegate, NSToolbarDisplayMode,
-    NSToolbarItem, NSToolbarSidebarTrackingSeparatorItemIdentifier, NSToolbarSpaceItemIdentifier,
-    NSView, NSViewController, NSWindow, NSWindowController, NSWindowDelegate, NSWindowStyleMask,
-    NSWindowTabbingMode, NSWindowToolbarStyle,
+    NSToolbarItem, NSToolbarItemValidation, NSToolbarSidebarTrackingSeparatorItemIdentifier,
+    NSToolbarSpaceItemIdentifier, NSView, NSViewController, NSWindow, NSWindowController,
+    NSWindowDelegate, NSWindowStyleMask, NSWindowTabbingMode, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
     NSArray, NSCopying, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -174,8 +174,18 @@ define_class!(
                 return false.into();
             }
             // The menu's Send only sends and Cancel Send only cancels; the toolbar item, which
-            // AppKit does not validate here, toggles.
+            // AppKit validates below, toggles.
             item.action().is_none_or(|action| self.validates(action))
+        }
+    }
+
+    // SAFETY: `NSToolbarItemValidation` has no safety requirements.
+    unsafe impl NSToolbarItemValidation for ProjectWindowController {
+        // SAFETY: the signature matches `validateToolbarItem:`.
+        #[unsafe(method(validateToolbarItem:))]
+        fn validate_toolbar_item(&self, item: &NSToolbarItem) -> bool {
+            // Send is Cancel while a send is in flight, and Cancel is always available.
+            item.action() != Some(sel!(sendRequest:)) || self.is_sending() || self.can_send()
         }
     }
 
@@ -509,6 +519,7 @@ impl ProjectWindowController {
         popup.setEnabled(!servers.is_empty());
         *self.ivars().server_ids.borrow_mut() = servers.into_iter().map(|(id, _)| id).collect();
         self.show_server_selection();
+        self.validate_toolbar();
     }
 
     /// Selects the model's server in the popup and shows whether it is pinned
@@ -758,7 +769,7 @@ impl ProjectWindowController {
             // These act on the selected request; with none they did nothing.
             self.selected_request().is_some()
         } else if action == sel!(sendRequest:) {
-            self.selected_request().is_some() && !self.is_sending()
+            self.can_send()
         } else if action == sel!(cancelSend:) {
             self.is_sending()
         } else if action == sel!(newRequest:) {
@@ -936,6 +947,13 @@ impl ProjectWindowController {
             .unwrap_or(false)
     }
 
+    /// Whether Send is offered; disabled rather than refused with an alert, for instance while
+    /// the project has no servers.
+    fn can_send(&self) -> bool {
+        self.read_project(self.key(), |w| w.can_send())
+            .unwrap_or(false)
+    }
+
     fn cancel_send(&self) {
         let key = self.key();
         self.apply(|app| app.cancel_send(key));
@@ -970,7 +988,17 @@ impl ProjectWindowController {
         if let Some(item) = self.send_item() {
             self.toolbar_send_item_configure(&item, sending);
         }
+        self.validate_toolbar();
         self.response().show_response();
+    }
+
+    /// Validates the toolbar's items now. AppKit does so when the window updates after
+    /// an event; a change the model reports from a worker, or from another window (a server
+    /// added in Settings), is shown without waiting for the next one.
+    fn validate_toolbar(&self) {
+        if let Some(toolbar) = self.project_window().toolbar() {
+            toolbar.validateVisibleItems();
+        }
     }
 
     /// The toolbar's Send (or Cancel) item.
