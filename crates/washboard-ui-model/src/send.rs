@@ -8,7 +8,7 @@ use washboard_core::http::{self, Exchange, RawMessage, SendRequest};
 use washboard_core::model::{
     Auth, HistoryEntry, HistoryId, ParameterSetId, RequestId, Server, ServerId,
 };
-use washboard_core::project::{HistoryRecord, RequestHead};
+use washboard_core::project::{DEFAULT_HISTORY_LIMIT, HistoryRecord, RequestHead};
 use washboard_core::soap::{SoapFault, detect_fault};
 use washboard_core::validate::validate_with_parameters;
 use washboard_core::xml;
@@ -17,6 +17,10 @@ use crate::app::{App, ModelError, ProjectKey};
 use crate::diagnostics::{Check, Issue};
 use crate::event::Event;
 use crate::window::ProjectWindow;
+
+/// The choices for how many history entries a project keeps per request (Settings ▸ the
+/// project ▸ General). Up to a hundred: every entry is two files on disk.
+pub const HISTORY_LIMITS: [u32; 5] = [5, 10, DEFAULT_HISTORY_LIMIT, 50, 100];
 
 /// An older exchange of the selected request, shown whole in place of the latest one
 /// (`docs/specs/response-pane.md`): its response in the response pane, its request as sent beside
@@ -400,6 +404,28 @@ impl App {
         Ok(text)
     }
 
+    /// Changes how many history entries project `key` keeps per request, stored in the project
+    /// (the CLI prunes to it too). What is beyond it is deleted right away; an older exchange
+    /// that goes with it is no longer shown. At least 1.
+    pub fn set_history_limit(&mut self, key: ProjectKey, limit: u32) -> Result<(), ModelError> {
+        let window = self.window(key)?;
+        let limit = limit.max(1);
+        if window.project.history_limit()? == limit {
+            return Ok(());
+        }
+        window.project.set_history_limit(limit)?;
+        window.reload_history();
+        let gone = window
+            .older
+            .as_ref()
+            .is_some_and(|o| !window.history.iter().any(|e| e.id == o.entry));
+        if gone {
+            self.show_latest(key)?;
+        }
+        self.events.push(Event::HistoryChanged { project: key });
+        Ok(())
+    }
+
     /// Opens, closes or resizes the History drawer, remembered for the project.
     pub fn set_history_drawer(
         &mut self,
@@ -458,6 +484,13 @@ impl ProjectWindow {
     /// A send is in flight (the Send button becomes Cancel).
     pub fn sending(&self) -> bool {
         self.sending.is_some()
+    }
+
+    /// History entries kept per request; a database that can't be read gives the default.
+    pub fn history_limit(&self) -> u32 {
+        self.project
+            .history_limit()
+            .unwrap_or(DEFAULT_HISTORY_LIMIT)
     }
 
     fn reload_history(&mut self) {
