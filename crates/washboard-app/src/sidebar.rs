@@ -249,8 +249,13 @@ pub struct SidebarIvars {
     /// Set while the controller changes the outline itself, so its own selection and
     /// disclosure changes don't go back to the model as commands.
     applying: Cell<bool>,
-    /// A reload that arrived while a name was being edited; it would have ended the edit.
+    /// A reload that arrived while a name was being edited (it would have ended the edit) or
+    /// while the context menu was open.
     stale: Cell<bool>,
+    /// Set from `menuWillOpen:` to `menuDidClose:`. Reloading under an open context menu
+    /// left the outline view asking `outlineView:isGroupItem:` about an item from the dropped
+    /// tree, and the menu's actions find their node's row by pointer.
+    menu_open: Cell<bool>,
     /// The row being dragged, from the drag's start to its end.
     dragged: RefCell<Option<Retained<SidebarNode>>>,
 }
@@ -458,10 +463,42 @@ define_class!(
             let row = self.outline().map_or(-1, |o| o.clickedRow());
             self.fill_context_menu(menu, row);
         }
+
+        // SAFETY: the signature matches `menuWillOpen:`.
+        #[unsafe(method(menuWillOpen:))]
+        fn menu_will_open(&self, _menu: &NSMenu) {
+            self.ivars().menu_open.set(true);
+        }
+
+        // SAFETY: the signature matches `menuDidClose:`.
+        #[unsafe(method(menuDidClose:))]
+        fn menu_did_close(&self, _menu: &NSMenu) {
+            self.ivars().menu_open.set(false);
+            if self.ivars().stale.get() {
+                // After the chosen item's action, which still needs the rows it was made for.
+                // SAFETY: `sidebarReloadIfStale:` takes the sender; a nil sender is allowed.
+                unsafe {
+                    let _: () = msg_send![
+                        self,
+                        performSelector: sel!(sidebarReloadIfStale:),
+                        withObject: None::<&AnyObject>,
+                        afterDelay: 0.0f64
+                    ];
+                }
+            }
+        }
     }
 
     // Context menu actions. Each item's represented object is the row's node.
     impl SidebarController {
+        // SAFETY: an action-style method; it takes the sender and returns nothing.
+        #[unsafe(method(sidebarReloadIfStale:))]
+        fn reload_if_stale(&self, _sender: Option<&AnyObject>) {
+            if self.ivars().stale.replace(false) {
+                self.reload();
+            }
+        }
+
         // SAFETY (all below): action methods take the sender and return nothing.
         #[unsafe(method(sidebarNewRequest:))]
         fn context_new_request(&self, sender: Option<&AnyObject>) {
@@ -553,6 +590,7 @@ impl SidebarController {
             outline: OnceCell::new(),
             applying: Cell::new(false),
             stale: Cell::new(false),
+            menu_open: Cell::new(false),
             dragged: RefCell::new(None),
         });
         // SAFETY: `NSObject`'s `init` has this signature.
@@ -666,9 +704,10 @@ impl SidebarController {
     }
 
     /// Redraws the rows from the model (`SidebarChanged`), keeping collapsed folders
-    /// collapsed and the selection. Waits while a name is being edited.
+    /// collapsed and the selection. Waits while a name is being edited or the context menu
+    /// is open.
     pub fn reload(&self) {
-        if self.is_editing() {
+        if self.is_editing() || self.ivars().menu_open.get() {
             self.ivars().stale.set(true);
         } else {
             self.reload_now();
