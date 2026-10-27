@@ -25,7 +25,8 @@ use objc2_foundation::{
     NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSRect, NSSize,
     NSString, NSURL, ns_string,
 };
-use washboard_ui_model::{FormatSettings, INDENT_RANGE, ProjectKey};
+use washboard_core::project::DEFAULT_HISTORY_LIMIT;
+use washboard_ui_model::{FormatSettings, HISTORY_LIMITS, INDENT_RANGE, ProjectKey};
 
 use crate::app::{ModelAccess, with_delegate};
 use crate::form;
@@ -140,6 +141,8 @@ pub struct SettingsWindowIvars {
     parameters: RefCell<Vec<(ProjectKey, Retained<ParametersPane>)>>,
     /// The shown General pane's list of WSDL files.
     wsdl_files: RefCell<Option<Retained<NSTextField>>>,
+    /// The shown General pane's history limit.
+    history_limit: RefCell<Option<Retained<NSPopUpButton>>>,
 }
 
 define_class!(
@@ -265,6 +268,23 @@ define_class!(
         fn setting_changed(&self, _sender: Option<&AnyObject>) {
             let settings = self.shown();
             with_delegate(self.mtm(), |d| d.set_format_settings(settings));
+        }
+
+        // SAFETY: an action method: takes the sender, returns nothing.
+        #[unsafe(method(historyLimitChanged:))]
+        fn history_limit_changed(&self, _sender: Option<&AnyObject>) {
+            let Some(Pane::ProjectGeneral(key)) = self.selected() else {
+                return;
+            };
+            let Some(limit) = self.history_limit_shown() else {
+                return;
+            };
+            self.command("Could not change how much history is kept", |app| {
+                app.set_history_limit(key, limit)
+            });
+            // Shows what the project keeps, also when the change failed.
+            let kept = self.read_project(key, |w| w.history_limit());
+            self.show_history_limit(kept.unwrap_or(DEFAULT_HISTORY_LIMIT));
         }
 
         // SAFETY: an action method: takes the sender, returns nothing.
@@ -528,6 +548,28 @@ impl SettingsWindowController {
         }
     }
 
+    /// The history limit a project's General pane shows, once one was shown.
+    pub fn history_limit_shown(&self) -> Option<u32> {
+        let popup = self.ivars().history_limit.borrow().clone()?;
+        let index = usize::try_from(popup.indexOfSelectedItem()).ok()?;
+        HISTORY_LIMITS.get(index).copied()
+    }
+
+    /// The popup of the shown General pane, for tests.
+    pub fn history_limit_popup(&self) -> Option<Retained<NSPopUpButton>> {
+        self.ivars().history_limit.borrow().clone()
+    }
+
+    /// A limit the popup does not offer (set by an older build or by hand) shows no selection
+    /// rather than a wrong one.
+    fn show_history_limit(&self, limit: u32) {
+        let Some(popup) = self.ivars().history_limit.borrow().clone() else {
+            return;
+        };
+        let index = HISTORY_LIMITS.iter().position(|n| *n == limit);
+        popup.selectItemAtIndex(index.and_then(|i| isize::try_from(i).ok()).unwrap_or(-1));
+    }
+
     /// The WSDL files a project's General pane lists, once one was shown.
     pub fn wsdl_files_shown(&self) -> Option<Vec<String>> {
         let label = self.ivars().wsdl_files.borrow().clone()?;
@@ -708,15 +750,26 @@ impl SettingsWindowController {
         view(layout::cell(&stack, Some(&title), mtm))
     }
 
-    /// A project's name, folder and WSDL files, read when the pane is shown.
+    /// A project's name, folder, WSDL files and history limit, read when the pane is shown.
     fn project_general(&self, key: ProjectKey) -> Retained<NSView> {
         let mtm = self.mtm();
-        let (name, folder, wsdl) = self
+        let (name, folder, wsdl, limit) = self
             .read_project(key, |window| {
                 let files = window.project().wsdl_files().unwrap_or_default();
-                (window.name().to_owned(), window.path().to_owned(), files)
+                let limit = window.history_limit();
+                (
+                    window.name().to_owned(),
+                    window.path().to_owned(),
+                    files,
+                    limit,
+                )
             })
-            .unwrap_or_default();
+            .unwrap_or((
+                String::new(),
+                PathBuf::new(),
+                Vec::new(),
+                DEFAULT_HISTORY_LIMIT,
+            ));
         let folder_label = form::value_label(
             &folder.display().to_string(),
             NSLineBreakMode::ByTruncatingMiddle,
@@ -734,10 +787,37 @@ impl SettingsWindowController {
             ],
             mtm,
         );
+        let popup =
+            NSPopUpButton::initWithFrame_pullsDown(NSPopUpButton::alloc(mtm), NSRect::ZERO, false);
+        for n in HISTORY_LIMITS {
+            let n = usize::try_from(n).unwrap_or(usize::MAX);
+            popup.addItemWithTitle(&NSString::from_str(&count(n, "exchange")));
+        }
+        let target: &AnyObject = self;
+        // SAFETY: the controller owns the popup through its window, so it outlives the weak
+        // target reference; `historyLimitChanged:` takes the sender.
+        unsafe {
+            popup.setTarget(Some(target));
+            popup.setAction(Some(sel!(historyLimitChanged:)));
+        }
+        *self.ivars().history_limit.borrow_mut() = Some(popup.clone());
+        self.show_history_limit(limit);
+        let history = form::group(
+            vec![form::control_row("Keep per request", &popup, mtm)],
+            mtm,
+        );
         form::page(
             vec![
                 project_note(&name, mtm),
                 form::Section::new(mtm).group(&group).build(),
+                form::Section::new(mtm)
+                    .header(&form::header("History", mtm))
+                    .group(&history)
+                    .text(
+                        "The newest exchanges of each request are kept. Choosing a smaller number \
+                         deletes the older ones right away.",
+                    )
+                    .build(),
             ],
             mtm,
         )
