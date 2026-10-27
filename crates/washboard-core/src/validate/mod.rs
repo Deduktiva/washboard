@@ -2,6 +2,7 @@
 //!
 //! Produces [`crate::diag::Diagnostic`]s. Details: `docs/specs/validation.md`.
 
+mod content_model;
 pub mod request;
 pub mod xsd;
 

@@ -75,6 +75,9 @@ pub const XML_SCHEMAV_CVC_ELT_5_2_2_2_2: xmlParserErrors = 1858;
 pub const XML_SCHEMAV_CVC_AU: xmlParserErrors = 1874;
 /// "The type definition is abstract".
 pub const XML_SCHEMAV_CVC_TYPE_2: xmlParserErrors = 1876;
+/// Schema parser error (`XML_FROM_SCHEMASP`): "The content model is not determinist", a
+/// Unique Particle Attribution violation. Names only the complex type.
+pub const XML_SCHEMAP_NOT_DETERMINISTIC: xmlParserErrors = 3070;
 
 /// `struct _xmlError` (public, layout stable since 2.0).
 #[repr(C)]

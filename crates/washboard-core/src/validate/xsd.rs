@@ -67,8 +67,9 @@ use std::fmt::Write;
 
 use libxml2_sys as ffi;
 
+use super::content_model;
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
-use crate::model::{QName, SchemaBundle};
+use crate::model::{QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::wsdl::split_scheme;
 use crate::xml::{Token, TokenKind, UTF8_BOM, is_xml_ws_char};
 
@@ -127,8 +128,9 @@ impl CompiledSchema {
     ///
     /// Errors (including any attempt to load a document outside the bundle) are returned
     /// together with all warnings, as [`DiagSource::Import`] diagnostics. Their message starts
-    /// with the bundle URI of the schema document concerned, and `pos` is a position in *that*
-    /// document, not in a request.
+    /// with the schema document concerned, as the user knows it (project-relative path, or the
+    /// WSDL for an inline schema), and the line, since the import sheet shows only messages.
+    /// `pos` is a position in *that* document, not in a request.
     pub fn compile(bundle: &SchemaBundle) -> Result<CompiledSchema, Vec<Diagnostic>> {
         init();
         let Some(root_index) = bundle.docs.iter().position(|d| d.uri == bundle.root) else {
@@ -862,20 +864,42 @@ fn compile_diagnostics(raw: Vec<RawError>, bundle: &SchemaBundle) -> Vec<Diagnos
                 .and_then(|n| n.doc_url.clone())
                 .or(e.file.take());
             let doc = doc_url.as_deref().and_then(|u| lookup(bundle, u));
-            let pos = doc.and_then(|i| {
+            let tag = doc.and_then(|i| {
                 let tags = tags
                     .entry(i)
                     .or_insert_with(|| scan_start_tags(&bundle.docs[i].text));
-                map_pos(tags, &e)
+                find_tag(tags, &e).map(|t| (t.pos, t.bytes.start))
             });
-            let message = humanize(&e.message, bundle);
-            e.message = match doc {
-                Some(i) => format!("{}: {message}", bundle.docs[i].uri),
-                None => message,
+            let pos = tag.map(|(pos, _)| pos);
+            let mut message = humanize(&e.message, bundle);
+            if e.code == ffi::XML_SCHEMAP_NOT_DETERMINISTIC
+                && let (Some(i), Some((_, at))) = (doc, tag)
+                && let Some(why) = content_model::explain(&bundle.docs[i].text, at)
+            {
+                message.push_str(&why);
+            }
+            e.message = match (doc, pos) {
+                (Some(i), Some(p)) => {
+                    format!("{}, line {}: {message}", doc_label(&bundle.docs[i]), p.line)
+                }
+                (Some(i), None) => format!("{}: {message}", doc_label(&bundle.docs[i])),
+                (None, _) => message,
             };
             e.into_diagnostic(DiagSource::Import, pos)
         })
         .collect()
+}
+
+/// How a compile error names its schema document: the file the user can open and fix. Inline
+/// schemas keep the WSDL's line numbers (`wsdl::bundle`), so the line applies to the WSDL.
+fn doc_label(doc: &SchemaDoc) -> String {
+    match &doc.origin {
+        SchemaOrigin::File { path } => path.clone(),
+        SchemaOrigin::InlineWsdl { wsdl_path, index } => {
+            format!("{wsdl_path} (inline schema {})", index + 1)
+        }
+        SchemaOrigin::Generated => doc.uri.clone(),
+    }
 }
 
 // --- resource loaders -----------------------------------------------------------------------
@@ -1058,11 +1082,6 @@ fn scan_start_tags_with(text: &str, lines: &LineIndex<'_>) -> Vec<StartTag> {
         .collect()
 }
 
-/// Start-tag position for an error, if it can be determined.
-fn map_pos(tags: &[StartTag], e: &RawError) -> Option<TextPos> {
-    find_tag(tags, e).map(|t| t.pos)
-}
-
 /// The start tag of the element an error refers to, if it can be determined.
 fn find_tag<'a>(tags: &'a [StartTag], e: &RawError) -> Option<&'a StartTag> {
     if let Some(node) = &e.node {
@@ -1159,7 +1178,6 @@ impl<'t> Source<'t> {
 mod tests {
 
     use super::*;
-    use crate::model::{SchemaDoc, SchemaOrigin};
     use crate::test_support::{self, fixtures};
 
     const XS: &str = "http://www.w3.org/2001/XMLSchema";
@@ -1490,9 +1508,100 @@ mod tests {
             .iter()
             .find(|d| d.message.contains("nope"))
             .unwrap_or_else(|| panic!("{diags:#?}"));
-        assert!(d.message.starts_with("dir/bad.xsd: "), "{d:#?}");
+        assert!(d.message.starts_with("dir/bad.xsd, line 3: "), "{d:#?}");
         assert_eq!(d.pos, pos(3, 3), "{d:#?}");
         assert!(!d.message.contains(BASE), "{d:#?}");
+    }
+
+    /// The one compile error for `xsd`, which must be "not determinist".
+    fn nondeterminism_error(xsd: &str) -> Diagnostic {
+        let diags = CompiledSchema::compile(&single_doc_bundle(xsd)).expect_err("UPA");
+        let errors: Vec<_> = diags.into_iter().filter(Diagnostic::is_error).collect();
+        match <[Diagnostic; 1]>::try_from(errors) {
+            Ok([d]) if d.message.contains("not determinist") => d,
+            Ok([d]) => panic!("{d:#?}"),
+            Err(errors) => panic!("{errors:#?}"),
+        }
+    }
+
+    #[test]
+    fn nondeterminism_names_the_duplicate_declarations() {
+        let d = nondeterminism_error(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Profile">
+    <xs:sequence><xs:element name="id" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Subscriber">
+    <xs:sequence>
+      <xs:element name="profile" type="t:Profile" minOccurs="0"/>
+      <xs:element name="note" type="xs:string" minOccurs="0"/>
+      <xs:element name="profile" type="t:Profile" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>
+"#,
+        );
+        assert_eq!(d.pos, pos(6, 3), "{d:#?}");
+        assert_eq!(
+            d.message,
+            "washboard:/root.xsd, line 6: complex type 'Subscriber': The content model is not \
+             determinist. Element `profile` is declared more than once in this type (lines 8, \
+             10), so a `profile` in a request could match more than one declaration. Fix the \
+             schema: remove or merge the duplicate declarations, or make an element between \
+             them required."
+        );
+    }
+
+    #[test]
+    fn nondeterminism_follows_groups_and_extension_bases() {
+        let d = nondeterminism_error(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t">
+  <xs:group name="G">
+    <xs:sequence><xs:element ref="t:p" minOccurs="0"/></xs:sequence>
+  </xs:group>
+  <xs:element name="p" type="xs:string"/>
+  <xs:complexType name="Base">
+    <xs:sequence><xs:group ref="t:G"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Derived">
+    <xs:complexContent>
+      <xs:extension base="t:Base">
+        <xs:sequence><xs:element ref="t:p" minOccurs="0"/></xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>
+"#,
+        );
+        assert!(
+            d.message
+                .contains("Element `p` is declared more than once in this type (lines 4, 13)"),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn nondeterminism_names_the_wildcard() {
+        let d = nondeterminism_error(
+            r###"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:element name="r">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="##targetNamespace" minOccurs="0"/>
+        <xs:element name="a" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
+"###,
+        );
+        assert!(
+            d.message.contains("Its wildcard (`xs:any`, line 6)"),
+            "{d:#?}"
+        );
     }
 
     #[test]

@@ -1852,6 +1852,51 @@ fn import_check_finds_the_set_and_refuses_unresolved_references() {
 }
 
 #[test]
+fn import_check_points_to_a_nondeterministic_type_in_the_wsdl() {
+    let tmp = TempDir::new().expect("tempdir");
+    let entry = tmp.path().join("S.wsdl");
+    fs::write(
+        &entry,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:t" targetNamespace="urn:t">
+  <wsdl:types>
+    <xs:schema targetNamespace="urn:t" elementFormDefault="qualified">
+      <xs:complexType name="Subscriber">
+        <xs:sequence>
+          <xs:element name="profile" type="xs:string" minOccurs="0"/>
+          <xs:element name="note" type="xs:string" minOccurs="0"/>
+          <xs:element name="profile" type="xs:string" minOccurs="0"/>
+        </xs:sequence>
+      </xs:complexType>
+    </xs:schema>
+  </wsdl:types>
+</wsdl:definitions>
+"#,
+    )
+    .expect("write");
+    let checked = check_import(&entry, &[]).expect("check");
+    assert!(!checked.is_usable());
+    let errors: Vec<&str> = checked
+        .compile
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.message.as_str())
+        .collect();
+    let [error] = errors[..] else {
+        panic!("{errors:#?}");
+    };
+    assert!(
+        error.starts_with(
+            "S.wsdl (inline schema 1), line 6: complex type 'Subscriber': The content model is \
+             not determinist. Element `profile` is declared more than once in this type \
+             (lines 8, 10)"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
 fn project_schema_loads_the_copied_set() {
     let (_tmp, _folder, p) = new_project();
     let schema = ProjectSchema::load(&p.entry_wsdl().expect("entry"), p.wsdl_dir())
