@@ -14,7 +14,7 @@ jobs:
     name: Linux (fmt, clippy, tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install toolchain from rust-toolchain.toml
@@ -28,7 +28,7 @@ jobs:
     name: cargo deny (banned crates)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install toolchain from rust-toolchain.toml
         run: rustup show active-toolchain || rustup toolchain install
       - uses: taiki-e/install-action@v2
@@ -42,15 +42,15 @@ jobs:
     name: Fixture oracle (lxml)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv run --script fixtures/check_fixtures.py
 
   macos:
     name: macOS (clippy, tests, app bundle)
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - name: Install toolchain from rust-toolchain.toml
