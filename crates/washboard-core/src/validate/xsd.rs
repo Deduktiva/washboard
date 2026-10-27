@@ -67,6 +67,7 @@ use std::fmt::Write;
 
 use libxml2_sys as ffi;
 
+use super::content_model;
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
 use crate::model::{QName, SchemaBundle};
 use crate::wsdl::split_scheme;
@@ -862,13 +863,20 @@ fn compile_diagnostics(raw: Vec<RawError>, bundle: &SchemaBundle) -> Vec<Diagnos
                 .and_then(|n| n.doc_url.clone())
                 .or(e.file.take());
             let doc = doc_url.as_deref().and_then(|u| lookup(bundle, u));
-            let pos = doc.and_then(|i| {
+            let tag = doc.and_then(|i| {
                 let tags = tags
                     .entry(i)
                     .or_insert_with(|| scan_start_tags(&bundle.docs[i].text));
-                map_pos(tags, &e)
+                find_tag(tags, &e).map(|t| (t.pos, t.bytes.start))
             });
-            let message = humanize(&e.message, bundle);
+            let pos = tag.map(|(pos, _)| pos);
+            let mut message = humanize(&e.message, bundle);
+            if e.code == ffi::XML_SCHEMAP_NOT_DETERMINISTIC
+                && let (Some(i), Some((_, at))) = (doc, tag)
+                && let Some(why) = content_model::explain(&bundle.docs[i].text, at)
+            {
+                message.push_str(&why);
+            }
             e.message = match doc {
                 Some(i) => format!("{}: {message}", bundle.docs[i].uri),
                 None => message,
@@ -1056,11 +1064,6 @@ fn scan_start_tags_with(text: &str, lines: &LineIndex<'_>) -> Vec<StartTag> {
             attrs: t.attr_names.into_iter().zip(t.attr_values).collect(),
         })
         .collect()
-}
-
-/// Start-tag position for an error, if it can be determined.
-fn map_pos(tags: &[StartTag], e: &RawError) -> Option<TextPos> {
-    find_tag(tags, e).map(|t| t.pos)
 }
 
 /// The start tag of the element an error refers to, if it can be determined.
@@ -1493,6 +1496,97 @@ mod tests {
         assert!(d.message.starts_with("dir/bad.xsd: "), "{d:#?}");
         assert_eq!(d.pos, pos(3, 3), "{d:#?}");
         assert!(!d.message.contains(BASE), "{d:#?}");
+    }
+
+    /// The one compile error for `xsd`, which must be "not determinist".
+    fn nondeterminism_error(xsd: &str) -> Diagnostic {
+        let diags = CompiledSchema::compile(&single_doc_bundle(xsd)).expect_err("UPA");
+        let errors: Vec<_> = diags.into_iter().filter(Diagnostic::is_error).collect();
+        match <[Diagnostic; 1]>::try_from(errors) {
+            Ok([d]) if d.message.contains("not determinist") => d,
+            Ok([d]) => panic!("{d:#?}"),
+            Err(errors) => panic!("{errors:#?}"),
+        }
+    }
+
+    #[test]
+    fn nondeterminism_names_the_duplicate_declarations() {
+        let d = nondeterminism_error(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:complexType name="Profile">
+    <xs:sequence><xs:element name="id" type="xs:string"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Subscriber">
+    <xs:sequence>
+      <xs:element name="profile" type="t:Profile" minOccurs="0"/>
+      <xs:element name="note" type="xs:string" minOccurs="0"/>
+      <xs:element name="profile" type="t:Profile" minOccurs="0"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:schema>
+"#,
+        );
+        assert_eq!(d.pos, pos(6, 3), "{d:#?}");
+        assert_eq!(
+            d.message,
+            "washboard:/root.xsd: complex type 'Subscriber': The content model is not \
+             determinist. Element `profile` is declared more than once in this type (lines 8, \
+             10), so a `profile` in a request could match more than one declaration. Fix the \
+             schema: remove or merge the duplicate declarations, or make an element between \
+             them required."
+        );
+    }
+
+    #[test]
+    fn nondeterminism_follows_groups_and_extension_bases() {
+        let d = nondeterminism_error(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:t="urn:t" targetNamespace="urn:t">
+  <xs:group name="G">
+    <xs:sequence><xs:element ref="t:p" minOccurs="0"/></xs:sequence>
+  </xs:group>
+  <xs:element name="p" type="xs:string"/>
+  <xs:complexType name="Base">
+    <xs:sequence><xs:group ref="t:G"/></xs:sequence>
+  </xs:complexType>
+  <xs:complexType name="Derived">
+    <xs:complexContent>
+      <xs:extension base="t:Base">
+        <xs:sequence><xs:element ref="t:p" minOccurs="0"/></xs:sequence>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+</xs:schema>
+"#,
+        );
+        assert!(
+            d.message
+                .contains("Element `p` is declared more than once in this type (lines 4, 13)"),
+            "{d:#?}"
+        );
+    }
+
+    #[test]
+    fn nondeterminism_names_the_wildcard() {
+        let d = nondeterminism_error(
+            r###"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="urn:t" elementFormDefault="qualified">
+  <xs:element name="r">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:any namespace="##targetNamespace" minOccurs="0"/>
+        <xs:element name="a" type="xs:string"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>
+"###,
+        );
+        assert!(
+            d.message.contains("Its wildcard (`xs:any`, line 6)"),
+            "{d:#?}"
+        );
     }
 
     #[test]
