@@ -69,7 +69,7 @@ use libxml2_sys as ffi;
 
 use super::content_model;
 use crate::diag::{DiagDetail, DiagSource, Diagnostic, LineIndex, TextPos, TextSpan, has_errors};
-use crate::model::{QName, SchemaBundle};
+use crate::model::{QName, SchemaBundle, SchemaDoc, SchemaOrigin};
 use crate::wsdl::split_scheme;
 use crate::xml::{Token, TokenKind, UTF8_BOM, is_xml_ws_char};
 
@@ -128,8 +128,9 @@ impl CompiledSchema {
     ///
     /// Errors (including any attempt to load a document outside the bundle) are returned
     /// together with all warnings, as [`DiagSource::Import`] diagnostics. Their message starts
-    /// with the bundle URI of the schema document concerned, and `pos` is a position in *that*
-    /// document, not in a request.
+    /// with the schema document concerned, as the user knows it (project-relative path, or the
+    /// WSDL for an inline schema), and the line, since the import sheet shows only messages.
+    /// `pos` is a position in *that* document, not in a request.
     pub fn compile(bundle: &SchemaBundle) -> Result<CompiledSchema, Vec<Diagnostic>> {
         init();
         let Some(root_index) = bundle.docs.iter().position(|d| d.uri == bundle.root) else {
@@ -877,13 +878,28 @@ fn compile_diagnostics(raw: Vec<RawError>, bundle: &SchemaBundle) -> Vec<Diagnos
             {
                 message.push_str(&why);
             }
-            e.message = match doc {
-                Some(i) => format!("{}: {message}", bundle.docs[i].uri),
-                None => message,
+            e.message = match (doc, pos) {
+                (Some(i), Some(p)) => {
+                    format!("{}, line {}: {message}", doc_label(&bundle.docs[i]), p.line)
+                }
+                (Some(i), None) => format!("{}: {message}", doc_label(&bundle.docs[i])),
+                (None, _) => message,
             };
             e.into_diagnostic(DiagSource::Import, pos)
         })
         .collect()
+}
+
+/// How a compile error names its schema document: the file the user can open and fix. Inline
+/// schemas keep the WSDL's line numbers (`wsdl::bundle`), so the line applies to the WSDL.
+fn doc_label(doc: &SchemaDoc) -> String {
+    match &doc.origin {
+        SchemaOrigin::File { path } => path.clone(),
+        SchemaOrigin::InlineWsdl { wsdl_path, index } => {
+            format!("{wsdl_path} (inline schema {})", index + 1)
+        }
+        SchemaOrigin::Generated => doc.uri.clone(),
+    }
 }
 
 // --- resource loaders -----------------------------------------------------------------------
@@ -1162,7 +1178,6 @@ impl<'t> Source<'t> {
 mod tests {
 
     use super::*;
-    use crate::model::{SchemaDoc, SchemaOrigin};
     use crate::test_support::{self, fixtures};
 
     const XS: &str = "http://www.w3.org/2001/XMLSchema";
@@ -1493,7 +1508,7 @@ mod tests {
             .iter()
             .find(|d| d.message.contains("nope"))
             .unwrap_or_else(|| panic!("{diags:#?}"));
-        assert!(d.message.starts_with("dir/bad.xsd: "), "{d:#?}");
+        assert!(d.message.starts_with("dir/bad.xsd, line 3: "), "{d:#?}");
         assert_eq!(d.pos, pos(3, 3), "{d:#?}");
         assert!(!d.message.contains(BASE), "{d:#?}");
     }
@@ -1530,7 +1545,7 @@ mod tests {
         assert_eq!(d.pos, pos(6, 3), "{d:#?}");
         assert_eq!(
             d.message,
-            "washboard:/root.xsd: complex type 'Subscriber': The content model is not \
+            "washboard:/root.xsd, line 6: complex type 'Subscriber': The content model is not \
              determinist. Element `profile` is declared more than once in this type (lines 8, \
              10), so a `profile` in a request could match more than one declaration. Fix the \
              schema: remove or merge the duplicate declarations, or make an element between \
