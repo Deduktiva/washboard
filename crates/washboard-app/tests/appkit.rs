@@ -60,6 +60,7 @@ mod checks {
     use std::ptr::NonNull;
     use std::rc::Rc;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::{Duration, Instant};
 
     use block2::RcBlock;
@@ -2573,21 +2574,133 @@ mod checks {
 
     /// [`wait_until`], with `state` in the timeout message. The message also gives the longest
     /// run-loop pass: one close to the whole wait means the main thread (or the machine) was
-    /// stalled, rather than a result that never arrived.
+    /// stalled, rather than a result that never arrived. A [`Watchdog`] tells those two apart
+    /// and samples a stalled main thread.
     fn wait_until_showing(what: &str, done: impl Fn() -> bool, state: impl Fn() -> String) {
         let started = Instant::now();
         let mut longest = Duration::ZERO;
+        let watchdog = Watchdog::start();
         while !done() {
             let waited = started.elapsed();
-            assert!(
-                waited < Duration::from_secs(10),
-                "timed out waiting for {what} after {waited:.1?}, longest run-loop pass \
-                 {longest:.1?}{}",
-                state()
-            );
+            if waited >= Duration::from_secs(10) {
+                let report = watchdog.finish();
+                if let Some(sample) = &report.sample {
+                    eprintln!("main thread sample during the longest pass:\n{sample}");
+                }
+                panic!(
+                    "timed out waiting for {what} after {waited:.1?}, longest run-loop pass \
+                     {longest:.1?}, watchdog thread overslept {:.1?}{}",
+                    report.overslept,
+                    state()
+                );
+            }
+            watchdog.pass_started();
             let pass = Instant::now();
             NSRunLoop::currentRunLoop().runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.05));
+            watchdog.pass_ended();
             longest = longest.max(pass.elapsed());
+        }
+        watchdog.finish();
+    }
+
+    /// Watches one wait's run-loop passes from a thread of its own. `replace_wsdl` and
+    /// `new_project_sheet` have timed out in `wait_checked` on CI with a single pass taking the
+    /// whole wait; the timeout message alone cannot say why. Once a pass has lasted
+    /// [`Watchdog::SAMPLE_AFTER`], the process is sampled with `/usr/bin/sample`, which shows
+    /// where the main thread is stuck. The watchdog's own oversleep tells a stalled main thread
+    /// (it stays small) from a stalled process or runner (it grows with the pass).
+    struct Watchdog {
+        base: Instant,
+        /// Milliseconds from `base` to the start of the pass under way, plus one; 0 between
+        /// passes.
+        pass: Arc<AtomicU64>,
+        stop: Arc<AtomicBool>,
+        thread: std::thread::JoinHandle<WatchdogReport>,
+    }
+
+    struct WatchdogReport {
+        overslept: Duration,
+        sample: Option<String>,
+    }
+
+    impl Watchdog {
+        const SAMPLE_AFTER: Duration = Duration::from_secs(3);
+        const TICK: Duration = Duration::from_millis(100);
+
+        fn start() -> Watchdog {
+            let base = Instant::now();
+            let pass = Arc::new(AtomicU64::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread = std::thread::spawn({
+                let (pass, stop) = (pass.clone(), stop.clone());
+                move || {
+                    let mut report = WatchdogReport {
+                        overslept: Duration::ZERO,
+                        sample: None,
+                    };
+                    while !stop.load(Ordering::Acquire) {
+                        let tick = Instant::now();
+                        // Unparked early by `finish`, which the oversleep below ignores.
+                        std::thread::park_timeout(Self::TICK);
+                        let overslept = tick.elapsed().saturating_sub(Self::TICK);
+                        report.overslept = report.overslept.max(overslept);
+                        let started = pass.load(Ordering::Acquire);
+                        let running = (started > 0).then(|| {
+                            base.elapsed()
+                                .saturating_sub(Duration::from_millis(started - 1))
+                        });
+                        if report.sample.is_none()
+                            && running.is_some_and(|r| r >= Self::SAMPLE_AFTER)
+                        {
+                            report.sample = Some(sample_this_process());
+                        }
+                    }
+                    report
+                }
+            });
+            Watchdog {
+                base,
+                pass,
+                stop,
+                thread,
+            }
+        }
+
+        fn pass_started(&self) {
+            let ms = u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX - 1);
+            self.pass.store(ms + 1, Ordering::Release);
+        }
+
+        fn pass_ended(&self) {
+            self.pass.store(0, Ordering::Release);
+        }
+
+        fn finish(self) -> WatchdogReport {
+            self.stop.store(true, Ordering::Release);
+            self.thread.thread().unpark();
+            self.thread.join().expect("the watchdog thread")
+        }
+    }
+
+    /// A few seconds of `/usr/bin/sample` on this process, or why there is none.
+    fn sample_this_process() -> String {
+        let file = std::env::temp_dir().join(format!("appkit-{}.sample.txt", std::process::id()));
+        let output = std::process::Command::new("/usr/bin/sample")
+            .arg(std::process::id().to_string())
+            .arg("2")
+            .arg("-mayDie")
+            .arg("-file")
+            .arg(&file)
+            .output();
+        match output {
+            Ok(o) if o.status.success() => std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| format!("(sample wrote no readable file: {e})")),
+            Ok(o) => format!(
+                "(sample failed with {}: {})",
+                o.status,
+                String::from_utf8_lossy(&o.stderr).trim()
+            ),
+            Err(e) => format!("(sample did not run: {e})"),
         }
     }
 
