@@ -55,7 +55,6 @@ See `.github/workflows/ci.yml`.
   cursor context (`xml::cursor_context`) to the schema model, which walks the content model
   (sequence position, `maxOccurs` already reached, chosen `xs:choice` branch) and offers only
   what may legally come next, ranking required elements first.
-- **Configurable retention:** history entries per request (v1: 20).
 - HTTP proxies
 
 ### Out of scope for v1

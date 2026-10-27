@@ -10,8 +10,8 @@
   and **Headers**, the body, and the History drawer.
 - **History drawer.** A second split under the response body. Its header line is always shown:
   a disclosure triangle, "History", the number of earlier exchanges, and one dot per stored
-  exchange (oldest left; red for a SOAP Fault or a transport failure; a ring around the one
-  shown). Clicking the header opens or closes the table (Sent | Server | Status | Duration,
+  exchange, for the newest 20 (oldest left; red for a SOAP Fault or a transport failure; a ring
+  around the one shown). Clicking the header opens or closes the table (Sent | Server | Status | Duration,
   newest first; Server names the parameter set too, as `Staging · Customer A`). Whether it is open and its height are kept per project in `ui_state`.
 - **Older exchange.** Selecting any row but the newest shows that whole exchange:
   - The request side shows the request as sent (`history/…/<stamp>.request.xml`), read-only, in a
