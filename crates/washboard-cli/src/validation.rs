@@ -158,8 +158,8 @@ mod tests {
     #[test]
     fn no_position_or_line_out_of_range_prints_no_excerpt() {
         let d = Diagnostic::warning(DiagSource::Soap, None, "w");
-        assert_eq!(plain("R", "<a/>", &d), "warning: w\n --> R\n\n");
+        assert_eq!(plain("R", "<a/>", &d), "warning: w\n--> R\n\n");
         let d = Diagnostic::error(DiagSource::Soap, Some(TextPos { line: 9, column: 1 }), "e");
-        assert_eq!(plain("R", "<a/>", &d), "error: e\n --> R:9:1\n\n");
+        assert_eq!(plain("R", "<a/>", &d), "error: e\n--> R:9:1\n\n");
     }
 }
