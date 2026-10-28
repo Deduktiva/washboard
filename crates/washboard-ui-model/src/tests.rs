@@ -1778,10 +1778,13 @@ fn a_cancelled_send_is_ignored() {
     let setup = Setup::new();
     let (url, _server) = server::serve_once("200 OK", OK_BODY, ms(300));
     let (fake, mut app, key, _) = ready_to_send(&setup, &url);
+    assert!(project(&app, key).can_send());
     app.send(key).expect("send");
+    assert!(!project(&app, key).can_send(), "not while sending");
     assert!(matches!(app.send(key), Err(ModelError::AlreadySending)));
     app.cancel_send(key);
     assert!(!project(&app, key).sending());
+    assert!(project(&app, key).can_send(), "again once cancelled");
     fake.pump_until(&mut app, |app| app.jobs_running() == 0);
     let events = app.take_events();
     assert!(
@@ -1841,6 +1844,7 @@ fn an_older_exchange_is_shown_whole_and_cannot_be_sent() {
         "the editor keeps its text"
     );
 
+    assert!(!project(&app, key).can_send());
     assert!(matches!(app.send(key), Err(ModelError::OlderExchangeShown)));
     assert!(!project(&app, key).sending());
     assert_eq!(app.jobs_running(), 0, "nothing started");
@@ -2007,8 +2011,19 @@ fn the_history_drawer_is_remembered_per_project() {
 fn send_needs_a_server() {
     let setup = Setup::new();
     let (_fake, mut app, key, _, _) = with_requests(&setup, "Legacy");
+    assert!(
+        !project(&app, key).can_send(),
+        "Send is disabled without servers"
+    );
     assert!(matches!(app.send(key), Err(ModelError::NoServer)));
     assert!(!project(&app, key).sending());
+
+    let server = add_server(&mut app, key, "A", "https://a.invalid/");
+    assert!(project(&app, key).can_send(), "the first server is used");
+    app.select_request(key, None).expect("deselect");
+    assert!(!project(&app, key).can_send(), "nothing to send");
+    app.delete_server(key, server).expect("delete");
+    assert!(!project(&app, key).can_send());
 }
 
 fn customer() -> PathBuf {

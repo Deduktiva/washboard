@@ -19,7 +19,8 @@ what a send returns: [response pane](response-pane.md).
 ## Send
 - Toolbar: server popup, parameter set popup (while the project has sets), Send (⌘↩). Sends to
   `server.url` with `Content-Type: text/xml; charset=utf-8` and the `SOAPAction` header from the
-  binding operation ([WSDL](wsdl.md)).
+  binding operation ([WSDL](wsdl.md)). Send is disabled, in the toolbar and the menu, while no
+  request is open or the project has no servers; the server popup then shows "No Servers".
 - Send fills in the `${name}` placeholders once, validates that text and sends exactly it
   ([parameter sets](parameters.md)). **Send is blocked** while it has errors
   ([validation](validation.md)), unresolvable placeholders included. Apart from the

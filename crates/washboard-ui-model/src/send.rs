@@ -486,6 +486,14 @@ impl ProjectWindow {
         self.sending.is_some()
     }
 
+    /// Whether Send is offered: a request is open with the latest exchange shown, the project
+    /// has a server and nothing is in flight. The front end enables Send by this rather than
+    /// letting [`App::send`] refuse with an alert; the selection falls back to the first
+    /// server, so having any is enough.
+    pub fn can_send(&self) -> bool {
+        self.editor.is_some() && self.older.is_none() && !self.servers.is_empty() && !self.sending()
+    }
+
     /// History entries kept per request; a database that can't be read gives the default.
     pub fn history_limit(&self) -> u32 {
         self.project
