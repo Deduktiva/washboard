@@ -61,6 +61,7 @@ mod checks {
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::mpsc::RecvTimeoutError;
     use std::time::{Duration, Instant};
 
     use block2::RcBlock;
@@ -372,12 +373,17 @@ mod checks {
                 )
             };
 
-            std::thread::spawn(|| {
-                std::thread::sleep(LAUNCH_TIMEOUT);
-                eprintln!("appkit: applicationDidFinishLaunching: not delivered, giving up");
-                std::process::exit(1);
+            // Disarmed by dropping `launched` once `run` returns; only a launch that never
+            // finishes may end the process, not checks that run past the timeout.
+            let (launched, disarm) = std::sync::mpsc::channel::<()>();
+            std::thread::spawn(move || {
+                if disarm.recv_timeout(LAUNCH_TIMEOUT) == Err(RecvTimeoutError::Timeout) {
+                    eprintln!("appkit: applicationDidFinishLaunching: not delivered, giving up");
+                    std::process::exit(1);
+                }
             });
             app.run();
+            drop(launched);
             // SAFETY: `token` is the observer returned by `addObserverForName…` above.
             unsafe { center.removeObserver(token.as_ref()) };
             Self {
